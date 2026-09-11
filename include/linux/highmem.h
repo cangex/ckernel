@@ -232,6 +232,32 @@ struct folio *vma_alloc_zeroed_movable_folio(struct vm_area_struct *vma,
 
 	return folio;
 }
+
+#endif
+
+#ifndef vma_alloc_zeroed_movable_folio_from_faascale
+#ifdef CONFIG_FAASCALE_MEMORY
+static inline struct folio *
+vma_alloc_zeroed_movable_folio_from_faascale(struct vm_area_struct *vma,
+					     unsigned long vaddr)
+{
+	struct folio *folio;
+
+	folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE | __GFP_FAASCALE, 0,
+				vma, vaddr, false);
+	if (folio)
+		clear_user_highpage(&folio->page, vaddr);
+
+	return folio;
+}
+#else
+static inline struct folio *
+vma_alloc_zeroed_movable_folio_from_faascale(struct vm_area_struct *vma,
+					     unsigned long vaddr)
+{
+	return vma_alloc_zeroed_movable_folio(vma, vaddr);
+}
+#endif
 #endif
 
 static inline void clear_highpage(struct page *page)

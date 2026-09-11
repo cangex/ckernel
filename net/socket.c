@@ -1942,6 +1942,7 @@ struct file *do_accept(struct file *file, unsigned file_flags,
 					false);
 	if (err < 0)
 		goto out_fd;
+	security_socket_post_accept(newsock);
 
 	if (upeer_sockaddr) {
 		len = ops->getname(newsock, (struct sockaddr *)&address, 2);

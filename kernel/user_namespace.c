@@ -123,6 +123,7 @@ int create_user_ns(struct cred *new)
 	if (!ns)
 		goto fail_dec;
 
+	ns->ckernel = NULL;
 	ns->parent_could_setfcap = cap_raised(new->cap_effective, CAP_SETFCAP);
 	ret = ns_alloc_inum(&ns->ns);
 	if (ret)

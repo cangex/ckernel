@@ -27,6 +27,7 @@
 #include <linux/fdtable.h>
 #include <linux/sched/signal.h>
 #include <linux/module.h>
+#include <linux/ckernel.h>
 
 #define FILES_MAX D_COUNT_MAX
 #define FILES_MAX_STR "max"
@@ -158,10 +159,28 @@ int files_cgroup_alloc_fd(struct files_struct *files, u64 n)
 	 */
 	if (!no_acct && files != &init_files) {
 		struct page_counter *fail_res;
+
+		struct ckernel *ck = current->ckernel;
+		int ck_ret = -1;
+
+		if (ck && ck->ck_file_inc)
+			ck_ret = ck->ck_file_inc(n);
+
+		/*
+		 * ckernel fast-path:
+		 *   1 → success, skip cgroup
+		 *   0 → limit hit, fail directly
+		 *  -1 → fallback to cgroup
+		 */
+		if (ck_ret == 1)
+			return 0;
+		else if (ck_ret == 0)
+			return -ENOMEM;
+
 		struct files_cgroup *files_cgroup =
 			files_cgroup_from_files(files);
 		if (!page_counter_try_charge(&files_cgroup->open_handles,
-				       n, &fail_res))
+					n, &fail_res))
 			return -ENOMEM;
 	}
 	return 0;
@@ -176,6 +195,18 @@ void files_cgroup_unalloc_fd(struct files_struct *files, u64 n)
 	 * files_cgroup_alloc_fd.
 	 */
 	if (!no_acct && files != &init_files) {
+		struct ckernel *ck = current->ckernel;
+		int ck_ret = -1;
+
+		if (ck && ck->ck_file_dec)
+			ck_ret = ck->ck_file_dec(n);
+
+		/*
+		 * If handled by ckernel, skip cgroup uncharge
+		 */
+		if (ck_ret != -1)
+			return;
+
 		struct files_cgroup *files_cgroup =
 		       files_cgroup_from_files(files);
 		page_counter_uncharge(&files_cgroup->open_handles, n);

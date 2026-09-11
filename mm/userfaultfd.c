@@ -148,11 +148,15 @@ static int mfill_atomic_pte_copy(pmd_t *dst_pmd,
 	void *kaddr;
 	int ret;
 	struct folio *folio;
+	gfp_t gfp = GFP_HIGHUSER_MOVABLE;
+	struct faascale_memcg_alloc_scope faascale_scope;
 
 	if (!*foliop) {
 		ret = -ENOMEM;
-		folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, dst_vma,
-					dst_addr, false);
+		faascale_enter_memcg_alloc_scope(dst_vma->vm_mm, &gfp,
+						 &faascale_scope);
+		folio = vma_alloc_folio(gfp, 0, dst_vma, dst_addr, false);
+		faascale_leave_memcg_alloc_scope(&faascale_scope);
 		if (!folio)
 			goto out;
 
@@ -220,8 +224,17 @@ static int mfill_atomic_pte_zeroed_folio(pmd_t *dst_pmd,
 {
 	struct folio *folio;
 	int ret = -ENOMEM;
+	gfp_t gfp = GFP_HIGHUSER_MOVABLE;
+	struct faascale_memcg_alloc_scope faascale_scope;
 
-	folio = vma_alloc_zeroed_movable_folio(dst_vma, dst_addr);
+	faascale_enter_memcg_alloc_scope(dst_vma->vm_mm, &gfp,
+					 &faascale_scope);
+	if (gfp & __GFP_FAASCALE)
+		folio = vma_alloc_zeroed_movable_folio_from_faascale(dst_vma,
+								       dst_addr);
+	else
+		folio = vma_alloc_zeroed_movable_folio(dst_vma, dst_addr);
+	faascale_leave_memcg_alloc_scope(&faascale_scope);
 	if (!folio)
 		return ret;
 

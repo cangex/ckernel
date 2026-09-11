@@ -38,6 +38,17 @@ int proc_resctrl_show(struct seq_file *m,
 
 extern unsigned int resctrl_rmid_realloc_limit;
 extern unsigned int resctrl_rmid_realloc_threshold;
+extern int ck_rdtgroup_mkdir(const char *name, struct kernfs_node **target);
+extern void ck_rdtgroup_move_task(struct task_struct *tsk,
+                                 struct kernfs_node *kn);
+extern int ck_rdtgroup_schemata_write(struct kernfs_node *kn, char *buf);
+extern int ck_rdtgroup_schemata_show_bw(struct kernfs_node *kn, u32 *val);
+extern int ck_rdtgroup_schemata_show_bm(struct kernfs_node *kn, u32 *val);
+extern void ck_rdtgroup_show_tasks(struct kernfs_node *group_kn,
+				   int *pid_num, int *pid_list);
+extern int ck_mpam_rdtgroup_mondata_show_mbm(struct kernfs_node *group_kn,
+					     u64 *mbm_total);
+extern int rdtgroup_rmdir(struct kernfs_node *kn);
 
 /**
  * struct pseudo_lock_region - pseudo-lock region information
@@ -434,6 +445,8 @@ void resctrl_arch_reset_rmid(struct rdt_resource *r, struct rdt_domain *d,
  * This can be called from any CPU.
  */
 void resctrl_arch_reset_rmid_all(struct rdt_resource *r, struct rdt_domain *d);
+
+extern struct kernfs_node *get_default_rdtgroup_kn(void);
 
 extern unsigned int resctrl_rmid_realloc_threshold;
 extern unsigned int resctrl_rmid_realloc_limit;

@@ -253,4 +253,6 @@ source "drivers/coda/Kconfig"
 
 source "drivers/arm/Kconfig"
 
+source "drivers/ckernel/Kconfig"
+
 endmenu

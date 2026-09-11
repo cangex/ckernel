@@ -15,6 +15,7 @@
 #include <linux/namei.h>
 #include <linux/backing-dev.h>
 #include <linux/capability.h>
+#include <linux/ckernel.h>
 #include <linux/securebits.h>
 #include <linux/security.h>
 #include <linux/mount.h>
@@ -894,14 +895,16 @@ cleanup_inode:
 	return error;
 }
 
-static int do_dentry_open(struct file *f,
-			  struct inode *inode,
-			  int (*open)(struct inode *, struct file *))
+static int __do_dentry_open(struct file *f,
+			    struct inode *inode,
+			    int (*open)(struct inode *, struct file *),
+			    bool path_owned)
 {
 	static const struct file_operations empty_fops = {};
 	int error;
 
-	path_get(&f->f_path);
+	if (path_owned)
+		path_get(&f->f_path);
 	f->f_inode = inode;
 	f->f_mapping = inode->i_mapping;
 	f->f_wb_err = filemap_sample_wb_err(f->f_mapping);
@@ -1005,11 +1008,19 @@ cleanup_all:
 	fops_put(f->f_op);
 	put_file_access(f);
 cleanup_file:
-	path_put(&f->f_path);
+	if (path_owned)
+		path_put(&f->f_path);
 	f->f_path.mnt = NULL;
 	f->f_path.dentry = NULL;
 	f->f_inode = NULL;
 	return error;
+}
+
+static int do_dentry_open(struct file *f,
+			  struct inode *inode,
+			  int (*open)(struct inode *, struct file *))
+{
+	return __do_dentry_open(f, inode, open, true);
 }
 
 /**
@@ -1084,6 +1095,27 @@ int vfs_open(const struct path *path, struct file *file)
 		 * symmetry.
 		 */
 		fsnotify_open(file);
+	}
+	return ret;
+}
+
+int vfs_open_ckernel_ref(const struct path *path, struct file *file,
+			 struct ck_vfs_ref *ref)
+{
+	int ret;
+
+	if (WARN_ON_ONCE(!ref || !ref->put))
+		return -EINVAL;
+
+	file->f_path = *path;
+	file->f_ck_vfs_ref = ref;
+	ret = __do_dentry_open(file, d_backing_inode(path->dentry), NULL,
+			       false);
+	if (!ret) {
+		fsnotify_open(file);
+	} else if (!(file->f_mode & FMODE_OPENED)) {
+		file->f_ck_vfs_ref = NULL;
+		ref->put(ref);
 	}
 	return ret;
 }

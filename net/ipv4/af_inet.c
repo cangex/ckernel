@@ -77,6 +77,7 @@
 #include <linux/net.h>
 #include <linux/capability.h>
 #include <linux/fcntl.h>
+#include <linux/ckernel.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
 #include <linux/stat.h>
@@ -189,6 +190,26 @@ static int inet_autobind(struct sock *sk)
 	}
 	release_sock(sk);
 	return 0;
+}
+
+static struct ckernel *inet_ckernel_socket_fast_ctx(const struct sock *sk)
+{
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+	int type;
+
+	if (!ck || !sk)
+		return NULL;
+
+	if (!READ_ONCE(ck->fast_check) ||
+	    !READ_ONCE(ck->socket_lsm_fast))
+		return NULL;
+
+	type = sk->sk_type & SOCK_TYPE_MASK;
+	if (!ck->ck_net_fast_allow ||
+	    !ck->ck_net_fast_allow(ck, sk->sk_family, type))
+		return NULL;
+
+	return ck;
 }
 
 int __inet_listen_sk(struct sock *sk, int backlog)
@@ -448,6 +469,7 @@ EXPORT_SYMBOL(inet_release);
 int inet_bind_sk(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 {
 	u32 flags = BIND_WITH_LOCK;
+	struct ckernel *ck;
 	int err;
 
 	/* If the socket has its own bind function then use it. (RAW) */
@@ -460,10 +482,14 @@ int inet_bind_sk(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	/* BPF prog is run before any checks are done so that if the prog
 	 * changes context in a wrong way it will be caught.
 	 */
-	err = BPF_CGROUP_RUN_PROG_INET_BIND_LOCK(sk, uaddr, &addr_len,
-						 CGROUP_INET4_BIND, &flags);
-	if (err)
-		return err;
+	ck = inet_ckernel_socket_fast_ctx(sk);
+	if (!ck) {
+		err = BPF_CGROUP_RUN_PROG_INET_BIND_LOCK(sk, uaddr, &addr_len,
+							 CGROUP_INET4_BIND,
+							 &flags);
+		if (err)
+			return err;
+	}
 
 	return __inet_bind(sk, uaddr, addr_len, flags);
 }
@@ -496,7 +522,12 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 	}
 
 	tb_id = l3mdev_fib_table_by_index(net, sk->sk_bound_dev_if) ? : tb_id;
-	chk_addr_ret = inet_addr_type_table(net, addr->sin_addr.s_addr, tb_id);
+	if (addr->sin_addr.s_addr == htonl(INADDR_ANY)) {
+		chk_addr_ret = RTN_LOCAL;
+	} else {
+		chk_addr_ret = inet_addr_type_table(net, addr->sin_addr.s_addr,
+						    tb_id);
+	}
 
 	/* Not specified by any standard per-se, however it breaks too
 	 * many applications when removed.  It is unfortunate since
@@ -544,7 +575,8 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 			inet->inet_saddr = inet->inet_rcv_saddr = 0;
 			goto out_release_sock;
 		}
-		if (!(flags & BIND_FROM_BPF)) {
+		if (!(flags & BIND_FROM_BPF) &&
+		    !inet_ckernel_socket_fast_ctx(sk)) {
 			err = BPF_CGROUP_RUN_PROG_INET4_POST_BIND(sk);
 			if (err) {
 				inet->inet_saddr = inet->inet_rcv_saddr = 0;

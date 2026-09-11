@@ -39,6 +39,7 @@
 #include <linux/taskstats_kern.h>
 #include <linux/delayacct.h>
 #include <linux/cgroup.h>
+#include <linux/memcontrol.h>
 #include <linux/syscalls.h>
 #include <linux/signal.h>
 #include <linux/posix-timers.h>
@@ -73,6 +74,8 @@
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/mmu_context.h>
+
+#include <linux/ckernel.h>
 
 /*
  * The default value should be high enough to not crash a system that randomly
@@ -122,8 +125,22 @@ late_initcall(kernel_exit_sysfs_init);
 
 static void __unhash_process(struct task_struct *p, bool group_dead)
 {
+#ifdef CONFIG_FAASCALE_MEMORY
+	faascale_nr_threads_dec();
+#else
 	nr_threads--;
-	detach_pid(p, PIDTYPE_PID);
+#endif
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (p->faascale_task_domain) {
+		spin_lock(&p->faascale_task_domain->pid_lock);
+		faascale_detach_thread_pid(p);
+		spin_unlock(&p->faascale_task_domain->pid_lock);
+	} else {
+#endif
+		detach_pid(p, PIDTYPE_PID);
+#ifdef CONFIG_FAASCALE_MEMORY
+	}
+#endif
 	if (group_dead) {
 		detach_pid(p, PIDTYPE_TGID);
 		detach_pid(p, PIDTYPE_PGID);
@@ -149,7 +166,8 @@ static void __exit_signal(struct task_struct *tsk)
 	u64 utime, stime;
 
 	sighand = rcu_dereference_check(tsk->sighand,
-					lockdep_tasklist_lock_is_held());
+					lockdep_tasklist_lock_is_held() ||
+					faascale_task_domain_lock_is_held(tsk));
 	spin_lock(&sighand->siglock);
 
 #ifdef CONFIG_POSIX_TIMERS
@@ -241,6 +259,9 @@ void release_task(struct task_struct *p)
 	struct task_struct *leader;
 	struct pid *thread_pid;
 	int zap_leader;
+#ifdef CONFIG_FAASCALE_MEMORY
+	struct faascale_task_domain *faascale_td;
+#endif
 repeat:
 	/* don't need to get the RCU readlock here - the process is dead and
 	 * can't be modifying its own credentials. But shut RCU-lockdep up */
@@ -250,7 +271,33 @@ repeat:
 
 	cgroup_release(p);
 
+#ifdef CONFIG_FAASCALE_MEMORY
+	faascale_td = READ_ONCE(p->faascale_task_domain);
+	if (faascale_ckernel_task_domain_enabled() &&
+	    faascale_td && READ_ONCE(faascale_td->enabled)) {
+		write_lock_irq(&faascale_td->task_lock);
+		if (faascale_task_domain_try_exit_thread_locked(p, faascale_td)) {
+			thread_pid = get_pid(p->thread_pid);
+			__exit_signal(p);
+			write_unlock_irq(&faascale_td->task_lock);
+			faascale_task_domain_record_exit_fastpath(faascale_td);
+			seccomp_filter_release(p);
+			proc_flush_pid(thread_pid);
+			put_pid(thread_pid);
+			release_thread(p);
+			put_task_struct_rcu_user(p);
+			return;
+		}
+		write_unlock_irq(&faascale_td->task_lock);
+		faascale_task_domain_record_exit_fallback(faascale_td, p);
+	}
+#endif
+
 	write_lock_irq(&tasklist_lock);
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (faascale_td)
+		write_lock(&faascale_td->task_lock);
+#endif
 	ptrace_release_task(p);
 	thread_pid = get_pid(p->thread_pid);
 	__exit_signal(p);
@@ -274,6 +321,10 @@ repeat:
 			leader->exit_state = EXIT_DEAD;
 	}
 
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (faascale_td)
+		write_unlock(&faascale_td->task_lock);
+#endif
 	write_unlock_irq(&tasklist_lock);
 	seccomp_filter_release(p);
 	proc_flush_pid(thread_pid);
@@ -873,6 +924,12 @@ void __noreturn do_exit(long code)
 	exit_sem(tsk);
 	exit_shm(tsk);
 	exit_files(tsk);
+
+	/* Release ckernel only after ckernel-owned file descriptors are closed. */
+	if (current->ckernel) {
+		current->ckernel->ck_exit();
+		current->ckernel = NULL;
+	}
 	exit_fs(tsk);
 	if (group_dead)
 		disassociate_ctty(1);

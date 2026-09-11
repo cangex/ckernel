@@ -1440,6 +1440,7 @@ int security_socket_bind(struct socket *sock, struct sockaddr *address, int addr
 int security_socket_connect(struct socket *sock, struct sockaddr *address, int addrlen);
 int security_socket_listen(struct socket *sock, int backlog);
 int security_socket_accept(struct socket *sock, struct socket *newsock);
+void security_socket_post_accept(struct socket *newsock);
 int security_socket_sendmsg(struct socket *sock, struct msghdr *msg, int size);
 int security_socket_recvmsg(struct socket *sock, struct msghdr *msg,
 			    int size, int flags);
@@ -1541,6 +1542,10 @@ static inline int security_socket_accept(struct socket *sock,
 					 struct socket *newsock)
 {
 	return 0;
+}
+
+static inline void security_socket_post_accept(struct socket *newsock)
+{
 }
 
 static inline int security_socket_sendmsg(struct socket *sock,

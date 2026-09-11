@@ -847,6 +847,10 @@ void *mt_find_after(struct maple_tree *mt, unsigned long *index,
 void *mt_prev(struct maple_tree *mt, unsigned long index,  unsigned long min);
 void *mt_next(struct maple_tree *mt, unsigned long index, unsigned long max);
 
+/* Enable or disable the CKernel instance-local Maple metadata stock. */
+void ck_maple_meta_domain_enable(void);
+void ck_maple_meta_domain_disable(void);
+
 /**
  * mt_for_each - Iterate over each entry starting at index until max.
  * @__tree: The Maple Tree

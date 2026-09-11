@@ -6538,22 +6538,61 @@ static void init_gro_hash(struct napi_struct *napi)
 	napi->gro_bitmask = 0;
 }
 
+int napi_set_threaded(struct napi_struct *napi, bool threaded)
+{
+	int err;
+
+	ASSERT_RTNL();
+
+	if (threaded && !napi->thread) {
+		err = napi_kthread_create(napi);
+		if (err)
+			return err;
+	}
+
+	/* Publish the thread before allowing the IRQ path to wake it. */
+	smp_mb__before_atomic();
+	assign_bit(NAPI_STATE_THREADED, &napi->state, threaded);
+
+	return 0;
+}
+EXPORT_SYMBOL(napi_set_threaded);
+
+static DEFINE_STATIC_KEY_FALSE(ckernel_fair_napi_key);
+
+int napi_set_ckernel_fair(struct napi_struct *napi, bool fair)
+{
+	ASSERT_RTNL();
+
+	if (!!READ_ONCE(napi->ckernel_fair_napi) == fair)
+		return 0;
+
+	if (fair) {
+		WRITE_ONCE(napi->ckernel_fair_polls, 0);
+		WRITE_ONCE(napi->ckernel_fair_exhausted, 0);
+		WRITE_ONCE(napi->ckernel_fair_borrowed, 0);
+		static_branch_inc(&ckernel_fair_napi_key);
+		WRITE_ONCE(napi->ckernel_fair_napi, 1);
+	} else {
+		WRITE_ONCE(napi->ckernel_fair_napi, 0);
+		static_branch_dec(&ckernel_fair_napi_key);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(napi_set_ckernel_fair);
+
 int dev_set_threaded(struct net_device *dev, bool threaded)
 {
 	struct napi_struct *napi;
 	int err = 0;
 
-	if (dev->threaded == threaded)
-		return 0;
-
 	if (threaded) {
 		list_for_each_entry(napi, &dev->napi_list, dev_list) {
-			if (!napi->thread) {
-				err = napi_kthread_create(napi);
-				if (err) {
-					threaded = false;
-					break;
-				}
+			err = napi_set_threaded(napi, true);
+			if (err) {
+				threaded = false;
+				break;
 			}
 		}
 	}
@@ -6598,6 +6637,10 @@ void netif_napi_add_weight(struct net_device *dev, struct napi_struct *napi,
 				weight);
 	napi->weight = weight;
 	napi->dev = dev;
+	WRITE_ONCE(napi->ckernel_fair_napi, 0);
+	WRITE_ONCE(napi->ckernel_fair_polls, 0);
+	WRITE_ONCE(napi->ckernel_fair_exhausted, 0);
+	WRITE_ONCE(napi->ckernel_fair_borrowed, 0);
 #ifdef CONFIG_NETPOLL
 	napi->poll_owner = -1;
 #endif
@@ -6679,6 +6722,10 @@ void __netif_napi_del(struct napi_struct *napi)
 {
 	if (!test_and_clear_bit(NAPI_STATE_LISTED, &napi->state))
 		return;
+	if (READ_ONCE(napi->ckernel_fair_napi)) {
+		WRITE_ONCE(napi->ckernel_fair_napi, 0);
+		static_branch_dec(&ckernel_fair_napi_key);
+	}
 
 	napi_hash_del(napi);
 	list_del_rcu(&napi->dev_list);
@@ -6880,10 +6927,15 @@ static __latent_entropy void net_rx_action(struct softirq_action *h)
 	unsigned long time_limit = jiffies +
 		usecs_to_jiffies(READ_ONCE(netdev_budget_usecs));
 	int budget = READ_ONCE(netdev_budget);
+	bool fair_round;
+	unsigned int fair_exhausted;
 	LIST_HEAD(list);
 	LIST_HEAD(repoll);
+	LIST_HEAD(fair_repoll);
 
 start:
+	fair_round = false;
+	fair_exhausted = 0;
 	sd->in_net_rx_action = true;
 	local_irq_disable();
 	list_splice_init(&sd->poll_list, &list);
@@ -6895,7 +6947,25 @@ start:
 		skb_defer_free_flush(sd);
 
 		if (list_empty(&list)) {
-			if (list_empty(&repoll)) {
+			/* A completed fair round may immediately borrow unused
+			 * softirq budget. Every active fair NAPI is visited once
+			 * before any of them is revisited, so the path remains
+			 * equal-share while idle queues donate their whole share.
+			 * Keep legacy repolls in the round so unrelated NAPI users
+			 * cannot be starved by an enabled fair cohort.
+			 */
+			if (!list_empty(&fair_repoll) &&
+			    fair_exhausted >= 2 &&
+			    likely(budget > 0) &&
+			    likely(time_before(jiffies, time_limit))) {
+				list_splice_tail_init(&repoll, &list);
+				list_splice_tail_init(&fair_repoll, &list);
+				fair_round = true;
+				fair_exhausted = 0;
+				continue;
+			}
+
+			if (list_empty(&repoll) && list_empty(&fair_repoll)) {
 				sd->in_net_rx_action = false;
 				barrier();
 				/* We need to check if ____napi_schedule()
@@ -6911,7 +6981,24 @@ start:
 		}
 
 		n = list_first_entry(&list, struct napi_struct, poll_list);
-		budget -= napi_poll(n, &repoll);
+		if (static_branch_unlikely(&ckernel_fair_napi_key) &&
+		    READ_ONCE(n->ckernel_fair_napi)) {
+			int work = napi_poll(n, &fair_repoll);
+
+			WRITE_ONCE(n->ckernel_fair_polls,
+				   READ_ONCE(n->ckernel_fair_polls) + 1);
+			if (work >= n->weight) {
+				WRITE_ONCE(n->ckernel_fair_exhausted,
+					   READ_ONCE(n->ckernel_fair_exhausted) + 1);
+				fair_exhausted++;
+			}
+			if (fair_round)
+				WRITE_ONCE(n->ckernel_fair_borrowed,
+					   READ_ONCE(n->ckernel_fair_borrowed) + 1);
+			budget -= work;
+		} else {
+			budget -= napi_poll(n, &repoll);
+		}
 
 		/* If softirq window is exhausted then punt.
 		 * Allow this to run for 2 jiffies since which will allow
@@ -6928,6 +7015,7 @@ start:
 
 	list_splice_tail_init(&sd->poll_list, &list);
 	list_splice_tail(&repoll, &list);
+	list_splice_tail(&fair_repoll, &list);
 	list_splice(&list, &sd->poll_list);
 	if (!list_empty(&sd->poll_list))
 		__raise_softirq_irqoff(NET_RX_SOFTIRQ);

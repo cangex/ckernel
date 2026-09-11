@@ -1022,6 +1022,8 @@ static inline int ra_has_index(struct file_ra_state *ra, pgoff_t index)
 		index <  ra->start + ra->size);
 }
 
+struct ck_vfs_ref;
+
 /*
  * f_{lock,count,pos_lock} members can be highly contended and share
  * the same cacheline. f_{lock,mode} are very frequently used together
@@ -1067,7 +1069,7 @@ struct file {
 	errseq_t		f_wb_err;
 	errseq_t		f_sb_err; /* for syncfs */
 	fmode_t			f_ctl_mode;
-	KABI_RESERVE(1)
+	KABI_USE(1, struct ck_vfs_ref *f_ck_vfs_ref)
 	KABI_RESERVE(2)
 } __randomize_layout
   __attribute__((aligned(4)));	/* lest something weird decides that 2 is OK */
@@ -2651,6 +2653,8 @@ static inline struct file *file_open_root_mnt(struct vfsmount *mnt,
 }
 struct file *dentry_open(const struct path *path, int flags,
 			 const struct cred *creds);
+int vfs_open_ckernel_ref(const struct path *path, struct file *file,
+			 struct ck_vfs_ref *ref);
 struct file *dentry_create(const struct path *path, int flags, umode_t mode,
 			   const struct cred *cred);
 struct path *backing_file_user_path(struct file *f);

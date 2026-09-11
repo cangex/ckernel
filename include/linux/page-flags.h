@@ -926,6 +926,9 @@ PAGEFLAG_FALSE(HasHWPoisoned, has_hwpoisoned)
 #define PG_table	0x00000200
 #define PG_guard	0x00000400
 #define PG_hugetlb	0x00000800
+#ifdef CONFIG_FAASCALE_MEMORY
+#define PG_faascale	0x00001000
+#endif
 #ifdef CONFIG_DYNAMIC_POOL
 #define PG_dpool	0x00010000
 #endif
@@ -983,6 +986,16 @@ static __always_inline void __ClearPage##uname(struct page *page)	\
  * (see mm/page_alloc.c).
  */
 PAGE_TYPE_OPS(Buddy, buddy, buddy)
+
+#ifdef CONFIG_FAASCALE_MEMORY
+/*
+ * PageFaascale() indicates that the page is free in a faascale memcg
+ * region-local buddy list. These pages are intentionally not PageBuddy,
+ * otherwise the system buddy allocator may try to merge or remove them from
+ * the wrong free list.
+ */
+PAGE_TYPE_OPS(Faascale, faascale, faascale)
+#endif
 
 /*
  * PageOffline() indicates that the page is logically offline although the

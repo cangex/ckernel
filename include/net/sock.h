@@ -334,6 +334,7 @@ struct sk_filter;
   *	@sk_send_head: front of stuff to transmit
   *	@tcp_rtx_queue: TCP re-transmit queue [union with @sk_send_head]
   *	@sk_security: used by security modules
+  *	@sk_ckernel_cookie: lifetime-bound CKernel socket capability
   *	@sk_mark: generic packet mark
   *	@sk_cgrp_data: cgroup data for this cgroup
   *	@sk_memcg: this socket's memory cgroup association
@@ -526,6 +527,7 @@ struct sock {
 #ifdef CONFIG_SECURITY
 	void			*sk_security;
 #endif
+	u64			sk_ckernel_cookie;
 	struct sock_cgroup_data	sk_cgrp_data;
 	struct mem_cgroup	*sk_memcg;
 	void			(*sk_state_change)(struct sock *sk);

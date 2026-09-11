@@ -385,10 +385,10 @@ struct napi_struct {
 	struct list_head	dev_list;
 	struct hlist_node	napi_hash_node;
 
-	KABI_RESERVE(1)
-	KABI_RESERVE(2)
-	KABI_RESERVE(3)
-	KABI_RESERVE(4)
+	KABI_USE(1, unsigned long ckernel_fair_napi)
+	KABI_USE(2, unsigned long ckernel_fair_polls)
+	KABI_USE(3, unsigned long ckernel_fair_exhausted)
+	KABI_USE(4, unsigned long ckernel_fair_borrowed)
 };
 
 enum {
@@ -544,6 +544,8 @@ static inline bool napi_complete(struct napi_struct *n)
 }
 
 int dev_set_threaded(struct net_device *dev, bool threaded);
+int napi_set_threaded(struct napi_struct *napi, bool threaded);
+int napi_set_ckernel_fair(struct napi_struct *napi, bool fair);
 
 /**
  *	napi_disable - prevent NAPI from scheduling

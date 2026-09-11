@@ -80,6 +80,7 @@ static struct vfsmount *shm_mnt;
 #include <linux/uuid.h>
 #include <linux/quotaops.h>
 #include <linux/dynamic_pool.h>
+#include <linux/ckernel.h>
 
 #include <linux/uaccess.h>
 
@@ -2483,6 +2484,12 @@ static int shmem_get_folio_gfp(struct inode *inode, pgoff_t index,
 	int error;
 	bool alloced;
 	unsigned long orders = 0;
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+	bool ckernel_large = false;
+	bool ckernel_hot = !vma && ck && READ_ONCE(ck->online) &&
+		READ_ONCE(ck->shmem_hot_cache_enabled) &&
+		READ_ONCE(ck->ck_shmem_cache_lookup) &&
+		READ_ONCE(ck->ck_shmem_cache_insert);
 
 	if (WARN_ON_ONCE(!shmem_mapping(inode->i_mapping)))
 		return -EINVAL;
@@ -2497,7 +2504,10 @@ repeat:
 	alloced = false;
 	fault_mm = vma ? vma->vm_mm : NULL;
 
-	folio = filemap_get_entry(inode->i_mapping, index);
+	folio = ckernel_hot ?
+		ck->ck_shmem_cache_lookup(ck, inode->i_mapping, index) : NULL;
+	if (!folio)
+		folio = filemap_get_entry(inode->i_mapping, index);
 	if (folio && vma && userfaultfd_minor(vma)) {
 		if (!xa_is_value(folio))
 			folio_put(folio);
@@ -2556,8 +2566,19 @@ repeat:
 
 	/* Find hugepage orders that are allowed for anonymous shmem and tmpfs. */
 	orders = shmem_allowable_huge_orders(inode, vma, index, write_end, false);
-	if (mm_in_dynamic_pool(vma ? vma->vm_mm : current->mm))
+	if (sgp == SGP_WRITE && !vma && ck && READ_ONCE(ck->online) &&
+	    READ_ONCE(ck->shmem_large_folio)) {
+		unsigned int order = READ_ONCE(ck->shmem_folio_order);
+
+		if (order && order <= MAX_PAGECACHE_ORDER) {
+			orders |= BIT(order);
+			ckernel_large = true;
+		}
+	}
+	if (mm_in_dynamic_pool(vma ? vma->vm_mm : current->mm)) {
 		orders = 0;
+		ckernel_large = false;
+	}
 	if (orders > 0) {
 		gfp_t huge_gfp;
 
@@ -2569,10 +2590,14 @@ repeat:
 			if (folio_test_pmd_mappable(folio))
 				count_vm_event(THP_FILE_ALLOC);
 			count_mthp_stat(folio_order(folio), MTHP_STAT_SHMEM_ALLOC);
+			if (ckernel_large && folio_test_large(folio))
+				atomic_long_inc(&ck->shmem_large_allocs);
 			goto alloced;
 		}
 		if (PTR_ERR(folio) == -EEXIST)
 			goto repeat;
+		if (ckernel_large)
+			atomic_long_inc(&ck->shmem_large_fallbacks);
 	}
 
 	folio = shmem_alloc_and_add_folio(vmf, gfp, inode, index, fault_mm, 0);
@@ -2637,6 +2662,8 @@ clear:
 		goto unlock;
 	}
 out:
+	if (ckernel_hot && folio)
+		ck->ck_shmem_cache_insert(ck, inode->i_mapping, index, folio);
 	*foliop = folio;
 	return 0;
 

@@ -2799,6 +2799,8 @@ struct folio *ksm_might_need_to_copy(struct folio *folio,
 	struct page *page = folio_page(folio, 0);
 	struct anon_vma *anon_vma = folio_anon_vma(folio);
 	struct folio *new_folio;
+	gfp_t gfp = GFP_HIGHUSER_MOVABLE;
+	struct faascale_memcg_alloc_scope faascale_scope;
 
 	if (folio_test_large(folio))
 		return folio;
@@ -2818,7 +2820,9 @@ struct folio *ksm_might_need_to_copy(struct folio *folio,
 	if (!folio_test_uptodate(folio))
 		return folio;		/* let do_swap_page report the error */
 
-	new_folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, vma, addr, false);
+	faascale_enter_memcg_alloc_scope(vma->vm_mm, &gfp, &faascale_scope);
+	new_folio = vma_alloc_folio(gfp, 0, vma, addr, false);
+	faascale_leave_memcg_alloc_scope(&faascale_scope);
 	if (new_folio &&
 	    mem_cgroup_charge(new_folio, vma->vm_mm, GFP_KERNEL)) {
 		folio_put(new_folio);

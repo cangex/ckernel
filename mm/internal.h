@@ -624,6 +624,99 @@ extern void memblock_free_pages(struct page *page, unsigned long pfn,
 					unsigned int order);
 extern void __free_pages_core(struct page *page, unsigned int order);
 
+#ifdef CONFIG_FAASCALE_MEMORY
+struct faascale_memcg_state {
+	bool enabled;
+	unsigned long provisioned_size;
+	unsigned long requested_size;
+	struct faascale_mem_region region;
+	struct mutex resize_lock;
+	struct faascale_task_domain task_domain;
+	atomic_long_t alloc_fallbacks;
+	atomic_long_t remote_fault_skips;
+	atomic_long_t resize_failures;
+	atomic_long_t shrink_partial;
+};
+
+struct faascale_mem_region_state {
+	unsigned long block_count;
+	unsigned long total_pages;
+	unsigned long free_pages;
+	unsigned long buddy_chunks_total;
+	unsigned long buddy_chunks_free;
+};
+
+static inline struct faascale_memcg_state *memcg_faascale_state(struct mem_cgroup *memcg)
+{
+	return memcg ? memcg->faascale : NULL;
+}
+
+static inline bool memcg_faascale_enabled(struct mem_cgroup *memcg)
+{
+	struct faascale_memcg_state *state = memcg_faascale_state(memcg);
+
+	return faascale_ckernel_memory_enabled() &&
+	       state && READ_ONCE(state->enabled);
+}
+
+static inline struct faascale_mem_region *memcg_faascale_region(struct mem_cgroup *memcg)
+{
+	struct faascale_memcg_state *state = memcg_faascale_state(memcg);
+
+	return state ? &state->region : NULL;
+}
+
+static inline void page_set_faascale_region(struct page *page,
+					    struct faascale_mem_region *region)
+{
+	page_folio(page)->memcg_data =
+		(unsigned long)region | MEMCG_DATA_FAASCALE;
+}
+
+static inline void page_clear_faascale_region(struct page *page)
+{
+	page_folio(page)->memcg_data = 0;
+}
+
+extern void faascale_mem_region_init(struct faascale_mem_region *region);
+extern void faascale_mem_region_reset(struct faascale_mem_region *region);
+extern void faascale_mem_region_free(struct faascale_mem_region *region);
+extern void add_block_to_region(struct faascale_mem_region *region,
+				struct faascale_mem_block *block);
+extern void free_one_block(struct faascale_mem_block *block);
+extern struct faascale_mem_block *alloc_zone_block(struct zone *zone, int order,
+						   bool split);
+extern bool page_in_region(struct page *page, struct faascale_mem_region *region);
+extern void faascale_mem_region_read_state(struct faascale_mem_region *region,
+					   struct faascale_mem_region_state *state);
+extern unsigned long
+faascale_region_collect_reclaimable_blocks(struct faascale_mem_region *region,
+					   unsigned long max_blocks,
+					   struct list_head *dst);
+extern void
+faascale_region_restore_blocks(struct faascale_mem_region *region,
+			       struct list_head *src);
+
+static inline bool faascale_backend_is_available(void)
+{
+	return true;
+}
+
+static inline int faascale_backend_scale_blocks(struct list_head *block_list,
+						bool pop)
+{
+	(void)block_list;
+	(void)pop;
+	return 0;
+}
+
+static inline bool faascale_backend_block_check(struct list_head *block_list)
+{
+	(void)block_list;
+	return true;
+}
+#endif
+
 /*
  * This will have no effect, other than possibly generating a warning, if the
  * caller passes in a non-large folio.

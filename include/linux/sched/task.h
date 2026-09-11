@@ -65,6 +65,12 @@ extern void sched_cgroup_fork(struct task_struct *p, struct kernel_clone_args *k
 extern void sched_post_fork(struct task_struct *p);
 extern void sched_dead(struct task_struct *p);
 
+#ifdef CONFIG_FAASCALE_MEMORY
+extern void faascale_nr_threads_inc(void);
+extern void faascale_nr_threads_dec(void);
+extern void faascale_total_forks_inc(void);
+#endif
+
 void __noreturn do_task_dead(void);
 void __noreturn make_task_dead(int signr);
 

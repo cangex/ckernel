@@ -13,6 +13,7 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/mount.h>
+#include <linux/ckernel.h>
 
 #include "include/apparmor.h"
 #include "include/audit.h"
@@ -587,6 +588,8 @@ int aa_file_perm(const char *op, const struct cred *subj_cred,
 {
 	struct aa_file_ctx *fctx;
 	struct aa_label *flabel;
+	struct aa_label *open_label;
+	struct ckernel *ck;
 	u32 denied;
 	int error = 0;
 
@@ -594,6 +597,26 @@ int aa_file_perm(const char *op, const struct cred *subj_cred,
 	AA_BUG(!file);
 
 	fctx = file_ctx(file);
+
+	ck = READ_ONCE(current->ckernel);
+	if (READ_ONCE(fctx->fast_path) && ck && READ_ONCE(ck->fast_check) &&
+	    READ_ONCE(fctx->fast_ckernel_cookie) == READ_ONCE(ck->cookie))
+		return 0;
+
+	/* A label-less fast file must not escape its originating CKernel. */
+	if (fctx->fast_path)
+		return -EACCES;
+
+	/* Pseudo and exec files may not have passed the regular open hook. */
+	if (unlikely(!rcu_access_pointer(fctx->label))) {
+		open_label = aa_get_newest_cred_label(file->f_cred);
+		spin_lock(&fctx->lock);
+		if (!rcu_access_pointer(fctx->label))
+			rcu_assign_pointer(fctx->label,
+					   aa_get_label(open_label));
+		spin_unlock(&fctx->lock);
+		aa_put_label(open_label);
+	}
 
 	rcu_read_lock();
 	flabel  = rcu_dereference(fctx->label);

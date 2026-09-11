@@ -317,6 +317,51 @@ static int rdtgroup_parse_resource(char *resname, char *tok,
 	return -EINVAL;
 }
 
+int ck_rdtgroup_schemata_write(struct kernfs_node *kn, char *buf)
+{
+    struct resctrl_schema *s;
+    struct rdt_resource *r;
+    char *tok, *resname;
+    int ret = 0;
+
+    if (!kn || !buf)
+        return -EINVAL;
+
+    struct rdtgroup *rdtgrp = rdtgroup_kn_lock_live(kn);
+    if (!rdtgrp)
+        return -ENOENT;
+
+    rdt_staged_configs_clear();
+
+    while ((tok = strsep(&buf, "\n")) != NULL) {
+        resname = strim(strsep(&tok, ":"));
+        ret = rdtgroup_parse_resource(resname, tok, rdtgrp);
+        if (ret)
+            goto out;
+    }
+
+    list_for_each_entry(s, &resctrl_schema_all, list) {
+        r = s->res;
+
+        /*
+         * Writes to mba_sc resources update the software controller,
+         * not the control MSR.
+         */
+        if (is_mba_sc(r))
+            continue;
+
+        ret = resctrl_arch_update_domains(r, rdtgrp->closid);
+        if (ret)
+            goto out;
+    }
+
+out:
+    rdt_staged_configs_clear();
+    rdtgroup_kn_unlock(kn);
+    return ret;
+}
+EXPORT_SYMBOL(ck_rdtgroup_schemata_write);
+
 ssize_t rdtgroup_schemata_write(struct kernfs_open_file *of,
 				char *buf, size_t nbytes, loff_t off)
 {
@@ -546,6 +591,8 @@ int rdtgroup_mondata_show(struct seq_file *m, void *arg)
 
 	mon_event_read(&rr, r, d, rdtgrp, evtid, false);
 
+	pr_info("resctrl: resid=%d evtid=%d domid=%d \n", resid, evtid, domid);
+
 	if (rr.err == -EIO)
 		seq_puts(m, "Error\n");
 	else if (rr.err == -EINVAL)
@@ -557,3 +604,179 @@ out:
 	rdtgroup_kn_unlock(of->kn);
 	return ret;
 }
+
+// ck get schemata bm
+// val[0],val[1],val[2],val[3]
+static void ck_show_doms_bm(struct resctrl_schema *schema, int closid, u32 *val)
+{
+	u32 ctrl_val;
+	struct rdt_resource *r = schema->res;
+	struct rdt_domain *dom;
+	int idx = 0;
+
+	list_for_each_entry(dom, &r->domains, list) {
+		if (is_mba_sc(r))
+			ctrl_val = dom->mbps_val[closid];
+		else
+			ctrl_val = resctrl_arch_get_config(r, dom, closid,
+					schema->conf_type);
+
+		if (idx >= 4) break;
+		val[idx++] = ctrl_val;
+	}
+	return;
+}
+
+int ck_rdtgroup_schemata_show_bm(struct kernfs_node *kn, u32 *val)
+{
+	struct resctrl_schema *schema;
+	int ret = 0;
+	int vis = 0;
+	u32 closid;
+
+	struct rdtgroup *rdtgroup = rdtgroup_kn_lock_live(kn);
+	if (rdtgroup) {
+		if (rdtgroup->mode == RDT_MODE_SHAREABLE) {
+			closid = rdtgroup->closid;
+			list_for_each_entry(schema, &resctrl_schema_all, list) {
+				if (closid < schema->num_closid) {
+					if (schema->res->rid == RDT_RESOURCE_L3) {
+						vis = 1;
+						ck_show_doms_bm(schema, closid, val);
+					}
+				}
+			}
+		}
+		else {
+			ret = -EINVAL;
+		}
+	}
+	else {
+		ret = -ENOENT;
+	}
+
+	if (!vis) {
+		ret = -EINVAL;
+	}
+
+	rdtgroup_kn_unlock(kn);
+	return ret;
+}
+EXPORT_SYMBOL(ck_rdtgroup_schemata_show_bm);
+
+// ck get schemata bw
+// val[0],val[1],val[2],val[3]
+static void ck_show_doms_bw(struct resctrl_schema *schema, int closid, u32 *val)
+{
+	u32 ctrl_val;
+	struct rdt_resource *r = schema->res;
+	struct rdt_domain *dom;
+	int idx = 0;
+
+	list_for_each_entry(dom, &r->domains, list) {
+
+		if (is_mba_sc(r)) {
+			ctrl_val = dom->mbps_val[closid];
+		}
+		else
+			ctrl_val = resctrl_arch_get_config(r, dom, closid,
+					schema->conf_type);
+
+		if (idx >= 4) break;
+		val[idx++] = ctrl_val;
+	}
+	return;
+}
+
+int ck_rdtgroup_schemata_show_bw(struct kernfs_node *kn, u32 *val)
+{
+	struct resctrl_schema *schema;
+	int ret = 0;
+	int vis = 0;
+	u32 closid;
+
+	struct rdtgroup *rdtgroup = rdtgroup_kn_lock_live(kn);
+	if (rdtgroup) {
+		if (rdtgroup->mode == RDT_MODE_SHAREABLE) {
+			closid = rdtgroup->closid;
+			list_for_each_entry(schema, &resctrl_schema_all, list) {
+				if (closid < schema->num_closid) {
+					if (schema->res->rid == RDT_RESOURCE_MBA ||
+							schema->res->rid == RDT_RESOURCE_SMBA) {
+						vis = 1;
+						ck_show_doms_bw(schema, closid, val);
+					}
+				}
+			}
+		}
+		else {
+			ret = -EINVAL;
+		}
+	}
+	else {
+		ret = -ENOENT;
+	}
+
+	if (!vis) {
+		ret = -EINVAL;
+	}
+
+	rdtgroup_kn_unlock(kn);
+	return ret;
+}
+EXPORT_SYMBOL(ck_rdtgroup_schemata_show_bw);
+
+int ck_mpam_rdtgroup_mondata_show_mbm(struct kernfs_node *group_kn,
+				   u64 *mbm_total)
+{
+	u32 resid, evtid;
+	struct rdtgroup *rdtgrp;
+	struct rdt_resource *r;
+	struct rdt_domain *d;
+	struct rmid_read rr;
+	int idx = 0;
+	int ret = 0;
+
+	if (!group_kn || !mbm_total)
+		return -EINVAL;
+
+	for (idx = 0; idx < 4; idx++)
+		mbm_total[idx] = 0;
+	idx = 0;
+
+	rdtgrp = rdtgroup_kn_lock_live(group_kn);
+	if (!rdtgrp) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	resid = RDT_RESOURCE_MBA;
+	evtid = QOS_L3_MBM_TOTAL_EVENT_ID;
+
+	r = resctrl_arch_get_resource(resid);
+	if (!r) {
+		ret = -ENODEV;
+		goto out;
+	}
+
+	list_for_each_entry(d, &r->domains, list) {
+		if (idx >= 4)
+			break;
+
+		mon_event_read(&rr, r, d, rdtgrp, evtid, false);
+		if (rr.err == -EIO || rr.err == -EINVAL) {
+			ret = rr.err;
+			goto out;
+		}
+
+		mbm_total[idx++] = rr.val;
+	}
+
+	if (!idx)
+		ret = -ENOENT;
+
+out:
+	rdtgroup_kn_unlock(group_kn);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(ck_mpam_rdtgroup_mondata_show_mbm);

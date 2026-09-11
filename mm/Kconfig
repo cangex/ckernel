@@ -632,6 +632,15 @@ config ARCH_ENABLE_SPLIT_PMD_PTLOCK
 config MEMORY_BALLOON
 	bool
 
+config FAASCALE_MEMORY
+	bool "Per-memcg faascale anonymous memory regions"
+	depends on MEMCG && MIGRATION && MMU
+	help
+	  Enable a per-memory-cgroup faascale region allocator for anonymous
+	  memory. Regions are provisioned on demand from the system buddy
+	  allocator when userspace writes memory.faascale.size, and can grow or
+	  shrink at runtime on a per-cgroup basis.
+
 #
 # support for memory balloon compaction
 config BALLOON_COMPACTION

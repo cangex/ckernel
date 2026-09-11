@@ -43,6 +43,8 @@ struct aa_file_ctx {
 	spinlock_t lock;
 	struct aa_label __rcu *label;
 	u32 allow;
+	u64 fast_ckernel_cookie;
+	bool fast_path;
 };
 
 /**

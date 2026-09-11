@@ -45,6 +45,19 @@
  */
 #define PAGE_ALLOC_COSTLY_ORDER 3
 
+#ifdef CONFIG_FAASCALE_MEMORY
+#define FAASCALE_MEMORY_MIN_BLOCK_SHIFT	(MAX_ORDER + PAGE_SHIFT)
+#define FAASCALE_MEMORY_MAX_BLOCK_SHIFT	(FAASCALE_MEMORY_MIN_BLOCK_SHIFT + 7)
+#define FAASCALE_MEMORY_MIN_REGION_SHIFT	26
+#define FAASCALE_MEMORY_MAX_REGION_SHIFT	32
+#define FAASCALE_MAGIC			0x004B494E47444F00UL
+#define FAASCALE_MIGRATE		MIGRATE_MOVABLE
+
+#define faascale_mem_block_order_2_pages(order) \
+	(1UL << (FAASCALE_MEMORY_MIN_BLOCK_SHIFT - PAGE_SHIFT + (order)))
+#define faascale_mem_block_order_2_buddy_pages(order) (1UL << (order))
+#endif
+
 enum migratetype {
 	MIGRATE_UNMOVABLE,
 	MIGRATE_MOVABLE,
@@ -118,6 +131,30 @@ struct free_area {
 	struct list_head	free_list[MIGRATE_TYPES];
 	unsigned long		nr_free;
 };
+
+#ifdef CONFIG_FAASCALE_MEMORY
+struct faascale_mem_block {
+	struct list_head list;
+	int order;
+	unsigned long block_start_pfn;
+	unsigned long managed_pages;
+	struct zone *block_zone;
+	bool populated;
+};
+
+struct faascale_mem_region {
+	spinlock_t lock;
+	struct free_area free_area[NR_PAGE_ORDERS];
+	struct list_head block_list;
+	unsigned long buddy_block_count;
+	unsigned long kingdo_magic;
+};
+
+static inline bool region_is_initialized(struct faascale_mem_region *region)
+{
+	return region && READ_ONCE(region->kingdo_magic) == FAASCALE_MAGIC;
+}
+#endif
 
 struct pglist_data;
 

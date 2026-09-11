@@ -602,6 +602,25 @@ static inline void set_buddy_order(struct page *page, unsigned int order)
 	__SetPageBuddy(page);
 }
 
+#ifdef CONFIG_FAASCALE_MEMORY
+static inline unsigned int faascale_buddy_order(struct page *page)
+{
+	/* PageFaascale() must be checked by the caller. */
+	return page_private(page);
+}
+
+static inline void set_faascale_buddy_order(struct page *page, unsigned int order)
+{
+	set_page_private(page, order);
+	__SetPageFaascale(page);
+}
+
+static inline bool page_is_faascale_buddy(struct page *buddy, unsigned int order)
+{
+	return PageFaascale(buddy) && faascale_buddy_order(buddy) == order;
+}
+#endif
+
 #ifdef CONFIG_COMPACTION
 static inline struct capture_control *task_capc(struct zone *zone)
 {
@@ -700,6 +719,61 @@ static inline void del_page_from_free_list(struct page *page, struct zone *zone,
 	zone->free_area[order].nr_free--;
 }
 
+#ifdef CONFIG_FAASCALE_MEMORY
+static inline void __mod_zone_faascale_block_freepage_state(struct zone *zone,
+							    int nr_pages)
+{
+	(void)zone;
+	(void)nr_pages;
+}
+
+static inline void __mod_zone_faascale_block_activepage_state(struct zone *zone,
+							      int nr_pages)
+{
+	(void)zone;
+	(void)nr_pages;
+}
+
+static inline void add_to_faascale_region_block_list_tail(
+	struct faascale_mem_block *block, struct faascale_mem_region *region)
+{
+	list_add_tail(&block->list, &region->block_list);
+}
+
+static inline void add_to_faascale_region_free_list(
+	struct page *page, struct faascale_mem_region *region,
+	unsigned int order, int migratetype)
+{
+	struct free_area *area = &region->free_area[order];
+
+	list_add(&page->buddy_list, &area->free_list[migratetype]);
+	area->nr_free++;
+}
+
+static inline void add_to_faascale_region_free_list_tail(
+	struct page *page, struct faascale_mem_region *region,
+	unsigned int order, int migratetype)
+{
+	struct free_area *area = &region->free_area[order];
+
+	list_add_tail(&page->buddy_list, &area->free_list[migratetype]);
+	area->nr_free++;
+}
+
+static inline void del_page_from_region_free_list(struct page *page,
+						  struct faascale_mem_region *region,
+						  unsigned int order)
+{
+	if (page_reported(page))
+		__ClearPageReported(page);
+
+	list_del(&page->buddy_list);
+	__ClearPageFaascale(page);
+	set_page_private(page, 0);
+	region->free_area[order].nr_free--;
+}
+#endif
+
 static inline struct page *get_page_from_free_area(struct free_area *area,
 					    int migratetype)
 {
@@ -731,6 +805,67 @@ buddy_merge_likely(unsigned long pfn, unsigned long buddy_pfn,
 	return find_buddy_page_pfn(higher_page, higher_page_pfn, order + 1,
 			NULL) != NULL;
 }
+
+#ifdef CONFIG_FAASCALE_MEMORY
+static inline void __free_one_page_to_region(struct page *page,
+					     unsigned long pfn,
+					     struct faascale_mem_region *region,
+					     unsigned int order,
+					     int migratetype, fpi_t fpi_flags)
+{
+	unsigned long buddy_pfn, combined_pfn;
+	unsigned int max_order = MAX_ORDER;
+	struct page *buddy;
+	bool to_tail;
+	struct zone *zone = page_zone(page);
+
+	VM_BUG_ON(!region_is_initialized(region));
+	VM_BUG_ON_PAGE(page->flags & PAGE_FLAGS_CHECK_AT_PREP, page);
+	VM_BUG_ON(migratetype == -1);
+
+	if (likely(!is_migrate_isolate(migratetype)))
+		__mod_zone_faascale_block_freepage_state(zone, 1 << order);
+
+	VM_BUG_ON_PAGE(pfn & ((1 << order) - 1), page);
+	VM_BUG_ON_PAGE(bad_range(zone, page), page);
+
+	while (order < max_order) {
+		buddy_pfn = __find_buddy_pfn(pfn, order);
+		buddy = page + (buddy_pfn - pfn);
+
+		if (!pfn_valid(buddy_pfn))
+			goto done_merging;
+		if (!page_is_faascale_buddy(buddy, order))
+			goto done_merging;
+
+		del_page_from_region_free_list(buddy, region, order);
+		combined_pfn = buddy_pfn & pfn;
+		page = page + (combined_pfn - pfn);
+		pfn = combined_pfn;
+		order++;
+	}
+
+done_merging:
+	set_faascale_buddy_order(page, order);
+
+	if (fpi_flags & FPI_TO_TAIL)
+		to_tail = true;
+	else if (is_shuffle_order(order))
+		to_tail = shuffle_pick_tail();
+	else
+		to_tail = buddy_merge_likely(pfn, buddy_pfn, page, order);
+
+	if (to_tail)
+		add_to_faascale_region_free_list_tail(page, region, order,
+						      migratetype);
+	else
+		add_to_faascale_region_free_list(page, region, order,
+						 migratetype);
+
+	if (!(fpi_flags & FPI_SKIP_REPORT_NOTIFY))
+		page_reporting_notify_free(order);
+}
+#endif
 
 /*
  * Freeing function for a buddy system allocator.
@@ -909,7 +1044,7 @@ static inline bool page_expected_state(struct page *page,
 	if (unlikely((unsigned long)page->mapping |
 			page_ref_count(page) |
 #ifdef CONFIG_MEMCG
-			page->memcg_data |
+			(page->memcg_data & ~MEMCG_DATA_FAASCALE) |
 #endif
 			(page->flags & check_flags)))
 		return false;
@@ -934,7 +1069,7 @@ static const char *page_bad_reason(struct page *page, unsigned long flags)
 			bad_reason = "PAGE_FLAGS_CHECK_AT_FREE flag(s) set";
 	}
 #ifdef CONFIG_MEMCG
-	if (unlikely(page->memcg_data))
+	if (unlikely(page->memcg_data & ~MEMCG_DATA_FAASCALE))
 		bad_reason = "page still charged to cgroup";
 #endif
 	return bad_reason;
@@ -1590,6 +1725,60 @@ void dpool_prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
 				unsigned int alloc_flags)
 {
 	prep_new_page(page, order, gfp_flags, alloc_flags);
+}
+#endif
+
+#ifdef CONFIG_FAASCALE_MEMORY
+static inline void expand_region(struct faascale_mem_region *region,
+				 struct page *page, int low, int high,
+				 int migratetype)
+{
+	unsigned int size = 1 << high;
+
+	while (high > low) {
+		high--;
+		size >>= 1;
+		add_to_faascale_region_free_list(&page[size], region, high,
+						 migratetype);
+			set_faascale_buddy_order(&page[size], high);
+	}
+}
+
+static struct page *
+get_page_from_faascale_mem_region_freelist(struct faascale_mem_region *region,
+					   gfp_t gfp_mask, unsigned int order,
+					   int alloc_flags)
+{
+	unsigned long flags;
+	unsigned int current_order;
+	struct free_area *area;
+	struct page *page;
+
+	spin_lock_irqsave(&region->lock, flags);
+	do {
+		page = NULL;
+		for (current_order = order; current_order < NR_PAGE_ORDERS;
+		     ++current_order) {
+			area = &region->free_area[current_order];
+			page = get_page_from_free_area(area, FAASCALE_MIGRATE);
+			if (!page)
+				continue;
+			del_page_from_region_free_list(page, region,
+						       current_order);
+			expand_region(region, page, order, current_order,
+				      FAASCALE_MIGRATE);
+			set_pcppage_migratetype(page, FAASCALE_MIGRATE);
+			break;
+		}
+	} while (page && check_new_pages(page, order));
+	spin_unlock_irqrestore(&region->lock, flags);
+	if (!page)
+		return NULL;
+
+	__mod_zone_faascale_block_freepage_state(page_zone(page), -(1 << order));
+	__count_zid_vm_events(PGALLOC, page_zonenum(page), 1 << order);
+	prep_new_page(page, order, gfp_mask, alloc_flags);
+	return page;
 }
 #endif
 
@@ -2477,6 +2666,9 @@ static void free_unref_page_commit(struct zone *zone, struct per_cpu_pages *pcp,
 	int high, batch;
 	int pindex;
 	bool free_high = false;
+#ifdef CONFIG_FAASCALE_MEMORY
+	struct faascale_mem_region *region;
+#endif
 
 	/*
 	 * On freeing, reduce the number of pages that are batch allocated.
@@ -2485,6 +2677,19 @@ static void free_unref_page_commit(struct zone *zone, struct per_cpu_pages *pcp,
 	 */
 	pcp->alloc_factor >>= 1;
 	__count_vm_events(PGFREE, 1 << order);
+
+#ifdef CONFIG_FAASCALE_MEMORY
+	region = page_faascale_region(page);
+	if (region) {
+		spin_lock(&region->lock);
+		__free_one_page_to_region(page, page_to_pfn(page), region,
+					  order, FAASCALE_MIGRATE, FPI_NONE);
+		page_clear_faascale_region(page);
+		spin_unlock(&region->lock);
+		return;
+	}
+#endif
+
 	pindex = order_to_pindex(migratetype, order);
 	list_add(&page->pcp_list, &pcp->lists[pindex]);
 	pcp->count += 1 << order;
@@ -4781,6 +4986,10 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
 	unsigned int alloc_flags = ALLOC_WMARK_LOW;
 	gfp_t alloc_gfp; /* The gfp_t that was actually used for allocation */
 	struct alloc_context ac = { };
+#ifdef CONFIG_FAASCALE_MEMORY
+	struct mem_cgroup *memcg;
+	struct faascale_mem_region *region;
+#endif
 
 	/*
 	 * There are several places where we assume that the order value is sane
@@ -4812,6 +5021,33 @@ retry:
 	 * memory until all local zones are considered.
 	 */
 	alloc_flags |= alloc_flags_nofragment(ac.preferred_zoneref->zone, gfp);
+
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (alloc_gfp & __GFP_FAASCALE) {
+		memcg = get_mem_cgroup_from_mm(NULL);
+		if (unlikely(!memcg || !memcg_faascale_enabled(memcg) ||
+			     order > MAX_ORDER)) {
+			if (memcg)
+				css_put(&memcg->css);
+			alloc_gfp &= ~__GFP_FAASCALE;
+			gfp &= ~__GFP_FAASCALE;
+		} else {
+			region = memcg_faascale_region(memcg);
+			page = get_page_from_faascale_mem_region_freelist(region,
+									  alloc_gfp,
+									  order,
+									  alloc_flags);
+			if (likely(page)) {
+				css_put(&memcg->css);
+				goto out;
+			}
+			atomic_long_inc(&memcg_faascale_state(memcg)->alloc_fallbacks);
+			css_put(&memcg->css);
+			alloc_gfp &= ~__GFP_FAASCALE;
+			gfp &= ~__GFP_FAASCALE;
+		}
+	}
+#endif
 
 	 /* Before alloc from buddy system, alloc from dpool firstly */
 	if (dpool_enabled) {
@@ -4864,6 +5100,244 @@ out:
 	return page;
 }
 EXPORT_SYMBOL(__alloc_pages);
+
+#ifdef CONFIG_FAASCALE_MEMORY
+static bool faascale_zone_eligible(struct zone *zone)
+{
+	if (zone_is_empty(zone))
+		return false;
+
+	return zone_idx(zone) <= ZONE_NORMAL;
+}
+
+static struct page *faascale_steal_system_chunk(struct zone *zone)
+{
+	static const int migratetypes[] = {
+		MIGRATE_MOVABLE,
+		MIGRATE_RECLAIMABLE,
+		MIGRATE_UNMOVABLE,
+	};
+	struct page *page = NULL;
+	unsigned long flags;
+	int i;
+
+	spin_lock_irqsave(&zone->lock, flags);
+	for (i = 0; i < ARRAY_SIZE(migratetypes); i++) {
+		page = __rmqueue_smallest(zone, MAX_ORDER, migratetypes[i]);
+		if (page)
+			break;
+	}
+	spin_unlock_irqrestore(&zone->lock, flags);
+
+	return page;
+}
+
+void faascale_mem_region_init(struct faascale_mem_region *region)
+{
+	unsigned int order;
+	int mt;
+
+	memset(region, 0, sizeof(*region));
+	spin_lock_init(&region->lock);
+	INIT_LIST_HEAD(&region->block_list);
+	for (order = 0; order < NR_PAGE_ORDERS; order++) {
+		region->free_area[order].nr_free = 0;
+		for (mt = 0; mt < MIGRATE_TYPES; mt++)
+			INIT_LIST_HEAD(&region->free_area[order].free_list[mt]);
+	}
+}
+
+void faascale_mem_region_reset(struct faascale_mem_region *region)
+{
+	faascale_mem_region_init(region);
+}
+
+void faascale_mem_region_read_state(struct faascale_mem_region *region,
+				    struct faascale_mem_region_state *state)
+{
+	struct faascale_mem_block *block;
+	unsigned long flags;
+	unsigned int order;
+
+	memset(state, 0, sizeof(*state));
+	spin_lock_irqsave(&region->lock, flags);
+	list_for_each_entry(block, &region->block_list, list) {
+		state->block_count++;
+		state->total_pages += faascale_mem_block_order_2_pages(block->order);
+	}
+	for (order = 0; order < NR_PAGE_ORDERS; order++)
+		state->free_pages += region->free_area[order].nr_free << order;
+	state->buddy_chunks_total = state->block_count;
+	state->buddy_chunks_free = region->free_area[MAX_ORDER].nr_free;
+	spin_unlock_irqrestore(&region->lock, flags);
+}
+
+bool page_in_region(struct page *page, struct faascale_mem_region *region)
+{
+	unsigned long pfn = page_to_pfn(page);
+	struct faascale_mem_block *block;
+
+	list_for_each_entry(block, &region->block_list, list) {
+		unsigned long start = block->block_start_pfn;
+		unsigned long end = start +
+			faascale_mem_block_order_2_pages(block->order);
+
+		if (start <= pfn && pfn < end)
+			return true;
+	}
+
+	return false;
+}
+
+struct faascale_mem_block *alloc_zone_block(struct zone *zone, int order, bool split)
+{
+	struct faascale_mem_block *block;
+	struct page *page;
+	unsigned long nr_pages;
+
+	(void)split;
+	if (order != 0 || !faascale_zone_eligible(zone))
+		return NULL;
+
+	page = faascale_steal_system_chunk(zone);
+	if (!page)
+		return NULL;
+
+	nr_pages = faascale_mem_block_order_2_pages(order);
+	__mod_zone_faascale_block_activepage_state(zone, nr_pages);
+	__mod_zone_faascale_block_freepage_state(zone, nr_pages);
+
+	block = kzalloc(sizeof(*block), GFP_KERNEL);
+	if (!block) {
+		__mod_zone_faascale_block_activepage_state(zone, -nr_pages);
+		__mod_zone_faascale_block_freepage_state(zone, -nr_pages);
+		set_page_refcounted(page);
+		__free_pages(page, MAX_ORDER);
+		return NULL;
+	}
+
+	INIT_LIST_HEAD(&block->list);
+	block->order = order;
+	block->block_start_pfn = page_to_pfn(page);
+	block->managed_pages = nr_pages;
+	block->block_zone = zone;
+	block->populated = false;
+
+	return block;
+}
+
+void free_one_block(struct faascale_mem_block *block)
+{
+	struct page *page = pfn_to_page(block->block_start_pfn);
+	struct zone *zone = block->block_zone;
+	unsigned long nr_pages = faascale_mem_block_order_2_pages(block->order);
+
+	__mod_zone_faascale_block_activepage_state(zone, -nr_pages);
+	__mod_zone_faascale_block_freepage_state(zone, -nr_pages);
+	set_page_refcounted(page);
+	__free_pages(page, MAX_ORDER + block->order);
+	kfree(block);
+}
+
+void add_block_to_region(struct faascale_mem_region *region,
+			 struct faascale_mem_block *block)
+{
+	struct page *page = pfn_to_page(block->block_start_pfn);
+	unsigned long flags;
+	unsigned long offset = 0;
+	unsigned long step = 1UL << (MAX_ORDER + block->order);
+
+	spin_lock_irqsave(&region->lock, flags);
+	add_to_faascale_region_block_list_tail(block, region);
+	while (offset < faascale_mem_block_order_2_pages(block->order)) {
+		add_to_faascale_region_free_list_tail(&page[offset], region,
+						      MAX_ORDER + block->order,
+						      FAASCALE_MIGRATE);
+		set_faascale_buddy_order(&page[offset], MAX_ORDER + block->order);
+		offset += step;
+	}
+	region->buddy_block_count +=
+		faascale_mem_block_order_2_pages(block->order) / step;
+	region->kingdo_magic = FAASCALE_MAGIC;
+	spin_unlock_irqrestore(&region->lock, flags);
+}
+
+static bool faascale_block_is_reclaimable_locked(struct faascale_mem_block *block)
+{
+	struct page *page = pfn_to_page(block->block_start_pfn);
+
+	VM_BUG_ON(block->order != 0);
+	if (!PageFaascale(page))
+		return false;
+	if (faascale_buddy_order(page) != MAX_ORDER)
+		return false;
+
+	return true;
+}
+
+unsigned long faascale_region_collect_reclaimable_blocks(
+	struct faascale_mem_region *region, unsigned long max_blocks,
+	struct list_head *dst)
+{
+	struct faascale_mem_block *block, *tmp;
+	struct page *page;
+	unsigned long flags;
+	unsigned long reclaimed = 0;
+
+	spin_lock_irqsave(&region->lock, flags);
+	list_for_each_entry_safe(block, tmp, &region->block_list, list) {
+		if (reclaimed >= max_blocks)
+			break;
+		if (!faascale_block_is_reclaimable_locked(block))
+			continue;
+
+		page = pfn_to_page(block->block_start_pfn);
+		del_page_from_region_free_list(page, region, MAX_ORDER);
+		list_del_init(&block->list);
+		list_add_tail(&block->list, dst);
+		region->buddy_block_count--;
+		reclaimed++;
+	}
+	spin_unlock_irqrestore(&region->lock, flags);
+
+	return reclaimed;
+}
+
+void faascale_region_restore_blocks(struct faascale_mem_region *region,
+				    struct list_head *src)
+{
+	struct faascale_mem_block *block, *tmp;
+
+	list_for_each_entry_safe(block, tmp, src, list) {
+		list_del_init(&block->list);
+		add_block_to_region(region, block);
+	}
+}
+
+void faascale_mem_region_free(struct faascale_mem_region *region)
+{
+	LIST_HEAD(block_list);
+	struct faascale_mem_block *block, *tmp;
+	int err;
+
+	if (!region_is_initialized(region))
+		return;
+
+	faascale_region_collect_reclaimable_blocks(region, ULONG_MAX, &block_list);
+	err = faascale_backend_scale_blocks(&block_list, false);
+	if (err) {
+		faascale_region_restore_blocks(region, &block_list);
+		return;
+	}
+
+	list_for_each_entry_safe(block, tmp, &block_list, list) {
+		list_del_init(&block->list);
+		free_one_block(block);
+	}
+
+	faascale_mem_region_reset(region);
+}
+#endif
 
 struct folio *__folio_alloc(gfp_t gfp, unsigned int order, int preferred_nid,
 		nodemask_t *nodemask)

@@ -16,6 +16,7 @@
 #ifdef CONFIG_UCOUNTS_PERCPU_COUNTER
 #include <linux/percpu_counter.h>
 #endif
+#include <linux/ckernel.h>
 
 #define UID_GID_MAP_MAX_BASE_EXTENTS 5
 #define UID_GID_MAP_MAX_EXTENTS 340
@@ -83,6 +84,7 @@ struct user_namespace {
 	kuid_t			owner;
 	kgid_t			group;
 	struct ns_common	ns;
+	struct ckernel		*ckernel;
 	unsigned long		flags;
 	/* parent_could_setfcap: true if the creator if this ns had CAP_SETFCAP
 	 * in its effective capability set at the child ns creation time. */

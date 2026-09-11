@@ -35,6 +35,81 @@ struct mm_struct;
 struct kmem_cache;
 struct oom_control;
 struct dynamic_pool;
+struct faascale_mem_region;
+struct faascale_memcg_state;
+struct task_struct;
+
+#ifdef CONFIG_FAASCALE_MEMORY
+struct faascale_task_domain {
+	rwlock_t task_lock;
+	spinlock_t pid_lock;
+	bool enabled;
+	atomic_long_t threads;
+	atomic64_t clone_thread_fastpath;
+	atomic64_t clone_thread_fallback;
+	atomic64_t exit_thread_fastpath;
+	atomic64_t exit_thread_fallback;
+	atomic64_t fallback_non_thread;
+	atomic64_t fallback_ptrace;
+	atomic64_t fallback_into_cgroup;
+	atomic64_t fallback_exit_leader;
+	atomic64_t fallback_exit_last_thread;
+	atomic64_t fallback_exit_ptrace;
+	atomic64_t fallback_exit_notify;
+};
+
+void faascale_task_domain_init(struct faascale_task_domain *domain);
+struct faascale_task_domain *
+faascale_task_domain_from_task(struct task_struct *task);
+bool faascale_task_domain_try_clone_thread(unsigned long clone_flags, int trace,
+					   struct faascale_task_domain **domain);
+bool faascale_task_domain_try_exit_thread_locked(struct task_struct *task,
+						 struct faascale_task_domain *domain);
+void faascale_task_domain_record_clone_fastpath(struct faascale_task_domain *domain);
+void faascale_task_domain_record_clone_fallback(struct faascale_task_domain *domain,
+						unsigned long clone_flags);
+void faascale_task_domain_record_exit_fastpath(struct faascale_task_domain *domain);
+void faascale_task_domain_record_exit_fallback(struct faascale_task_domain *domain,
+					       struct task_struct *task);
+int faascale_task_domain_lock_is_held(struct task_struct *task);
+bool faascale_ckernel_memory_enabled(void);
+bool faascale_ckernel_task_domain_enabled(void);
+void faascale_ckernel_set_features_enabled(bool memory, bool task_domain);
+#else
+static inline int faascale_task_domain_lock_is_held(struct task_struct *task)
+{
+	return 0;
+}
+static inline bool faascale_ckernel_memory_enabled(void)
+{
+	return false;
+}
+static inline bool faascale_ckernel_task_domain_enabled(void)
+{
+	return false;
+}
+static inline void faascale_ckernel_set_features_enabled(bool memory,
+							 bool task_domain)
+{
+}
+#endif
+
+struct faascale_memcg_alloc_scope {
+	struct mem_cgroup *memcg;
+	struct mem_cgroup *old_memcg;
+	bool active;
+};
+
+#ifdef CONFIG_FAASCALE_MEMORY
+#define FAASCALE_MEMORY_MIN_BLOCK_SIZE (_AC(1, UL) << FAASCALE_MEMORY_MIN_BLOCK_SHIFT)
+#define FAASCALE_MEMORY_MIN_BLOCK_PAGES (_AC(1, UL) << (FAASCALE_MEMORY_MIN_BLOCK_SHIFT - PAGE_SHIFT))
+#define FAASCALE_MEMORY_MAX_BLOCK_SIZE (_AC(1, UL) << FAASCALE_MEMORY_MAX_BLOCK_SHIFT)
+#define FAASCALE_MEMORY_MAX_BLOCK_PAGES (_AC(1, UL) << (FAASCALE_MEMORY_MAX_BLOCK_SHIFT - PAGE_SHIFT))
+#define FAASCALE_MEMORY_MIN_REGION_SIZE (_AC(1, UL) << FAASCALE_MEMORY_MIN_REGION_SHIFT)
+#define FAASCALE_MEMORY_MAX_REGION_SIZE (_AC(1, UL) << FAASCALE_MEMORY_MAX_REGION_SHIFT)
+
+int memory_faascale_free(struct mem_cgroup *memcg);
+#endif
 
 /* Cgroup-specific page state, on top of universal node page state */
 enum memcg_stat_item {
@@ -412,7 +487,7 @@ struct mem_cgroup {
 	struct dynamic_pool *dpool;
 #endif
 
-	KABI_RESERVE(1)
+	KABI_USE(1, struct faascale_memcg_state *faascale)
 	KABI_RESERVE(2)
 	KABI_RESERVE(3)
 	KABI_RESERVE(4)
@@ -468,8 +543,10 @@ enum page_memcg_data_flags {
 	MEMCG_DATA_OBJCGS = (1UL << 0),
 	/* page has been accounted as a non-slab kernel page */
 	MEMCG_DATA_KMEM = (1UL << 1),
+	/* page is returning to a faascale region after memcg uncharge */
+	MEMCG_DATA_FAASCALE = (1UL << 2),
 	/* the next bit after the last actual flag */
-	__NR_MEMCG_DATA_FLAGS  = (1UL << 2),
+	__NR_MEMCG_DATA_FLAGS  = (1UL << 3),
 };
 
 #define MEMCG_DATA_FLAGS_MASK (__NR_MEMCG_DATA_FLAGS - 1)
@@ -505,6 +582,8 @@ static inline struct mem_cgroup *__folio_memcg(struct folio *folio)
 	VM_BUG_ON_FOLIO(folio_test_slab(folio), folio);
 	VM_BUG_ON_FOLIO(memcg_data & MEMCG_DATA_OBJCGS, folio);
 	VM_BUG_ON_FOLIO(memcg_data & MEMCG_DATA_KMEM, folio);
+	if (memcg_data & MEMCG_DATA_FAASCALE)
+		return NULL;
 
 	return (struct mem_cgroup *)(memcg_data & ~MEMCG_DATA_FLAGS_MASK);
 }
@@ -563,6 +642,23 @@ static inline struct mem_cgroup *page_memcg(struct page *page)
 	return folio_memcg(page_folio(page));
 }
 
+static inline struct faascale_mem_region *folio_faascale_region(struct folio *folio)
+{
+	unsigned long memcg_data = READ_ONCE(folio->memcg_data);
+
+	if (!(memcg_data & MEMCG_DATA_FAASCALE))
+		return NULL;
+
+	return (struct faascale_mem_region *)(memcg_data & ~MEMCG_DATA_FLAGS_MASK);
+}
+
+static inline struct faascale_mem_region *page_faascale_region(struct page *page)
+{
+	if (PageTail(page))
+		return NULL;
+	return folio_faascale_region((struct folio *)page);
+}
+
 /**
  * folio_memcg_rcu - Locklessly get the memory cgroup associated with a folio.
  * @folio: Pointer to the folio.
@@ -587,6 +683,9 @@ static inline struct mem_cgroup *folio_memcg_rcu(struct folio *folio)
 		objcg = (void *)(memcg_data & ~MEMCG_DATA_FLAGS_MASK);
 		return obj_cgroup_memcg(objcg);
 	}
+
+	if (memcg_data & MEMCG_DATA_FAASCALE)
+		return NULL;
 
 	return (struct mem_cgroup *)(memcg_data & ~MEMCG_DATA_FLAGS_MASK);
 }
@@ -622,6 +721,9 @@ static inline struct mem_cgroup *folio_memcg_check(struct folio *folio)
 	unsigned long memcg_data = READ_ONCE(folio->memcg_data);
 
 	if (memcg_data & MEMCG_DATA_OBJCGS)
+		return NULL;
+
+	if (memcg_data & MEMCG_DATA_FAASCALE)
 		return NULL;
 
 	if (memcg_data & MEMCG_DATA_KMEM) {
@@ -896,6 +998,28 @@ struct mem_cgroup *mem_cgroup_from_task(struct task_struct *p);
 struct mem_cgroup *get_mem_cgroup_from_mm(struct mm_struct *mm);
 
 struct mem_cgroup *get_mem_cgroup_from_current(void);
+
+#ifdef CONFIG_FAASCALE_MEMORY
+bool faascale_enter_memcg_alloc_scope(struct mm_struct *mm, gfp_t *gfp_mask,
+				      struct faascale_memcg_alloc_scope *scope);
+void faascale_leave_memcg_alloc_scope(struct faascale_memcg_alloc_scope *scope);
+#else
+static inline bool faascale_enter_memcg_alloc_scope(struct mm_struct *mm,
+						    gfp_t *gfp_mask,
+						    struct faascale_memcg_alloc_scope *scope)
+{
+	if (scope) {
+		scope->memcg = NULL;
+		scope->old_memcg = NULL;
+		scope->active = false;
+	}
+	return false;
+}
+
+static inline void faascale_leave_memcg_alloc_scope(struct faascale_memcg_alloc_scope *scope)
+{
+}
+#endif
 
 struct lruvec *folio_lruvec_lock(struct folio *folio);
 struct lruvec *folio_lruvec_lock_irq(struct folio *folio);
@@ -1473,6 +1597,22 @@ static inline struct mem_cgroup *get_mem_cgroup_from_mm(struct mm_struct *mm)
 static inline struct mem_cgroup *get_mem_cgroup_from_current(void)
 {
 	return NULL;
+}
+
+static inline bool faascale_enter_memcg_alloc_scope(struct mm_struct *mm,
+						    gfp_t *gfp_mask,
+						    struct faascale_memcg_alloc_scope *scope)
+{
+	if (scope) {
+		scope->memcg = NULL;
+		scope->old_memcg = NULL;
+		scope->active = false;
+	}
+	return false;
+}
+
+static inline void faascale_leave_memcg_alloc_scope(struct faascale_memcg_alloc_scope *scope)
+{
 }
 
 static inline

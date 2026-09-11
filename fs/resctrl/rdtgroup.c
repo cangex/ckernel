@@ -111,6 +111,20 @@ void rdt_staged_configs_clear(void)
 	}
 }
 
+struct kernfs_node *get_default_rdtgroup_kn(void)
+{
+	struct kernfs_node *kn;
+
+	mutex_lock(&rdtgroup_mutex);
+	kn = rdtgroup_default.kn;
+	if (kn)
+		kernfs_get(kn);
+	mutex_unlock(&rdtgroup_mutex);
+
+	return kn;
+}
+EXPORT_SYMBOL(get_default_rdtgroup_kn);
+
 static bool resctrl_is_mbm_enabled(void)
 {
 	return (resctrl_arch_is_mbm_total_enabled() ||
@@ -669,6 +683,16 @@ static int __rdtgroup_move_task(struct task_struct *tsk,
 	return 0;
 }
 
+void ck_rdtgroup_move_task(struct task_struct *tsk,
+        struct kernfs_node *kn)
+{
+    struct rdtgroup *rdtgrp = rdtgroup_kn_lock_live(kn);
+    if (rdtgrp)
+        __rdtgroup_move_task(tsk, rdtgrp);
+    rdtgroup_kn_unlock(kn);
+}
+EXPORT_SYMBOL(ck_rdtgroup_move_task);
+
 static bool is_closid_match(struct task_struct *t, struct rdtgroup *r)
 {
 	return (resctrl_arch_alloc_capable() && (r->type == RDTCTRL_GROUP) &&
@@ -960,6 +984,29 @@ static void show_rdt_tasks(struct rdtgroup *r, struct seq_file *s)
 
 	show_rdt_iommu(r, s);
 }
+
+void ck_rdtgroup_show_tasks(struct kernfs_node *group_kn, int *pid_num, int *pid_list)
+{
+	struct rdtgroup *r;
+	struct task_struct *p, *t;
+	pid_t pid;
+	*pid_num = 0;
+
+	r = rdtgroup_kn_lock_live(group_kn);
+
+	rcu_read_lock();
+	for_each_process_thread(p, t) {
+		if (is_closid_match(t, r) || is_rmid_match(t, r)) {
+			pid = task_pid_vnr(t);
+			if (pid)
+				pid_list[(*pid_num)++] = pid;
+		}
+	}
+	rcu_read_unlock();
+
+	rdtgroup_kn_unlock(group_kn);
+}
+EXPORT_SYMBOL(ck_rdtgroup_show_tasks);
 
 static int rdtgroup_tasks_show(struct kernfs_open_file *of,
 			       struct seq_file *s, void *v)
@@ -3548,6 +3595,81 @@ out_unlock:
 	return ret;
 }
 
+int ck_rdtgroup_mkdir(const char *name, struct kernfs_node **target)
+{
+	struct rdtgroup *rdtgrp;
+	struct kernfs_node *kn;
+	u32 closid;
+	int ret;
+
+	struct kernfs_node *parent_kn;
+	umode_t mode;
+
+	if (!name || !target || !rdtgroup_default.kn)
+		return -EINVAL;
+
+	*target = NULL;
+	parent_kn = rdtgroup_default.kn;
+	mode = rdtgroup_default.kn->mode;
+
+	ret = mkdir_rdt_prepare(parent_kn, name, mode, RDTCTRL_GROUP, &rdtgrp);
+	if (ret)
+		return ret;
+
+	kn = rdtgrp->kn;
+	ret = closid_alloc();
+	if (ret < 0) {
+		rdt_last_cmd_puts("Out of CLOSIDs\n");
+		goto out_common_fail;
+	}
+	closid = ret;
+	ret = 0;
+
+	rdtgrp->closid = closid;
+
+	ret = mkdir_rdt_prepare_rmid_alloc(rdtgrp);
+	if (ret)
+		goto out_closid_free;
+
+	kernfs_activate(rdtgrp->kn);
+
+	ret = rdtgroup_init_alloc(rdtgrp);
+	if (ret < 0)
+		goto out_rmid_free;
+
+	list_add(&rdtgrp->rdtgroup_list, &rdt_all_groups);
+
+	if (resctrl_arch_mon_capable()) {
+		/*
+		 * Create an empty mon_groups directory to hold the subset
+		 * of tasks and cpus to monitor.
+		 */
+		ret = mongroup_create_dir(kn, rdtgrp, "mon_groups", NULL);
+		if (ret) {
+			rdt_last_cmd_puts("kernfs subdir error\n");
+			goto out_del_list;
+		}
+	}
+
+	if (kn)
+		*target = kn;
+
+	goto out_unlock;
+
+out_del_list:
+	list_del(&rdtgrp->rdtgroup_list);
+out_rmid_free:
+	mkdir_rdt_prepare_rmid_free(rdtgrp);
+out_closid_free:
+	closid_free(closid);
+out_common_fail:
+	mkdir_rdt_prepare_clean(rdtgrp);
+out_unlock:
+	rdtgroup_kn_unlock(parent_kn);
+	return ret;
+}
+EXPORT_SYMBOL(ck_rdtgroup_mkdir);
+
 /*
  * These are rdtgroups created under the root directory. Can be used
  * to allocate and monitor resources.
@@ -3742,7 +3864,7 @@ static int rdtgroup_rmdir_ctrl(struct rdtgroup *rdtgrp, cpumask_var_t tmpmask)
 	return 0;
 }
 
-static int rdtgroup_rmdir(struct kernfs_node *kn)
+int rdtgroup_rmdir(struct kernfs_node *kn)
 {
 	struct kernfs_node *parent_kn = kn->parent;
 	struct rdtgroup *rdtgrp;
@@ -3785,6 +3907,7 @@ out:
 	free_cpumask_var(tmpmask);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(rdtgroup_rmdir);
 
 /**
  * mongrp_reparent() - replace parent CTRL_MON group of a MON group
@@ -4224,3 +4347,38 @@ void resctrl_exit(void)
 
 	resctrl_mon_resource_exit();
 }
+
+static void ck_show_rdt_tasks(struct rdtgroup *r, int  *task_list, int *task_num)
+{
+	struct task_struct *p, *t;
+	pid_t pid;
+
+	rcu_read_lock();
+	for_each_process_thread(p, t) {
+		if (is_closid_match(t, r) || is_rmid_match(t, r)) {
+			pid = task_pid_vnr(t);
+			if (pid)
+				task_list[*(task_num)++] = pid;
+			if (*task_num > 10)
+				break;
+		}
+	}
+	rcu_read_unlock();
+
+}
+
+int ck_rdtgroup_tasks_show(struct kernfs_node *group_kn, int *task_list, int *task_num)
+{
+	struct rdtgroup *rdtgrp;
+	int ret = 0;
+
+	rdtgrp = rdtgroup_kn_lock_live(group_kn);
+	if (rdtgrp)
+		ck_show_rdt_tasks(rdtgrp, task_list, task_num);
+	else
+		ret = -ENOENT;
+	rdtgroup_kn_unlock(group_kn);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(ck_rdtgroup_tasks_show);

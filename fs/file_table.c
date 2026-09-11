@@ -21,6 +21,7 @@
 #include <linux/mount.h>
 #include <linux/capability.h>
 #include <linux/cdev.h>
+#include <linux/ckernel.h>
 #include <linux/fsnotify.h>
 #include <linux/sysctl.h>
 #include <linux/percpu_counter.h>
@@ -389,10 +390,19 @@ static void __fput(struct file *file)
 	fops_put(file->f_op);
 	put_pid(file->f_owner.pid);
 	put_file_access(file);
-	dput(dentry);
-	if (unlikely(mode & FMODE_NEED_UNMOUNT))
-		dissolve_on_fput(mnt);
-	mntput(mnt);
+	if (unlikely(file->f_ck_vfs_ref)) {
+		struct ck_vfs_ref *ref = file->f_ck_vfs_ref;
+
+		if (unlikely(mode & FMODE_NEED_UNMOUNT))
+			dissolve_on_fput(mnt);
+		file->f_ck_vfs_ref = NULL;
+		ref->put(ref);
+	} else {
+		dput(dentry);
+		if (unlikely(mode & FMODE_NEED_UNMOUNT))
+			dissolve_on_fput(mnt);
+		mntput(mnt);
+	}
 out:
 	file_free(file);
 }

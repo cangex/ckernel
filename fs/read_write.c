@@ -18,6 +18,7 @@
 #include <linux/pagemap.h>
 #include <linux/splice.h>
 #include <linux/compat.h>
+#include <linux/ckernel.h>
 #include <linux/mount.h>
 #include <linux/fs.h>
 #include "internal.h"
@@ -35,6 +36,17 @@ const struct file_operations generic_ro_fops = {
 };
 
 EXPORT_SYMBOL(generic_ro_fops);
+
+static struct file *ckernel_vfs_read_object(struct file *source)
+{
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+
+	if (!ck || !READ_ONCE(ck->vfs_cache_enabled) ||
+	    !READ_ONCE(ck->ck_vfs_cache_get))
+		return NULL;
+
+	return ck->ck_vfs_cache_get(ck, source);
+}
 
 static inline bool unsigned_offsets(struct file *file)
 {
@@ -451,6 +463,7 @@ EXPORT_SYMBOL(kernel_read);
 
 ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 {
+	struct file *read_file;
 	ssize_t ret;
 
 	if (!(file->f_mode & FMODE_READ))
@@ -466,10 +479,14 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 	if (count > MAX_RW_COUNT)
 		count =  MAX_RW_COUNT;
 
-	if (file->f_op->read)
-		ret = file->f_op->read(file, buf, count, pos);
-	else if (file->f_op->read_iter)
-		ret = new_sync_read(file, buf, count, pos);
+	read_file = ckernel_vfs_read_object(file);
+	if (!read_file)
+		read_file = file;
+
+	if (read_file->f_op->read)
+		ret = read_file->f_op->read(read_file, buf, count, pos);
+	else if (read_file->f_op->read_iter)
+		ret = new_sync_read(read_file, buf, count, pos);
 	else
 		ret = -EINVAL;
 	if (ret > 0) {
@@ -806,6 +823,7 @@ EXPORT_SYMBOL(vfs_iocb_iter_read);
 ssize_t vfs_iter_read(struct file *file, struct iov_iter *iter, loff_t *ppos,
 		      rwf_t flags)
 {
+	struct file *read_file;
 	size_t tot_len;
 	ssize_t ret = 0;
 
@@ -823,7 +841,10 @@ ssize_t vfs_iter_read(struct file *file, struct iov_iter *iter, loff_t *ppos,
 	if (ret < 0)
 		return ret;
 
-	ret = do_iter_readv_writev(file, iter, ppos, READ, flags);
+	read_file = ckernel_vfs_read_object(file);
+	if (!read_file)
+		read_file = file;
+	ret = do_iter_readv_writev(read_file, iter, ppos, READ, flags);
 out:
 	if (ret >= 0)
 		fsnotify_access(file);
@@ -900,6 +921,7 @@ EXPORT_SYMBOL(vfs_iter_write);
 static ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
 			 unsigned long vlen, loff_t *pos, rwf_t flags)
 {
+	struct file *read_file;
 	struct iovec iovstack[UIO_FASTIOV];
 	struct iovec *iov = iovstack;
 	struct iov_iter iter;
@@ -924,10 +946,13 @@ static ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
 	if (ret < 0)
 		goto out;
 
-	if (file->f_op->read_iter)
-		ret = do_iter_readv_writev(file, &iter, pos, READ, flags);
+	read_file = ckernel_vfs_read_object(file);
+	if (!read_file)
+		read_file = file;
+	if (read_file->f_op->read_iter)
+		ret = do_iter_readv_writev(read_file, &iter, pos, READ, flags);
 	else
-		ret = do_loop_readv_writev(file, &iter, pos, READ, flags);
+		ret = do_loop_readv_writev(read_file, &iter, pos, READ, flags);
 out:
 	if (ret >= 0)
 		fsnotify_access(file);
@@ -1219,6 +1244,7 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		  	   size_t count, loff_t max)
 {
 	struct fd in, out;
+	struct file *read_file = NULL;
 	struct inode *in_inode, *out_inode;
 	struct pipe_inode_info *opipe;
 	loff_t pos;
@@ -1284,19 +1310,23 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		fl = SPLICE_F_NONBLOCK;
 #endif
 	opipe = get_pipe_info(out.file, true);
+	read_file = ckernel_vfs_read_object(in.file);
+	if (!read_file)
+		read_file = in.file;
 	if (!opipe) {
 		retval = rw_verify_area(WRITE, out.file, &out_pos, count);
 		if (retval < 0)
-			goto fput_out;
-		retval = do_splice_direct(in.file, &pos, out.file, &out_pos,
+			goto fput_read;
+		retval = do_splice_direct(read_file, &pos, out.file, &out_pos,
 					  count, fl);
 	} else {
 		if (out.file->f_flags & O_NONBLOCK)
 			fl |= SPLICE_F_NONBLOCK;
 
-		retval = splice_file_to_pipe(in.file, opipe, &pos, count, fl);
+		retval = splice_file_to_pipe(read_file, opipe, &pos, count, fl);
 	}
 
+fput_read:
 	if (retval > 0) {
 		add_rchar(current, retval);
 		add_wchar(current, retval);

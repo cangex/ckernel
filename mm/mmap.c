@@ -16,6 +16,8 @@
 #include <linux/mm_inline.h>
 #include <linux/shm.h>
 #include <linux/mman.h>
+#include <linux/ckernel.h>
+#include <linux/memcontrol.h>
 #include <linux/pagemap.h>
 #include <linux/swap.h>
 #include <linux/syscalls.h>
@@ -215,6 +217,110 @@ static int check_brk_limits(unsigned long addr, unsigned long len)
 	return mlock_future_ok(current->mm, current->mm->def_flags, len)
 		? 0 : -EAGAIN;
 }
+
+int vma_shrink(struct vma_iterator *vmi, struct vm_area_struct *vma,
+	       unsigned long start, unsigned long end, pgoff_t pgoff);
+
+#ifdef CONFIG_FAASCALE_MEMORY
+static bool faascale_brk_range_has_mapping(struct mm_struct *mm,
+					   unsigned long start,
+					   unsigned long end)
+{
+	unsigned long addr;
+
+	for (addr = start; addr < end; addr += PAGE_SIZE) {
+		spinlock_t *ptl;
+		pgd_t *pgd;
+		p4d_t *p4d;
+		pud_t *pud;
+		pmd_t *pmd;
+		pte_t *pte;
+		bool mapped;
+
+		pgd = pgd_offset(mm, addr);
+		if (pgd_none(*pgd))
+			continue;
+		if (pgd_bad(*pgd))
+			return true;
+
+		p4d = p4d_offset(pgd, addr);
+		if (p4d_none(*p4d))
+			continue;
+		if (p4d_bad(*p4d))
+			return true;
+
+		pud = pud_offset(p4d, addr);
+		if (pud_none(*pud))
+			continue;
+		if (pud_bad(*pud))
+			return true;
+
+		pmd = pmd_offset(pud, addr);
+		if (pmd_none(*pmd))
+			continue;
+		if (pmd_trans_huge(*pmd) || pmd_devmap(*pmd) ||
+		    pmd_bad(*pmd))
+			return true;
+
+		pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
+		if (!pte)
+			return true;
+		mapped = !pte_none(*pte);
+		pte_unmap_unlock(pte, ptl);
+		if (mapped)
+			return true;
+	}
+
+	return false;
+}
+
+static bool faascale_brk_tail_shrink_fastpath(struct vma_iterator *vmi,
+					      struct vm_area_struct *vma,
+					      unsigned long newbrk,
+					      unsigned long oldbrk)
+{
+	const vm_flags_t disallowed = VM_LOCKED | VM_HUGETLB | VM_PFNMAP |
+				      VM_MIXEDMAP | VM_IO | VM_DONTEXPAND |
+				      VM_UFFD_MISSING | VM_UFFD_WP |
+				      VM_SHARED;
+	unsigned long nr_pages = (oldbrk - newbrk) >> PAGE_SHIFT;
+	struct mm_struct *mm;
+
+	if (!READ_ONCE(current->ckernel))
+		return false;
+	if (!vma || oldbrk <= newbrk || oldbrk - newbrk != PAGE_SIZE)
+		return false;
+	if (vma->vm_end != oldbrk || vma->vm_start >= newbrk)
+		return false;
+	if (vma->vm_file || vma->vm_ops || vma_policy(vma))
+		return false;
+	if (vma->vm_flags & disallowed)
+		return false;
+
+	mm = vma->vm_mm;
+	if (faascale_brk_range_has_mapping(mm, newbrk, oldbrk))
+		return false;
+
+	update_hiwater_vm(mm);
+	arch_unmap(mm, newbrk, oldbrk);
+	if (vma_shrink(vmi, vma, vma->vm_start, newbrk, vma->vm_pgoff))
+		return false;
+
+	vm_stat_account(mm, vma->vm_flags, -nr_pages);
+	if (vma->vm_flags & VM_ACCOUNT)
+		vm_unacct_memory(nr_pages);
+	return true;
+}
+#else
+static inline bool faascale_brk_tail_shrink_fastpath(struct vma_iterator *vmi,
+						     struct vm_area_struct *vma,
+						     unsigned long newbrk,
+						     unsigned long oldbrk)
+{
+	return false;
+}
+#endif
+
 static int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *brkvma,
 		unsigned long addr, unsigned long request, unsigned long flags);
 SYSCALL_DEFINE1(brk, unsigned long, brk)
@@ -272,6 +378,13 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 		brkvma = vma_find(&vmi, oldbrk);
 		if (!brkvma || brkvma->vm_start >= oldbrk)
 			goto out; /* mapping intersects with an existing non-brk vma. */
+
+		if (faascale_brk_tail_shrink_fastpath(&vmi, brkvma, newbrk,
+						      oldbrk)) {
+			mm->brk = brk;
+			goto success;
+		}
+
 		/*
 		 * mm->brk must be protected by write mmap_lock.
 		 * do_vma_munmap() will drop the lock on success,  so update it
@@ -2427,6 +2540,120 @@ static void unmap_region(struct mm_struct *mm, struct ma_state *mas,
 	tlb_finish_mmu(&tlb);
 }
 
+#ifdef CONFIG_FAASCALE_MEMORY
+static bool faascale_munmap_range_has_page_tables(struct mm_struct *mm,
+						  unsigned long start,
+						  unsigned long end)
+{
+	unsigned long addr = start;
+
+	while (addr < end) {
+		unsigned long next;
+		pgd_t *pgd;
+		p4d_t *p4d;
+		pud_t *pud;
+		pmd_t *pmd;
+
+		pgd = pgd_offset(mm, addr);
+		next = pgd_addr_end(addr, end);
+		if (pgd_none(*pgd)) {
+			addr = next;
+			continue;
+		}
+		if (pgd_bad(*pgd))
+			return true;
+
+		p4d = p4d_offset(pgd, addr);
+		next = p4d_addr_end(addr, end);
+		if (p4d_none(*p4d)) {
+			addr = next;
+			continue;
+		}
+		if (p4d_bad(*p4d))
+			return true;
+
+		pud = pud_offset(p4d, addr);
+		next = pud_addr_end(addr, end);
+		if (pud_none(*pud)) {
+			addr = next;
+			continue;
+		}
+		if (pud_bad(*pud))
+			return true;
+
+		pmd = pmd_offset(pud, addr);
+		next = pmd_addr_end(addr, end);
+		if (pmd_none(*pmd)) {
+			addr = next;
+			continue;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+static bool faascale_munmap_no_pte_full_vma(struct vma_iterator *vmi,
+					    struct vm_area_struct *vma,
+					    struct mm_struct *mm,
+					    unsigned long start,
+					    unsigned long end,
+					    struct list_head *uf, bool unlock)
+{
+	const vm_flags_t disallowed = VM_LOCKED | VM_HUGETLB | VM_PFNMAP |
+				      VM_MIXEDMAP | VM_IO | VM_DONTEXPAND |
+				      VM_UFFD_MISSING | VM_UFFD_WP |
+				      VM_SHARED;
+	unsigned long nr_pages;
+	int error;
+
+	if (uf)
+		return false;
+	if (!faascale_ckernel_memory_enabled())
+		return false;
+	if (!vma || vma->vm_start != start || vma->vm_end != end)
+		return false;
+	if (vma->vm_file || vma->vm_ops || vma_policy(vma) || vma->anon_vma)
+		return false;
+	if (vma->vm_flags & disallowed)
+		return false;
+	if (faascale_munmap_range_has_page_tables(mm, start, end))
+		return false;
+
+	nr_pages = vma_pages(vma);
+	vma_start_write(vma);
+	vma_mark_detached(vma, true);
+	error = vma_iter_clear_gfp(vmi, start, end, GFP_KERNEL);
+	if (error) {
+		vma_mark_detached(vma, false);
+		return false;
+	}
+
+	update_hiwater_vm(mm);
+	mm->map_count--;
+	vm_stat_account(mm, vma->vm_flags, -nr_pages);
+	if (vma->vm_flags & VM_ACCOUNT)
+		vm_unacct_memory(nr_pages);
+	remove_vma(vma, false);
+	validate_mm(mm);
+	if (unlock)
+		mmap_write_unlock(mm);
+	return true;
+}
+#else
+static inline bool faascale_munmap_no_pte_full_vma(struct vma_iterator *vmi,
+						   struct vm_area_struct *vma,
+						   struct mm_struct *mm,
+						   unsigned long start,
+						   unsigned long end,
+						   struct list_head *uf,
+						   bool unlock)
+{
+	return false;
+}
+#endif
+
 /*
  * __split_vma() bypasses sysctl_max_map_count checking.  We use this where it
  * has already been checked or doesn't make sense to fail.
@@ -2728,6 +2955,9 @@ int do_vmi_munmap(struct vma_iterator *vmi, struct mm_struct *mm,
 			mmap_write_unlock(mm);
 		return 0;
 	}
+
+	if (faascale_munmap_no_pte_full_vma(vmi, vma, mm, start, end, uf, unlock))
+		return 0;
 
 	return do_vmi_align_munmap(vmi, vma, mm, start, end, uf, unlock);
 }

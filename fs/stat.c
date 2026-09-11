@@ -19,6 +19,7 @@
 #include <linux/pagemap.h>
 #include <linux/compat.h>
 #include <linux/iversion.h>
+#include <linux/ckernel.h>
 
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
@@ -230,20 +231,37 @@ int getname_statx_lookup_flags(int flags)
  * 0 will be returned on success, and a -ve error code if unsuccessful.
  */
 static int vfs_statx(int dfd, struct filename *filename, int flags,
-	      struct kstat *stat, u32 request_mask)
+		      struct kstat *stat, u32 request_mask)
 {
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+	ck_vfs_ref_lookup_fn lookup = NULL;
+	struct ck_vfs_ref *ref = NULL;
 	struct path path;
 	unsigned int lookup_flags = getname_statx_lookup_flags(flags);
+	bool borrowed = false;
 	int error;
 
 	if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH |
 		      AT_STATX_SYNC_TYPE))
 		return -EINVAL;
+	if (ck && READ_ONCE(ck->vfs_ref_enabled))
+		lookup = READ_ONCE(ck->ck_vfs_ref_lookup);
 
 retry:
-	error = filename_lookup(dfd, filename, lookup_flags, &path, NULL);
-	if (error)
-		goto out;
+	ref = NULL;
+	borrowed = false;
+	if (lookup && !(lookup_flags & LOOKUP_REVAL) &&
+	    !(flags & AT_EMPTY_PATH) &&
+	    filename->name && filename->name[0] == '/') {
+		ref = lookup(ck, filename->name, CK_VFS_REF_STAT, &path);
+		if (ref)
+			borrowed = true;
+	}
+	if (!borrowed) {
+		error = filename_lookup(dfd, filename, lookup_flags, &path, NULL);
+		if (error)
+			goto out;
+	}
 
 	error = vfs_getattr(&path, stat, request_mask, flags);
 
@@ -262,7 +280,14 @@ retry:
 			bdev_statx_dioalign(inode, stat);
 	}
 
-	path_put(&path);
+	if (!borrowed && !error && ck && READ_ONCE(ck->vfs_ref_enabled) &&
+	    READ_ONCE(ck->ck_vfs_ref_learn) &&
+	    filename->name && filename->name[0] == '/')
+		ck->ck_vfs_ref_learn(ck, filename->name, &path);
+	if (borrowed)
+		ref->put(ref);
+	else
+		path_put(&path);
 	if (retry_estale(error, lookup_flags)) {
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;

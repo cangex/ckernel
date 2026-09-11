@@ -97,6 +97,7 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <net/net_namespace.h>
@@ -112,6 +113,7 @@
 #include <linux/mount.h>
 #include <net/checksum.h>
 #include <linux/security.h>
+#include <linux/ckernel.h>
 #include <linux/splice.h>
 #include <linux/freezer.h>
 #include <linux/file.h>
@@ -1203,6 +1205,7 @@ static int unix_bind_bsd(struct sock *sk, struct sockaddr_un *sunaddr,
 	struct mnt_idmap *idmap;
 	struct unix_address *addr;
 	struct dentry *dentry;
+	struct ckernel *ck;
 	struct path parent;
 	int err;
 
@@ -1225,7 +1228,15 @@ static int unix_bind_bsd(struct sock *sk, struct sockaddr_un *sunaddr,
 	 * All right, let's create it.
 	 */
 	idmap = mnt_idmap(parent.mnt);
-	err = security_path_mknod(&parent, dentry, mode, 0);
+	ck = READ_ONCE(current->ckernel);
+	if (ck && READ_ONCE(ck->fast_check) &&
+	    READ_ONCE(ck->socket_lsm_fast) &&
+	    ck->ck_net_fast_allow &&
+	    ck->ck_net_fast_allow(ck, AF_UNIX, sk->sk_type & SOCK_TYPE_MASK) &&
+	    ck->ck_check_path && ck->ck_check_path(ck, &parent))
+		err = 0;
+	else
+		err = security_path_mknod(&parent, dentry, mode, 0);
 	if (!err)
 		err = vfs_mknod(idmap, d_inode(parent.dentry), dentry, mode, 0);
 	if (err)
@@ -1825,6 +1836,101 @@ static bool unix_passcred_enabled(const struct socket *sock,
 	       test_bit(SOCK_PASSPIDFD, &other->sk_socket->flags);
 }
 
+static bool unix_ckernel_stream_plain_msg_fast(struct socket *sock,
+					       struct msghdr *msg)
+{
+	struct ckernel *ck;
+	int type;
+
+	if (!sock || !sock->sk || !msg)
+		return false;
+	if (msg->msg_controllen > 0 || msg->msg_namelen)
+		return false;
+	if (msg->msg_flags & (MSG_OOB | MSG_SPLICE_PAGES))
+		return false;
+	if (test_bit(SOCK_PASSCRED, &sock->flags) ||
+	    test_bit(SOCK_PASSPIDFD, &sock->flags) ||
+	    test_bit(SOCK_PASSSEC, &sock->flags))
+		return false;
+
+	ck = READ_ONCE(current->ckernel);
+	if (!ck || !READ_ONCE(ck->fast_check) ||
+	    !READ_ONCE(ck->socket_lsm_fast))
+		return false;
+
+	type = sock->sk->sk_type & SOCK_TYPE_MASK;
+	if (!ck->ck_net_fast_allow ||
+	    !ck->ck_net_fast_allow(ck, AF_UNIX, type))
+		return false;
+
+	return true;
+}
+
+static bool unix_ckernel_stream_plain_peer_fast(const struct socket *sock,
+						const struct sock *other)
+{
+	if (!other || !other->sk_socket)
+		return false;
+	if (unix_passcred_enabled(sock, other))
+		return false;
+	if (test_bit(SOCK_PASSSEC, &other->sk_socket->flags))
+		return false;
+
+	return true;
+}
+
+static void unix_ckernel_scm_init_empty(struct scm_cookie *scm)
+{
+	memset(scm, 0, sizeof(*scm));
+	scm->creds.uid = INVALID_UID;
+	scm->creds.gid = INVALID_GID;
+}
+
+static void unix_ckernel_skb_init_plain(struct sk_buff *skb)
+{
+	memset(&UNIXCB(skb), 0, sizeof(UNIXCB(skb)));
+}
+
+static bool unix_ckernel_stream_skip_data_ready(const struct sock *sk,
+						bool queue_was_empty)
+{
+	if (queue_was_empty)
+		return false;
+	if (READ_ONCE(sk->sk_rcvlowat) > 1)
+		return false;
+	if (sock_flag(sk, SOCK_FASYNC))
+		return false;
+
+	return true;
+}
+
+static bool unix_ckernel_stream_recv_scm_skip(struct socket *sock,
+					      struct msghdr *msg, int flags,
+					      struct scm_cookie *scm)
+{
+	if (!unix_ckernel_stream_plain_msg_fast(sock, msg))
+		return false;
+	if (flags)
+		return false;
+	if (msg->msg_control || msg->msg_name || scm->fp ||
+	    scm_has_secdata(sock))
+		return false;
+
+	return true;
+}
+
+static bool unix_ckernel_skb_plain_fast(const struct sk_buff *skb)
+{
+	if (UNIXCB(skb).pid || UNIXCB(skb).fp || UNIXCB(skb).consumed)
+		return false;
+#ifdef CONFIG_SECURITY_NETWORK
+	if (UNIXCB(skb).secid)
+		return false;
+#endif
+
+	return true;
+}
+
 /*
  * Some apps rely on write() giving SCM_CREDENTIALS
  * We include credentials if source or destination socket
@@ -2155,12 +2261,18 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 	int sent = 0;
 	struct scm_cookie scm;
 	bool fds_sent = false;
+	bool plain_fast = false;
 	int data_len;
 
-	wait_for_unix_gc();
-	err = scm_send(sock, msg, &scm, false);
-	if (err < 0)
-		return err;
+	plain_fast = unix_ckernel_stream_plain_msg_fast(sock, msg);
+	if (plain_fast) {
+		unix_ckernel_scm_init_empty(&scm);
+	} else {
+		wait_for_unix_gc();
+		err = scm_send(sock, msg, &scm, false);
+		if (err < 0)
+			return err;
+	}
 
 	err = -EOPNOTSUPP;
 	if (msg->msg_flags & MSG_OOB) {
@@ -2182,10 +2294,20 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 			goto out_err;
 	}
 
+	if (plain_fast && !unix_ckernel_stream_plain_peer_fast(sock, other)) {
+		wait_for_unix_gc();
+		err = scm_send(sock, msg, &scm, false);
+		if (err < 0)
+			goto out_err;
+		plain_fast = false;
+	}
+
 	if (READ_ONCE(sk->sk_shutdown) & SEND_SHUTDOWN)
 		goto pipe_err;
 
 	while (sent < len) {
+		bool queue_was_empty = false;
+
 		size = len - sent;
 
 		if (unlikely(msg->msg_flags & MSG_SPLICE_PAGES)) {
@@ -2203,18 +2325,30 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 
 			data_len = min_t(size_t, size, PAGE_ALIGN(data_len));
 
-			skb = sock_alloc_send_pskb(sk, size - data_len, data_len,
-						   msg->msg_flags & MSG_DONTWAIT, &err,
-						   get_order(UNIX_SKB_FRAGS_SZ));
+			if (plain_fast && likely(!data_len)) {
+				skb = sock_alloc_send_skb(sk, size,
+							  msg->msg_flags & MSG_DONTWAIT,
+							  &err);
+			} else {
+				skb = sock_alloc_send_pskb(sk, size - data_len,
+							   data_len,
+							   msg->msg_flags & MSG_DONTWAIT,
+							   &err,
+							   get_order(UNIX_SKB_FRAGS_SZ));
+			}
 		}
 		if (!skb)
 			goto out_err;
 
-		/* Only send the fds in the first buffer */
-		err = unix_scm_to_skb(&scm, skb, !fds_sent);
-		if (err < 0) {
-			kfree_skb(skb);
-			goto out_err;
+		if (plain_fast) {
+			unix_ckernel_skb_init_plain(skb);
+		} else {
+			/* Only send the fds in the first buffer */
+			err = unix_scm_to_skb(&scm, skb, !fds_sent);
+			if (err < 0) {
+				kfree_skb(skb);
+				goto out_err;
+			}
 		}
 		fds_sent = true;
 
@@ -2245,11 +2379,19 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 		    (other->sk_shutdown & RCV_SHUTDOWN))
 			goto pipe_err_free;
 
-		maybe_add_creds(skb, sock, other);
-		scm_stat_add(other, skb);
-		skb_queue_tail(&other->sk_receive_queue, skb);
+		if (!plain_fast) {
+			maybe_add_creds(skb, sock, other);
+			scm_stat_add(other, skb);
+		}
+
+		spin_lock(&other->sk_receive_queue.lock);
+		queue_was_empty = skb_queue_empty(&other->sk_receive_queue);
+		__skb_queue_tail(&other->sk_receive_queue, skb);
+		spin_unlock(&other->sk_receive_queue.lock);
 		unix_state_unlock(other);
-		other->sk_data_ready(other);
+		if (!plain_fast ||
+		    !unix_ckernel_stream_skip_data_ready(other, queue_was_empty))
+			other->sk_data_ready(other);
 		sent += size;
 	}
 
@@ -2262,7 +2404,8 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 	}
 #endif
 
-	scm_destroy(&scm);
+	if (!plain_fast)
+		scm_destroy(&scm);
 
 	return sent;
 
@@ -2274,7 +2417,8 @@ pipe_err:
 		send_sig(SIGPIPE, current, 0);
 	err = -EPIPE;
 out_err:
-	scm_destroy(&scm);
+	if (!plain_fast)
+		scm_destroy(&scm);
 	return sent ? : err;
 }
 
@@ -2510,6 +2654,34 @@ struct unix_stream_read_state {
 	int flags;
 	unsigned int splice_flags;
 };
+
+static bool unix_ckernel_stream_read_plain_fast(struct unix_stream_read_state *state,
+						struct sk_buff *skb,
+						int skip, int chunk,
+						int *ret)
+{
+	unsigned int offset;
+
+	if (!state->msg || state->flags)
+		return false;
+	if (state->msg->msg_control || state->msg->msg_name)
+		return false;
+	if (!unix_ckernel_stream_plain_msg_fast(state->socket, state->msg))
+		return false;
+	if (!unix_ckernel_skb_plain_fast(skb))
+		return false;
+
+	offset = UNIXCB(skb).consumed + skip;
+	if (offset + chunk > skb_headlen(skb))
+		return false;
+
+	if (copy_to_iter(skb->data + offset, chunk, &state->msg->msg_iter) != chunk)
+		*ret = -EFAULT;
+	else
+		*ret = chunk;
+
+	return true;
+}
 
 #if IS_ENABLED(CONFIG_AF_UNIX_OOB)
 static int unix_stream_recv_urg(struct unix_stream_read_state *state)
@@ -2852,7 +3024,8 @@ unlock:
 	} while (size);
 
 	mutex_unlock(&u->iolock);
-	if (state->msg)
+	if (state->msg &&
+	    !unix_ckernel_stream_recv_scm_skip(sock, state->msg, flags, &scm))
 		scm_recv_unix(sock, state->msg, &scm, flags);
 	else
 		scm_destroy(&scm);
@@ -2865,6 +3038,9 @@ static int unix_stream_read_actor(struct sk_buff *skb,
 				  struct unix_stream_read_state *state)
 {
 	int ret;
+
+	if (unix_ckernel_stream_read_plain_fast(state, skb, skip, chunk, &ret))
+		return ret;
 
 	ret = skb_copy_datagram_msg(skb, UNIXCB(skb).consumed + skip,
 				    state->msg, chunk);

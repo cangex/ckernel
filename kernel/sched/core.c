@@ -11173,6 +11173,14 @@ static int tg_set_cfs_quota(struct task_group *tg, long cfs_quota_us)
 	return tg_set_cfs_bandwidth(tg, period, quota, burst);
 }
 
+void sched_set_task_cfs_quota(struct task_struct *p, s64 quota)
+{
+        struct task_group *tg = sched_get_task_group(p);
+        struct cfs_bandwidth *cfs_b = &tg->cfs_bandwidth;
+        tg_set_cfs_quota(tg, quota);
+}
+EXPORT_SYMBOL_GPL(sched_set_task_cfs_quota);
+
 static long tg_get_cfs_quota(struct task_group *tg)
 {
 	u64 quota_us;

@@ -1054,16 +1054,56 @@ copy_pte:
 	return 1;
 }
 
+#ifdef CONFIG_FAASCALE_MEMORY
+static inline gfp_t faascale_fault_gfp(struct vm_area_struct *vma, gfp_t gfp)
+{
+	struct mem_cgroup *memcg;
+	struct faascale_memcg_state *state;
+
+	memcg = get_mem_cgroup_from_mm(vma->vm_mm);
+	if (!memcg)
+		return gfp;
+
+	state = memcg_faascale_state(memcg);
+	if (unlikely(current->mm != vma->vm_mm)) {
+		if (state && READ_ONCE(state->enabled))
+			atomic_long_inc(&state->remote_fault_skips);
+		css_put(&memcg->css);
+		return gfp;
+	}
+
+	if (state && READ_ONCE(state->enabled))
+		gfp |= __GFP_FAASCALE;
+	css_put(&memcg->css);
+
+	return gfp;
+}
+#else
+static inline gfp_t faascale_fault_gfp(struct vm_area_struct *vma, gfp_t gfp)
+{
+	return gfp;
+}
+#endif
+
 static inline struct folio *folio_prealloc(struct mm_struct *src_mm,
 		struct vm_area_struct *vma, unsigned long addr, bool need_zero)
 {
 	struct folio *new_folio;
+	gfp_t gfp = GFP_HIGHUSER_MOVABLE;
+	struct faascale_memcg_alloc_scope faascale_scope;
 
-	if (need_zero)
-		new_folio = vma_alloc_zeroed_movable_folio(vma, addr);
-	else
-		new_folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, vma,
-					    addr, false);
+	faascale_enter_memcg_alloc_scope(vma->vm_mm, &gfp, &faascale_scope);
+
+	if (need_zero) {
+		if (gfp & __GFP_FAASCALE)
+			new_folio = vma_alloc_zeroed_movable_folio_from_faascale(vma,
+									 addr);
+		else
+			new_folio = vma_alloc_zeroed_movable_folio(vma, addr);
+	} else {
+		new_folio = vma_alloc_folio(gfp, 0, vma, addr, false);
+	}
+	faascale_leave_memcg_alloc_scope(&faascale_scope);
 
 	if (!new_folio)
 		return NULL;
@@ -4000,15 +4040,15 @@ static struct folio *__alloc_swap_folio(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	struct folio *folio;
 	swp_entry_t entry;
+	gfp_t gfp = faascale_fault_gfp(vma, GFP_HIGHUSER_MOVABLE);
 
-	folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, 0, vma,
-				vmf->address, false);
+	folio = vma_alloc_folio(gfp, 0, vma, vmf->address, false);
 	if (!folio)
 		return NULL;
 
 	entry = pte_to_swp_entry(vmf->orig_pte);
 	if (mem_cgroup_swapin_charge_folio(folio, vma->vm_mm,
-					   GFP_KERNEL, entry)) {
+					   gfp, entry)) {
 		folio_put(folio);
 		return NULL;
 	}
@@ -4681,7 +4721,10 @@ static struct folio *alloc_anon_folio(struct vm_fault *vmf)
 		goto fallback;
 
 	/* Try allocating the highest of the remaining orders. */
-	gfp = vma_thp_gfp_mask(vma);
+	gfp = faascale_fault_gfp(vma, vma_thp_gfp_mask(vma));
+	if (gfp & __GFP_FAASCALE)
+		goto fallback;
+
 	while (orders) {
 		addr = ALIGN_DOWN(vmf->address, PAGE_SIZE << order);
 		folio = vma_alloc_folio(gfp, order, vma, addr, false);

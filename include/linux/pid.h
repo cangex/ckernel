@@ -110,6 +110,11 @@ extern void exchange_tids(struct task_struct *task, struct task_struct *old);
 extern void transfer_pid(struct task_struct *old, struct task_struct *new,
 			 enum pid_type);
 
+#ifdef CONFIG_FAASCALE_MEMORY
+extern void faascale_attach_thread_pid(struct task_struct *task);
+extern void faascale_detach_thread_pid(struct task_struct *task);
+#endif
+
 struct pid_namespace;
 extern struct pid_namespace init_pid_ns;
 

@@ -137,6 +137,35 @@ int nr_threads;			/* The idle threads do not count.. */
 
 static int max_threads;		/* tunable limit on nr_threads */
 
+#ifdef CONFIG_FAASCALE_MEMORY
+void faascale_nr_threads_inc(void)
+{
+	int old;
+
+	do {
+		old = READ_ONCE(nr_threads);
+	} while (cmpxchg(&nr_threads, old, old + 1) != old);
+}
+
+void faascale_nr_threads_dec(void)
+{
+	int old;
+
+	do {
+		old = READ_ONCE(nr_threads);
+	} while (cmpxchg(&nr_threads, old, old - 1) != old);
+}
+
+void faascale_total_forks_inc(void)
+{
+	unsigned long old;
+
+	do {
+		old = READ_ONCE(total_forks);
+	} while (cmpxchg(&total_forks, old, old + 1) != old);
+}
+#endif
+
 #define NAMED_ARRAY_INDEX(x)	[x] = __stringify(x)
 
 static const char * const resident_page_types[] = {
@@ -2337,6 +2366,11 @@ __latent_entropy struct task_struct *copy_process(
 	struct file *pidfile = NULL;
 	const u64 clone_flags = args->flags;
 	struct nsproxy *nsp = current->nsproxy;
+#ifdef CONFIG_FAASCALE_MEMORY
+	struct faascale_task_domain *faascale_td = NULL;
+	bool faascale_clone_fastpath = false;
+	bool faascale_td_locked = false;
+#endif
 
 	/*
 	 * Don't allow sharing the root directory with processes in a different
@@ -2461,6 +2495,11 @@ __latent_entropy struct task_struct *copy_process(
 	retval = copy_creds(p, clone_flags);
 	if (retval < 0)
 		goto bad_fork_free;
+
+	/* Inherit ckernel context across fork(). */
+	p->ckernel = current->ckernel;
+	if (p->ckernel)
+		refcount_inc(&p->ckernel->refs);
 
 	retval = -EAGAIN;
 	if (is_rlimit_overlimit(task_ucounts(p), UCOUNT_RLIMIT_NPROC, rlimit(RLIMIT_NPROC))) {
@@ -2705,6 +2744,14 @@ __latent_entropy struct task_struct *copy_process(
 	retval = cgroup_can_fork(p, args);
 	if (retval)
 		goto bad_fork_put_pidfd;
+#ifdef CONFIG_FAASCALE_MEMORY
+	p->faascale_task_domain = NULL;
+	faascale_clone_fastpath =
+		faascale_task_domain_try_clone_thread(clone_flags, trace,
+						      &faascale_td);
+	if (faascale_td && !(clone_flags & CLONE_INTO_CGROUP))
+		p->faascale_task_domain = faascale_td;
+#endif
 
 	/*
 	 * Now that the cgroups are pinned, re-clone the parent cgroup and put
@@ -2732,7 +2779,19 @@ __latent_entropy struct task_struct *copy_process(
 	 * Make it visible to the rest of the system, but dont wake it up yet.
 	 * Need tasklist lock for parent etc handling!
 	 */
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (faascale_clone_fastpath) {
+		write_lock_irq(&faascale_td->task_lock);
+		faascale_td_locked = true;
+	} else
+#endif
 	write_lock_irq(&tasklist_lock);
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (!faascale_clone_fastpath && faascale_td) {
+		write_lock(&faascale_td->task_lock);
+		faascale_td_locked = true;
+	}
+#endif
 
 	/* CLONE_PARENT re-uses the old parent */
 	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
@@ -2818,14 +2877,45 @@ __latent_entropy struct task_struct *copy_process(
 			list_add_tail_rcu(&p->thread_node,
 					  &p->signal->thread_head);
 		}
+#ifdef CONFIG_FAASCALE_MEMORY
+		if (faascale_clone_fastpath) {
+			spin_lock(&faascale_td->pid_lock);
+			faascale_attach_thread_pid(p);
+			spin_unlock(&faascale_td->pid_lock);
+		} else
+#endif
 		attach_pid(p, PIDTYPE_PID);
+#ifdef CONFIG_FAASCALE_MEMORY
+		faascale_nr_threads_inc();
+#else
 		nr_threads++;
+#endif
 	}
+#ifdef CONFIG_FAASCALE_MEMORY
+	faascale_total_forks_inc();
+	if (faascale_clone_fastpath)
+		faascale_task_domain_record_clone_fastpath(faascale_td);
+	else
+		faascale_task_domain_record_clone_fallback(faascale_td,
+							   clone_flags);
+#else
 	total_forks++;
+#endif
 	hlist_del_init(&delayed.node);
 	spin_unlock(&current->sighand->siglock);
 	syscall_tracepoint_update(p);
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (faascale_td_locked) {
+		if (faascale_clone_fastpath)
+			write_unlock_irq(&faascale_td->task_lock);
+		else
+			write_unlock(&faascale_td->task_lock);
+	}
+	if (!faascale_clone_fastpath)
+		write_unlock_irq(&tasklist_lock);
+#else
 	write_unlock_irq(&tasklist_lock);
+#endif
 
 	if (pidfile)
 		fd_install(pidfd, pidfile);
@@ -2846,7 +2936,18 @@ __latent_entropy struct task_struct *copy_process(
 bad_fork_cancel_cgroup:
 	sched_core_free(p);
 	spin_unlock(&current->sighand->siglock);
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (faascale_td_locked) {
+		if (faascale_clone_fastpath)
+			write_unlock_irq(&faascale_td->task_lock);
+		else
+			write_unlock(&faascale_td->task_lock);
+	}
+	if (!faascale_clone_fastpath)
+		write_unlock_irq(&tasklist_lock);
+#else
 	write_unlock_irq(&tasklist_lock);
+#endif
 	cgroup_cancel_fork(p, args);
 bad_fork_put_pidfd:
 	if (clone_flags & CLONE_PIDFD) {
@@ -2893,6 +2994,10 @@ bad_fork_cleanup_policy:
 bad_fork_cleanup_delayacct:
 	delayacct_tsk_free(p);
 bad_fork_cleanup_count:
+	if (p->ckernel) {
+		refcount_dec(&p->ckernel->refs);
+		p->ckernel = NULL;
+	}
 	dec_rlimit_ucounts(task_ucounts(p), UCOUNT_RLIMIT_NPROC, 1);
 	exit_creds(p);
 bad_fork_free:
@@ -3058,6 +3163,10 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	}
 
 	put_pid(pid);
+
+	if (p->ckernel)
+		p->ckernel->ck_attch_rdtgrp(p);
+
 	return nr;
 }
 

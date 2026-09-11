@@ -111,6 +111,9 @@ extern bool path_is_mountpoint(const struct path *path);
 
 extern bool our_mnt(struct vfsmount *mnt);
 
+unsigned int vfs_mount_seq_begin(void);
+bool vfs_mount_seq_retry(unsigned int seq);
+
 extern struct vfsmount *kern_mount(struct file_system_type *);
 extern void kern_unmount(struct vfsmount *mnt);
 extern int may_umount_tree(struct vfsmount *);

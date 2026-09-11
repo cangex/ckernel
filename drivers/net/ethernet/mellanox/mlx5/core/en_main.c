@@ -38,7 +38,9 @@
 #include <linux/debugfs.h>
 #include <linux/if_bridge.h>
 #include <linux/filter.h>
+#include <linux/sched.h>
 #include <net/page_pool/types.h>
+#include <net/netdev_rx_queue.h>
 #include <net/pkt_sched.h>
 #include <net/xdp_sock_drv.h>
 #include "eswitch.h"
@@ -5112,6 +5114,169 @@ static bool mlx5e_tunnel_any_tx_proto_supported(struct mlx5_core_dev *mdev)
 	return (mlx5_vxlan_allowed(mdev->vxlan) || mlx5_geneve_tx_allowed(mdev));
 }
 
+#ifdef CONFIG_SYSFS
+static struct mlx5e_channel *
+mlx5e_rx_queue_channel(struct netdev_rx_queue *queue)
+{
+	struct mlx5e_priv *priv = netdev_priv(queue->dev);
+	unsigned int index = get_netdev_rx_queue_index(queue);
+
+	if (!test_bit(MLX5E_STATE_OPENED, &priv->state) ||
+	    index >= priv->channels.num || !priv->channels.c ||
+	    !priv->channels.c[index])
+		return NULL;
+
+	return priv->channels.c[index];
+}
+
+static ssize_t mlx5e_rx_queue_threaded_show(struct netdev_rx_queue *queue,
+					    char *buf)
+{
+	struct mlx5e_channel *channel;
+	ssize_t ret;
+
+	rtnl_lock();
+	channel = mlx5e_rx_queue_channel(queue);
+	ret = channel ? sysfs_emit(buf, "%u\n",
+				   test_bit(NAPI_STATE_THREADED,
+					    &channel->napi.state)) : -ENODEV;
+	rtnl_unlock();
+
+	return ret;
+}
+
+static ssize_t mlx5e_rx_queue_napi_id_show(struct netdev_rx_queue *queue,
+					   char *buf)
+{
+	struct mlx5e_channel *channel;
+	ssize_t ret;
+
+	rtnl_lock();
+	channel = mlx5e_rx_queue_channel(queue);
+	ret = channel ? sysfs_emit(buf, "%u\n", channel->napi.napi_id) : -ENODEV;
+	rtnl_unlock();
+
+	return ret;
+}
+
+static ssize_t mlx5e_rx_queue_thread_pid_show(struct netdev_rx_queue *queue,
+					      char *buf)
+{
+	struct mlx5e_channel *channel;
+	ssize_t ret;
+
+	rtnl_lock();
+	channel = mlx5e_rx_queue_channel(queue);
+	ret = channel ? sysfs_emit(buf, "%d\n",
+				   channel->napi.thread ?
+				   task_pid_nr(channel->napi.thread) : -1) : -ENODEV;
+	rtnl_unlock();
+
+	return ret;
+}
+
+static ssize_t mlx5e_rx_queue_threaded_store(struct netdev_rx_queue *queue,
+					     const char *buf, size_t len)
+{
+	struct mlx5e_channel *channel;
+	bool threaded;
+	int err;
+
+	err = kstrtobool(buf, &threaded);
+	if (err)
+		return err;
+
+	rtnl_lock();
+	channel = mlx5e_rx_queue_channel(queue);
+	err = channel ? napi_set_threaded(&channel->napi, threaded) : -ENODEV;
+	rtnl_unlock();
+
+	return err ? err : len;
+}
+
+static ssize_t
+mlx5e_rx_queue_ckernel_fair_show(struct netdev_rx_queue *queue, char *buf)
+{
+	struct mlx5e_channel *channel;
+	ssize_t ret;
+
+	rtnl_lock();
+	channel = mlx5e_rx_queue_channel(queue);
+	ret = channel ? sysfs_emit(buf, "%u\n",
+				     !!READ_ONCE(channel->napi.ckernel_fair_napi)) :
+			-ENODEV;
+	rtnl_unlock();
+
+	return ret;
+}
+
+static ssize_t
+mlx5e_rx_queue_ckernel_fair_store(struct netdev_rx_queue *queue,
+				  const char *buf, size_t len)
+{
+	struct mlx5e_channel *channel;
+	bool fair;
+	int err;
+
+	err = kstrtobool(buf, &fair);
+	if (err)
+		return err;
+
+	rtnl_lock();
+	channel = mlx5e_rx_queue_channel(queue);
+	err = channel ? napi_set_ckernel_fair(&channel->napi, fair) : -ENODEV;
+	rtnl_unlock();
+
+	return err ? err : len;
+}
+
+static ssize_t
+mlx5e_rx_queue_ckernel_fair_stats_show(struct netdev_rx_queue *queue, char *buf)
+{
+	struct mlx5e_channel *channel;
+	ssize_t ret;
+
+	rtnl_lock();
+	channel = mlx5e_rx_queue_channel(queue);
+	ret = channel ? sysfs_emit(buf,
+				     "polls=%lu exhausted=%lu borrowed=%lu\n",
+				     READ_ONCE(channel->napi.ckernel_fair_polls),
+				     READ_ONCE(channel->napi.ckernel_fair_exhausted),
+				     READ_ONCE(channel->napi.ckernel_fair_borrowed)) :
+			-ENODEV;
+	rtnl_unlock();
+
+	return ret;
+}
+
+static struct rx_queue_attribute mlx5e_rx_queue_threaded_attr =
+	__ATTR(threaded, 0644, mlx5e_rx_queue_threaded_show,
+	       mlx5e_rx_queue_threaded_store);
+static struct rx_queue_attribute mlx5e_rx_queue_napi_id_attr =
+	__ATTR(napi_id, 0444, mlx5e_rx_queue_napi_id_show, NULL);
+static struct rx_queue_attribute mlx5e_rx_queue_thread_pid_attr =
+	__ATTR(thread_pid, 0444, mlx5e_rx_queue_thread_pid_show, NULL);
+static struct rx_queue_attribute mlx5e_rx_queue_ckernel_fair_attr =
+	__ATTR(ckernel_fair, 0644, mlx5e_rx_queue_ckernel_fair_show,
+	       mlx5e_rx_queue_ckernel_fair_store);
+static struct rx_queue_attribute mlx5e_rx_queue_ckernel_fair_stats_attr =
+	__ATTR(ckernel_fair_stats, 0444,
+	       mlx5e_rx_queue_ckernel_fair_stats_show, NULL);
+
+static struct attribute *mlx5e_rx_queue_attrs[] = {
+	&mlx5e_rx_queue_threaded_attr.attr,
+	&mlx5e_rx_queue_napi_id_attr.attr,
+	&mlx5e_rx_queue_thread_pid_attr.attr,
+	&mlx5e_rx_queue_ckernel_fair_attr.attr,
+	&mlx5e_rx_queue_ckernel_fair_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group mlx5e_rx_queue_group = {
+	.attrs = mlx5e_rx_queue_attrs,
+};
+#endif
+
 static void mlx5e_build_nic_netdev(struct net_device *netdev)
 {
 	struct mlx5e_priv *priv = netdev_priv(netdev);
@@ -5123,6 +5288,9 @@ static void mlx5e_build_nic_netdev(struct net_device *netdev)
 
 	netdev->netdev_ops = &mlx5e_netdev_ops;
 	netdev->xdp_metadata_ops = &mlx5e_xdp_metadata_ops;
+#ifdef CONFIG_SYSFS
+	netdev->sysfs_rx_queue_group = &mlx5e_rx_queue_group;
+#endif
 
 	mlx5e_dcbnl_build_netdev(netdev);
 

@@ -53,6 +53,7 @@ struct fs_struct;
 struct futex_pi_state;
 struct io_context;
 struct io_uring_task;
+struct faascale_task_domain;
 struct mempolicy;
 struct nameidata;
 struct nsproxy;
@@ -778,6 +779,8 @@ struct task_struct_resvd {
 	struct task_struct	*task;
 };
 
+struct ckernel;
+
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*
@@ -843,6 +846,8 @@ struct task_struct {
 #ifdef CONFIG_CGROUP_SCHED
 	struct task_group		*sched_task_group;
 #endif
+
+	struct ckernel			*ckernel;
 
 #ifdef CONFIG_UCLAMP_TASK
 	/*
@@ -1619,7 +1624,7 @@ struct task_struct {
 #else
 	KABI_RESERVE(1)
 #endif
-	KABI_RESERVE(2)
+	KABI_USE(2, struct faascale_task_domain *faascale_task_domain)
 	KABI_RESERVE(3)
 	KABI_RESERVE(4)
 	KABI_RESERVE(5)
@@ -2633,6 +2638,10 @@ bool sched_paral_used(void);
 #else
 static inline bool sched_paral_used(void) { return false; }
 #endif
+#endif
+
+#ifdef CONFIG_CGROUP_SCHED
+void sched_set_task_cfs_quota(struct task_struct *p, s64 quota);
 #endif
 
 #ifdef CONFIG_QOS_SCHED_SMART_GRID

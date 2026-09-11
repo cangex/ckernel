@@ -1,0 +1,15 @@
+config CKERNEL_DRIVER
+	tristate "CKernel driver"
+	depends on USER_NS
+	depends on PROC_FS
+	depends on NET
+	depends on RESCTRL_FS
+	depends on ARM64_MPAM
+	depends on CGROUP_SCHED
+	depends on CFS_BANDWIDTH
+	select FAASCALE_MEMORY if MEMCG && MIGRATION && MMU
+	default m
+	help
+	  Experimental kernel extension framework.
+	  Provides a per-task context with lifecycle hooks,
+	  along with ioctl, procfs and debugfs interfaces.

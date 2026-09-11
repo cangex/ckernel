@@ -361,8 +361,15 @@ void attach_pid(struct task_struct *task, enum pid_type type)
 	hlist_add_head_rcu(&task->pid_links[type], &pid->tasks[type]);
 }
 
+#ifdef CONFIG_FAASCALE_MEMORY
+void faascale_attach_thread_pid(struct task_struct *task)
+{
+	attach_pid(task, PIDTYPE_PID);
+}
+#endif
+
 static void __change_pid(struct task_struct *task, enum pid_type type,
-			struct pid *new)
+			 struct pid *new)
 {
 	struct pid **pid_ptr = task_pid_ptr(task, type);
 	struct pid *pid;
@@ -384,6 +391,13 @@ void detach_pid(struct task_struct *task, enum pid_type type)
 {
 	__change_pid(task, type, NULL);
 }
+
+#ifdef CONFIG_FAASCALE_MEMORY
+void faascale_detach_thread_pid(struct task_struct *task)
+{
+	detach_pid(task, PIDTYPE_PID);
+}
+#endif
 
 void change_pid(struct task_struct *task, enum pid_type type,
 		struct pid *pid)

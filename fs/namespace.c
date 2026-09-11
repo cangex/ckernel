@@ -99,6 +99,18 @@ EXPORT_SYMBOL_GPL(fs_kobj);
  */
 __cacheline_aligned_in_smp DEFINE_SEQLOCK(mount_lock);
 
+unsigned int vfs_mount_seq_begin(void)
+{
+	return read_seqbegin(&mount_lock);
+}
+EXPORT_SYMBOL_GPL(vfs_mount_seq_begin);
+
+bool vfs_mount_seq_retry(unsigned int seq)
+{
+	return read_seqretry(&mount_lock, seq);
+}
+EXPORT_SYMBOL_GPL(vfs_mount_seq_retry);
+
 static inline struct hlist_head *m_hash(struct vfsmount *mnt, struct dentry *dentry)
 {
 	unsigned long tmp = ((unsigned long)mnt / L1_CACHE_BYTES);

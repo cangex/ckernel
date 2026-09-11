@@ -27,9 +27,11 @@
 
 #include <linux/page_counter.h>
 #include <linux/memcontrol.h>
+#include <linux/ckernel.h>
 #include <linux/cgroup.h>
 #include <linux/pagewalk.h>
 #include <linux/sched/mm.h>
+#include <linux/sched/signal.h>
 #include <linux/shmem_fs.h>
 #include <linux/hugetlb.h>
 #include <linux/pagemap.h>
@@ -1136,6 +1138,52 @@ again:
 	rcu_read_unlock();
 	return memcg;
 }
+
+#ifdef CONFIG_FAASCALE_MEMORY
+bool faascale_enter_memcg_alloc_scope(struct mm_struct *mm, gfp_t *gfp_mask,
+				      struct faascale_memcg_alloc_scope *scope)
+{
+	struct mem_cgroup *memcg;
+
+	scope->memcg = NULL;
+	scope->old_memcg = NULL;
+	scope->active = false;
+
+	if (!mm)
+		return false;
+
+	memcg = get_mem_cgroup_from_mm(mm);
+	if (!memcg)
+		return false;
+
+	if (!memcg_faascale_enabled(memcg)) {
+		css_put(&memcg->css);
+		return false;
+	}
+
+	if (gfp_mask)
+		*gfp_mask |= __GFP_FAASCALE;
+
+	scope->memcg = memcg;
+	scope->active = true;
+	scope->old_memcg = set_active_memcg(memcg);
+
+	return true;
+}
+
+void faascale_leave_memcg_alloc_scope(struct faascale_memcg_alloc_scope *scope)
+{
+	if (!scope->memcg)
+		return;
+
+	if (scope->active)
+		set_active_memcg(scope->old_memcg);
+	css_put(&scope->memcg->css);
+	scope->memcg = NULL;
+	scope->old_memcg = NULL;
+	scope->active = false;
+}
+#endif
 
 /**
  * mem_cgroup_iter - iterate over memory cgroup hierarchy
@@ -2263,6 +2311,7 @@ struct memcg_stock_pcp {
 	local_lock_t stock_lock;
 	struct mem_cgroup *cached; /* this never be root cgroup */
 	unsigned int nr_pages;
+	unsigned int max_pages;
 
 #ifdef CONFIG_MEMCG_KMEM
 	struct obj_cgroup *cached_objcg;
@@ -2278,6 +2327,7 @@ struct memcg_stock_pcp {
 };
 static DEFINE_PER_CPU(struct memcg_stock_pcp, memcg_stock) = {
 	.stock_lock = INIT_LOCAL_LOCK(stock_lock),
+	.max_pages = MEMCG_CHARGE_BATCH,
 };
 static DEFINE_MUTEX(percpu_charge_mutex);
 
@@ -2409,13 +2459,12 @@ static bool consume_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
 	unsigned long flags;
 	bool ret = false;
 
-	if (nr_pages > MEMCG_CHARGE_BATCH)
-		return ret;
-
 	local_lock_irqsave(&memcg_stock.stock_lock, flags);
 
 	stock = this_cpu_ptr(&memcg_stock);
-	if (memcg == READ_ONCE(stock->cached) && stock->nr_pages >= nr_pages) {
+	if (nr_pages <= stock->max_pages &&
+	    memcg == READ_ONCE(stock->cached) &&
+	    stock->nr_pages >= nr_pages) {
 		stock->nr_pages -= nr_pages;
 		ret = true;
 	}
@@ -2442,6 +2491,7 @@ static void drain_stock(struct memcg_stock_pcp *stock)
 		stock->nr_pages = 0;
 	}
 
+	stock->max_pages = MEMCG_CHARGE_BATCH;
 	css_put(&old->css);
 	WRITE_ONCE(stock->cached, NULL);
 }
@@ -2473,7 +2523,9 @@ static void drain_local_stock(struct work_struct *dummy)
  * Cache charges(val) to local per_cpu area.
  * This will be consumed by consume_stock() function, later.
  */
-static void __refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
+static void __refill_stock_limit(struct mem_cgroup *memcg,
+				 unsigned int nr_pages,
+				 unsigned int max_pages)
 {
 	struct memcg_stock_pcp *stock;
 
@@ -2482,11 +2534,19 @@ static void __refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
 		drain_stock(stock);
 		css_get(&memcg->css);
 		WRITE_ONCE(stock->cached, memcg);
+		stock->max_pages = max_pages;
+	} else if (max_pages > stock->max_pages) {
+		stock->max_pages = max_pages;
 	}
 	stock->nr_pages += nr_pages;
 
-	if (stock->nr_pages > MEMCG_CHARGE_BATCH)
+	if (stock->nr_pages > stock->max_pages)
 		drain_stock(stock);
+}
+
+static void __refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
+{
+	__refill_stock_limit(memcg, nr_pages, MEMCG_CHARGE_BATCH);
 }
 
 static void refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
@@ -2495,6 +2555,16 @@ static void refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
 
 	local_lock_irqsave(&memcg_stock.stock_lock, flags);
 	__refill_stock(memcg, nr_pages);
+	local_unlock_irqrestore(&memcg_stock.stock_lock, flags);
+}
+
+static void refill_stock_limit(struct mem_cgroup *memcg,
+			       unsigned int nr_pages, unsigned int max_pages)
+{
+	unsigned long flags;
+
+	local_lock_irqsave(&memcg_stock.stock_lock, flags);
+	__refill_stock_limit(memcg, nr_pages, max_pages);
 	local_unlock_irqrestore(&memcg_stock.stock_lock, flags);
 }
 
@@ -2850,10 +2920,25 @@ out:
 	css_put(&memcg->css);
 }
 
+#define CKERNEL_MEMCG_CHARGE_BATCH 256U
+
+static unsigned int ckernel_memcg_charge_batch(struct mem_cgroup *memcg,
+					       unsigned int nr_pages)
+{
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+	unsigned int batch = MEMCG_CHARGE_BATCH;
+
+	if (ck && READ_ONCE(ck->online) && READ_ONCE(ck->memcg_stock_batch) &&
+	    memcg == mem_cgroup_from_task(current))
+		batch = CKERNEL_MEMCG_CHARGE_BATCH;
+
+	return max(batch, nr_pages);
+}
+
 static int try_charge_memcg(struct mem_cgroup *memcg, gfp_t gfp_mask,
 			unsigned int nr_pages)
 {
-	unsigned int batch = max(MEMCG_CHARGE_BATCH, nr_pages);
+	unsigned int batch = ckernel_memcg_charge_batch(memcg, nr_pages);
 	int nr_retries = MAX_RECLAIM_RETRIES;
 	struct mem_cgroup *mem_over_limit;
 	struct page_counter *counter;
@@ -2989,7 +3074,7 @@ force:
 
 done_restock:
 	if (batch > nr_pages)
-		refill_stock(memcg, batch - nr_pages);
+		refill_stock_limit(memcg, batch - nr_pages, batch);
 
 	/*
 	 * If the hierarchy is above the normal consumption range, schedule
@@ -6632,6 +6717,9 @@ static void __mem_cgroup_free(struct mem_cgroup *memcg)
 	kfree(memcg->vmstats);
 	free_percpu(memcg->vmstats_percpu);
 	memcg_free_swap_device(memcg);
+#ifdef CONFIG_FAASCALE_MEMORY
+	kfree(memcg->faascale);
+#endif
 	kfree(memcg);
 }
 
@@ -6670,6 +6758,19 @@ static struct mem_cgroup *mem_cgroup_alloc(void)
 						 GFP_KERNEL_ACCOUNT);
 	if (!memcg->vmstats_percpu)
 		goto fail;
+
+#ifdef CONFIG_FAASCALE_MEMORY
+	memcg->faascale = kzalloc(sizeof(*memcg->faascale), GFP_KERNEL);
+	if (!memcg->faascale)
+		goto fail;
+		faascale_mem_region_init(&memcg->faascale->region);
+		mutex_init(&memcg->faascale->resize_lock);
+		faascale_task_domain_init(&memcg->faascale->task_domain);
+		atomic_long_set(&memcg->faascale->alloc_fallbacks, 0);
+	atomic_long_set(&memcg->faascale->remote_fault_skips, 0);
+	atomic_long_set(&memcg->faascale->resize_failures, 0);
+	atomic_long_set(&memcg->faascale->shrink_partial, 0);
+#endif
 
 	for_each_node(node)
 		if (alloc_mem_cgroup_per_node_info(memcg, node))
@@ -6857,6 +6958,13 @@ static void mem_cgroup_css_free(struct cgroup_subsys_state *css)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
 	int __maybe_unused i;
+
+#ifdef CONFIG_FAASCALE_MEMORY
+	if (memcg->faascale &&
+	    (READ_ONCE(memcg->faascale->enabled) ||
+	     READ_ONCE(memcg->faascale->provisioned_size)))
+		WARN_ON_ONCE(memory_faascale_free(memcg));
+#endif
 
 #ifdef CONFIG_CGROUP_WRITEBACK
 	for (i = 0; i < MEMCG_CGWB_FRN_CNT; i++)
@@ -8248,6 +8356,593 @@ static ssize_t memory_reclaim(struct kernfs_open_file *of, char *buf,
 	return nbytes;
 }
 
+#ifdef CONFIG_FAASCALE_MEMORY
+#define FAASCALE_CKERNEL_MEMORY		0x1
+#define FAASCALE_CKERNEL_TASK_DOMAIN	0x2
+
+static atomic_t faascale_ckernel_features = ATOMIC_INIT(0);
+
+static bool faascale_ckernel_feature_enabled(int feature)
+{
+	return (atomic_read(&faascale_ckernel_features) & feature) != 0;
+}
+
+bool faascale_ckernel_memory_enabled(void)
+{
+	return faascale_ckernel_feature_enabled(FAASCALE_CKERNEL_MEMORY);
+}
+
+bool faascale_ckernel_task_domain_enabled(void)
+{
+	return faascale_ckernel_feature_enabled(FAASCALE_CKERNEL_TASK_DOMAIN);
+}
+
+void faascale_ckernel_set_features_enabled(bool memory, bool task_domain)
+{
+	int features = 0;
+
+	if (memory)
+		features |= FAASCALE_CKERNEL_MEMORY;
+	if (task_domain)
+		features |= FAASCALE_CKERNEL_TASK_DOMAIN;
+
+	atomic_set(&faascale_ckernel_features, features);
+	pr_info("faascale: ckernel-bound memory %s, task_domain %s\n",
+		memory ? "enabled" : "disabled",
+		task_domain ? "enabled" : "disabled");
+}
+EXPORT_SYMBOL_GPL(faascale_ckernel_set_features_enabled);
+
+static void faascale_task_domain_reset_stats(struct faascale_task_domain *domain)
+{
+	atomic_long_set(&domain->threads, 0);
+	atomic64_set(&domain->clone_thread_fastpath, 0);
+	atomic64_set(&domain->clone_thread_fallback, 0);
+	atomic64_set(&domain->exit_thread_fastpath, 0);
+	atomic64_set(&domain->exit_thread_fallback, 0);
+	atomic64_set(&domain->fallback_non_thread, 0);
+	atomic64_set(&domain->fallback_ptrace, 0);
+	atomic64_set(&domain->fallback_into_cgroup, 0);
+	atomic64_set(&domain->fallback_exit_leader, 0);
+	atomic64_set(&domain->fallback_exit_last_thread, 0);
+	atomic64_set(&domain->fallback_exit_ptrace, 0);
+	atomic64_set(&domain->fallback_exit_notify, 0);
+}
+
+void faascale_task_domain_init(struct faascale_task_domain *domain)
+{
+	rwlock_init(&domain->task_lock);
+	spin_lock_init(&domain->pid_lock);
+	WRITE_ONCE(domain->enabled, false);
+	faascale_task_domain_reset_stats(domain);
+}
+
+struct faascale_task_domain *
+faascale_task_domain_from_task(struct task_struct *task)
+{
+	struct faascale_task_domain *domain = NULL;
+	struct faascale_memcg_state *state;
+	struct mem_cgroup *memcg;
+
+	if (!task || mem_cgroup_disabled() ||
+	    !faascale_ckernel_task_domain_enabled())
+		return NULL;
+
+	rcu_read_lock();
+	memcg = mem_cgroup_from_task(task);
+	state = memcg_faascale_state(memcg);
+	if (state && READ_ONCE(state->task_domain.enabled))
+		domain = &state->task_domain;
+	rcu_read_unlock();
+
+	return domain;
+}
+
+bool faascale_task_domain_try_clone_thread(unsigned long clone_flags, int trace,
+					   struct faascale_task_domain **domain)
+{
+	struct faascale_task_domain *td;
+
+	td = faascale_task_domain_from_task(current);
+	*domain = td;
+	if (!td)
+		return false;
+
+	if (!(clone_flags & CLONE_THREAD)) {
+		atomic64_inc(&td->fallback_non_thread);
+		return false;
+	}
+
+	if ((clone_flags & CLONE_INTO_CGROUP)) {
+		atomic64_inc(&td->fallback_into_cgroup);
+		return false;
+	}
+
+	if ((clone_flags & CLONE_PTRACE) || trace || READ_ONCE(current->ptrace) ||
+	    !list_empty(&current->ptraced)) {
+		atomic64_inc(&td->fallback_ptrace);
+		return false;
+	}
+
+	if (!current->mm || (current->flags & PF_KTHREAD)) {
+		atomic64_inc(&td->fallback_non_thread);
+		return false;
+	}
+
+	return true;
+}
+
+bool faascale_task_domain_try_exit_thread_locked(struct task_struct *task,
+						 struct faascale_task_domain *domain)
+{
+	struct task_struct *leader;
+
+	if (!faascale_ckernel_task_domain_enabled() ||
+	    !domain || !READ_ONCE(domain->enabled))
+		return false;
+
+	if (thread_group_leader(task)) {
+		atomic64_inc(&domain->fallback_exit_leader);
+		return false;
+	}
+
+	if (READ_ONCE(task->ptrace) || !list_empty(&task->ptraced) ||
+	    !list_empty(&task->ptrace_entry)) {
+		atomic64_inc(&domain->fallback_exit_ptrace);
+		return false;
+	}
+
+	if (task->signal->notify_count > 0) {
+		atomic64_inc(&domain->fallback_exit_notify);
+		return false;
+	}
+
+	leader = task->group_leader;
+	/*
+	 * The global release_task() last-thread slow path is only needed when
+	 * a zombie leader may have to be reaped/notified. If the leader is
+	 * still alive, its own exit path will later take the global lock and
+	 * observe the now-empty thread group.
+	 */
+	if (list_is_singular(&leader->thread_group) &&
+	    READ_ONCE(leader->exit_state) == EXIT_ZOMBIE) {
+		atomic64_inc(&domain->fallback_exit_last_thread);
+		return false;
+	}
+
+	return true;
+}
+
+void faascale_task_domain_record_clone_fastpath(struct faascale_task_domain *domain)
+{
+	atomic_long_inc(&domain->threads);
+	atomic64_inc(&domain->clone_thread_fastpath);
+}
+
+void faascale_task_domain_record_clone_fallback(struct faascale_task_domain *domain,
+						unsigned long clone_flags)
+{
+	if (domain) {
+		if (clone_flags & CLONE_THREAD) {
+			atomic_long_inc(&domain->threads);
+			atomic64_inc(&domain->clone_thread_fallback);
+		}
+	}
+}
+
+void faascale_task_domain_record_exit_fastpath(struct faascale_task_domain *domain)
+{
+	atomic_long_dec(&domain->threads);
+	atomic64_inc(&domain->exit_thread_fastpath);
+}
+
+void faascale_task_domain_record_exit_fallback(struct faascale_task_domain *domain,
+					       struct task_struct *task)
+{
+	if (domain) {
+		if (task && !thread_group_leader(task)) {
+			atomic_long_dec(&domain->threads);
+			atomic64_inc(&domain->exit_thread_fallback);
+		}
+	}
+}
+
+int faascale_task_domain_lock_is_held(struct task_struct *task)
+{
+#ifdef CONFIG_LOCKDEP
+	struct faascale_task_domain *domain;
+
+	if (!task)
+		return 0;
+
+	if (!faascale_ckernel_task_domain_enabled())
+		return 0;
+
+	domain = READ_ONCE(task->faascale_task_domain);
+	return domain && lockdep_is_held(&domain->task_lock);
+#else
+	return 1;
+#endif
+}
+
+static int memory_faascale_enable_show(struct seq_file *m, void *v)
+{
+	struct faascale_memcg_state *state;
+
+	state = memcg_faascale_state(mem_cgroup_from_seq(m));
+	seq_printf(m, "%d\n",
+		   state && faascale_ckernel_memory_enabled() ?
+		   READ_ONCE(state->enabled) : 0);
+	return 0;
+}
+
+static int memory_faascale_size_show(struct seq_file *m, void *v)
+{
+	struct faascale_memcg_state *state;
+
+	state = memcg_faascale_state(mem_cgroup_from_seq(m));
+	seq_printf(m, "%lu\n", state ? READ_ONCE(state->provisioned_size) : 0);
+	return 0;
+}
+
+static int memory_faascale_task_domain_enable_show(struct seq_file *m, void *v)
+{
+	struct faascale_memcg_state *state;
+
+	state = memcg_faascale_state(mem_cgroup_from_seq(m));
+	seq_printf(m, "%d\n",
+		   state && faascale_ckernel_task_domain_enabled() ?
+		   READ_ONCE(state->task_domain.enabled) : 0);
+	return 0;
+}
+
+static ssize_t memory_faascale_task_domain_enable_write(
+	struct kernfs_open_file *of, char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	struct faascale_memcg_state *state = memcg_faascale_state(memcg);
+	bool enable;
+	int err;
+
+	if (!state)
+		return -ENOMEM;
+
+	buf = strstrip(buf);
+	err = kstrtobool(buf, &enable);
+	if (err)
+		return err;
+
+	if (enable && !faascale_ckernel_task_domain_enabled())
+		return -EOPNOTSUPP;
+
+	if (enable)
+		faascale_task_domain_reset_stats(&state->task_domain);
+	WRITE_ONCE(state->task_domain.enabled, enable);
+
+	return nbytes;
+}
+
+static int memory_faascale_task_domain_state_show(struct seq_file *m, void *v)
+{
+	struct faascale_memcg_state *state;
+	struct faascale_task_domain *domain;
+
+	state = memcg_faascale_state(mem_cgroup_from_seq(m));
+	if (!state) {
+		seq_puts(m, "enabled 0\n");
+		return 0;
+	}
+
+	domain = &state->task_domain;
+	seq_printf(m, "enabled %d\n",
+		   faascale_ckernel_task_domain_enabled() ?
+		   READ_ONCE(domain->enabled) : 0);
+	seq_printf(m, "ckernel_enabled %d\n",
+		   faascale_ckernel_task_domain_enabled() ? 1 : 0);
+	seq_printf(m, "configured_enabled %d\n", READ_ONCE(domain->enabled));
+	seq_printf(m, "threads %ld\n", atomic_long_read(&domain->threads));
+	seq_printf(m, "clone_thread_fastpath %lld\n",
+		   (long long)atomic64_read(&domain->clone_thread_fastpath));
+	seq_printf(m, "clone_thread_fallback %lld\n",
+		   (long long)atomic64_read(&domain->clone_thread_fallback));
+	seq_printf(m, "exit_thread_fastpath %lld\n",
+		   (long long)atomic64_read(&domain->exit_thread_fastpath));
+	seq_printf(m, "exit_thread_fallback %lld\n",
+		   (long long)atomic64_read(&domain->exit_thread_fallback));
+	seq_printf(m, "fallback_non_thread %lld\n",
+		   (long long)atomic64_read(&domain->fallback_non_thread));
+	seq_printf(m, "fallback_ptrace %lld\n",
+		   (long long)atomic64_read(&domain->fallback_ptrace));
+	seq_printf(m, "fallback_into_cgroup %lld\n",
+		   (long long)atomic64_read(&domain->fallback_into_cgroup));
+	seq_printf(m, "fallback_exit_leader %lld\n",
+		   (long long)atomic64_read(&domain->fallback_exit_leader));
+	seq_printf(m, "fallback_exit_last_thread %lld\n",
+		   (long long)atomic64_read(&domain->fallback_exit_last_thread));
+	seq_printf(m, "fallback_exit_ptrace %lld\n",
+		   (long long)atomic64_read(&domain->fallback_exit_ptrace));
+	seq_printf(m, "fallback_exit_notify %lld\n",
+		   (long long)atomic64_read(&domain->fallback_exit_notify));
+	return 0;
+}
+
+static int memory_block_state_show(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+	struct faascale_memcg_state *state = memcg_faascale_state(memcg);
+	struct faascale_mem_region_state region_state;
+	u64 total_pages, free_pages, used_pages;
+
+	memset(&region_state, 0, sizeof(region_state));
+	if (state)
+		faascale_mem_region_read_state(&state->region, &region_state);
+
+	total_pages = region_state.total_pages;
+	free_pages = min_t(u64, region_state.free_pages, total_pages);
+	used_pages = total_pages - free_pages;
+
+	seq_printf(m, "enabled %d\n",
+		   state && faascale_ckernel_memory_enabled() ?
+		   READ_ONCE(state->enabled) : 0);
+	seq_printf(m, "ckernel_enabled %d\n",
+		   faascale_ckernel_memory_enabled() ? 1 : 0);
+	seq_printf(m, "configured_enabled %d\n",
+		   state ? READ_ONCE(state->enabled) : 0);
+	seq_printf(m, "requested_bytes %lu\n",
+		   state ? READ_ONCE(state->requested_size) : 0UL);
+	seq_printf(m, "provisioned_bytes %lu\n",
+		   state ? READ_ONCE(state->provisioned_size) : 0UL);
+	seq_printf(m, "region_pages %llu\n", (unsigned long long)total_pages);
+	seq_printf(m, "region_bytes %llu\n",
+		   (unsigned long long)(total_pages << PAGE_SHIFT));
+	seq_printf(m, "free_pages %llu\n", (unsigned long long)free_pages);
+	seq_printf(m, "free_bytes %llu\n",
+		   (unsigned long long)(free_pages << PAGE_SHIFT));
+	seq_printf(m, "reclaimable_bytes %llu\n",
+		   (unsigned long long)(region_state.buddy_chunks_free <<
+					 FAASCALE_MEMORY_MIN_BLOCK_SHIFT));
+	seq_printf(m, "used_pages %llu\n", (unsigned long long)used_pages);
+	seq_printf(m, "used_bytes %llu\n",
+		   (unsigned long long)(used_pages << PAGE_SHIFT));
+	seq_printf(m, "block_count %lu\n", region_state.block_count);
+	seq_printf(m, "buddy_chunks_total %lu\n", region_state.buddy_chunks_total);
+	seq_printf(m, "buddy_chunks_free %lu\n", region_state.buddy_chunks_free);
+	seq_printf(m, "alloc_fallbacks %ld\n",
+		   state ? atomic_long_read(&state->alloc_fallbacks) : 0L);
+	seq_printf(m, "remote_fault_skips %ld\n",
+		   state ? atomic_long_read(&state->remote_fault_skips) : 0L);
+	seq_printf(m, "resize_failures %ld\n",
+		   state ? atomic_long_read(&state->resize_failures) : 0L);
+	seq_printf(m, "shrink_partial %ld\n",
+		   state ? atomic_long_read(&state->shrink_partial) : 0L);
+
+	return 0;
+}
+
+static int faascale_region_grow_locked(struct mem_cgroup *memcg,
+				       unsigned long delta_bytes)
+{
+	struct faascale_memcg_state *state = memcg_faascale_state(memcg);
+	struct zonelist *zonelist;
+	struct zoneref *z;
+	struct zone *zone;
+	struct faascale_mem_block *block;
+	unsigned long nr_chunks;
+	struct list_head *pos, *n;
+	LIST_HEAD(block_list);
+	int i, err = -ENOMEM;
+
+	if (!state)
+		return -ENOMEM;
+
+	nr_chunks = delta_bytes / FAASCALE_MEMORY_MIN_BLOCK_SIZE;
+	drain_all_pages(NULL);
+	zonelist = node_zonelist(0, 0);
+
+	for (i = 0; i < nr_chunks; i++) {
+		block = NULL;
+		for_each_zone_zonelist(zone, z, zonelist, ZONE_NORMAL) {
+			if (!populated_zone(zone))
+				continue;
+			block = alloc_zone_block(zone, 0, false);
+			if (block)
+				break;
+		}
+		if (!block)
+			goto release_blocks;
+		list_add_tail(&block->list, &block_list);
+	}
+
+	err = faascale_backend_scale_blocks(&block_list, true);
+	if (err)
+		goto release_blocks;
+	if (unlikely(!faascale_backend_block_check(&block_list))) {
+		err = -EINVAL;
+		goto release_blocks;
+	}
+
+	list_for_each_safe(pos, n, &block_list) {
+		block = list_entry(pos, struct faascale_mem_block, list);
+		list_del(pos);
+		add_block_to_region(&state->region, block);
+	}
+
+	WRITE_ONCE(state->provisioned_size,
+		   READ_ONCE(state->provisioned_size) + delta_bytes);
+	WRITE_ONCE(state->enabled, true);
+	return 0;
+
+release_blocks:
+	list_for_each_safe(pos, n, &block_list) {
+		block = list_entry(pos, struct faascale_mem_block, list);
+		list_del(pos);
+		free_one_block(block);
+	}
+
+	return err ?: -EINVAL;
+}
+
+static unsigned long faascale_region_shrink_best_effort_locked(
+	struct mem_cgroup *memcg, unsigned long delta_bytes)
+{
+	struct faascale_memcg_state *state = memcg_faascale_state(memcg);
+	struct faascale_mem_block *block, *tmp;
+	unsigned long reclaimed_blocks;
+	unsigned long reclaimed_bytes;
+	unsigned long target_blocks;
+	LIST_HEAD(reclaim_list);
+	int err;
+
+	if (!state)
+		return 0;
+
+	target_blocks = delta_bytes / FAASCALE_MEMORY_MIN_BLOCK_SIZE;
+	reclaimed_blocks = faascale_region_collect_reclaimable_blocks(
+		&state->region, target_blocks, &reclaim_list);
+	if (!reclaimed_blocks)
+		return 0;
+
+	err = faascale_backend_scale_blocks(&reclaim_list, false);
+	if (err) {
+		faascale_region_restore_blocks(&state->region, &reclaim_list);
+		atomic_long_inc(&state->resize_failures);
+		return 0;
+	}
+
+	list_for_each_entry_safe(block, tmp, &reclaim_list, list) {
+		list_del_init(&block->list);
+		free_one_block(block);
+	}
+
+	reclaimed_bytes = reclaimed_blocks * FAASCALE_MEMORY_MIN_BLOCK_SIZE;
+	WRITE_ONCE(state->provisioned_size,
+		   READ_ONCE(state->provisioned_size) - reclaimed_bytes);
+
+	if (reclaimed_blocks < target_blocks)
+		atomic_long_inc(&state->shrink_partial);
+
+	if (READ_ONCE(state->provisioned_size) == 0) {
+		faascale_mem_region_reset(&state->region);
+		WRITE_ONCE(state->enabled, false);
+	}
+
+	return reclaimed_bytes;
+}
+
+int memory_faascale_free(struct mem_cgroup *memcg)
+{
+	struct faascale_memcg_state *state = memcg_faascale_state(memcg);
+	struct faascale_mem_region *region;
+	int ret = 0;
+
+	if (!state)
+		return -ENOMEM;
+
+	mutex_lock(&state->resize_lock);
+	if (!READ_ONCE(state->enabled) && !READ_ONCE(state->provisioned_size))
+		goto out;
+
+	region = &state->region;
+	if (region->buddy_block_count != region->free_area[MAX_ORDER].nr_free) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	faascale_mem_region_free(region);
+	WRITE_ONCE(state->enabled, false);
+	WRITE_ONCE(state->provisioned_size, 0);
+	WRITE_ONCE(state->requested_size, 0);
+	atomic_long_set(&state->alloc_fallbacks, 0);
+	atomic_long_set(&state->remote_fault_skips, 0);
+	atomic_long_set(&state->resize_failures, 0);
+	atomic_long_set(&state->shrink_partial, 0);
+
+out:
+	mutex_unlock(&state->resize_lock);
+	return ret;
+}
+
+static ssize_t memory_faascale_free_write(struct kernfs_open_file *of,
+					  char *buf, size_t nbytes,
+					  loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	unsigned long val;
+	int err;
+
+	buf = strstrip(buf);
+	err = kstrtoul(buf, 0, &val);
+	if (err)
+		return err;
+	if (!val)
+		return -EINVAL;
+
+	err = memory_faascale_free(memcg);
+	return err ?: nbytes;
+}
+
+static ssize_t memory_faascale_size_write(struct kernfs_open_file *of,
+					  char *buf, size_t nbytes,
+					  loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	struct faascale_memcg_state *state = memcg_faascale_state(memcg);
+	unsigned long old_size, new_size;
+	char *end;
+	u64 bytes;
+	int err = 0;
+
+	if (!state)
+		return -ENOMEM;
+
+	buf = strstrip(buf);
+	bytes = memparse(buf, &end);
+	if (*end != '\0')
+		return -EINVAL;
+
+	if (bytes && !faascale_ckernel_memory_enabled())
+		return -EOPNOTSUPP;
+
+	if (bytes && !faascale_backend_is_available())
+		return -EINVAL;
+
+	new_size = clamp(bytes, (u64)0, (u64)FAASCALE_MEMORY_MAX_REGION_SIZE);
+	if (new_size)
+		new_size = max_t(unsigned long, new_size,
+				 FAASCALE_MEMORY_MIN_REGION_SIZE);
+	new_size = ALIGN(new_size, FAASCALE_MEMORY_MIN_BLOCK_SIZE);
+
+	mutex_lock(&state->resize_lock);
+	old_size = READ_ONCE(state->provisioned_size);
+
+	if (new_size == old_size) {
+		WRITE_ONCE(state->requested_size, new_size);
+		goto out;
+	}
+
+	if (new_size > old_size) {
+		if (!old_size) {
+			atomic_long_set(&state->alloc_fallbacks, 0);
+			atomic_long_set(&state->remote_fault_skips, 0);
+		}
+		err = faascale_region_grow_locked(memcg, new_size - old_size);
+		if (err) {
+			atomic_long_inc(&state->resize_failures);
+			goto out;
+		}
+		WRITE_ONCE(state->requested_size, new_size);
+		goto out;
+	}
+
+	faascale_region_shrink_best_effort_locked(memcg, old_size - new_size);
+	WRITE_ONCE(state->requested_size, new_size);
+
+out:
+	mutex_unlock(&state->resize_lock);
+	return err ? err : nbytes;
+}
+#endif
+
 static struct cftype memory_files[] = {
 	{
 		.name = "current",
@@ -8283,6 +8978,40 @@ static struct cftype memory_files[] = {
 		.seq_show = memory_max_show,
 		.write = memory_max_write,
 	},
+#ifdef CONFIG_FAASCALE_MEMORY
+	{
+		.name = "faascale.enable",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_faascale_enable_show,
+	},
+	{
+		.name = "faascale.size",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_faascale_size_show,
+		.write = memory_faascale_size_write,
+	},
+	{
+		.name = "faascale.task_domain.enable",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_faascale_task_domain_enable_show,
+		.write = memory_faascale_task_domain_enable_write,
+	},
+	{
+		.name = "faascale.task_domain.state",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_faascale_task_domain_state_show,
+	},
+	{
+		.name = "block.state",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_block_state_show,
+	},
+	{
+		.name = "faascale.free",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.write = memory_faascale_free_write,
+	},
+#endif
 	{
 		.name = "events",
 		.flags = CFTYPE_NOT_ON_ROOT,
@@ -8651,6 +9380,26 @@ struct uncharge_gather {
 	int nid;
 };
 
+static bool ckernel_restock_uncharge(struct mem_cgroup *memcg,
+				     unsigned long nr_pages)
+{
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+
+	if (!ck || !READ_ONCE(ck->online) ||
+	    !READ_ONCE(ck->memcg_stock_batch) ||
+	    memcg != mem_cgroup_from_task(current) ||
+	    nr_pages > CKERNEL_MEMCG_CHARGE_BATCH) {
+		if (ck && nr_pages <= LONG_MAX)
+			atomic_long_add(nr_pages,
+					&ck->memcg_restock_fallback_pages);
+		return false;
+	}
+
+	refill_stock_limit(memcg, nr_pages, CKERNEL_MEMCG_CHARGE_BATCH);
+	atomic_long_add(nr_pages, &ck->memcg_restock_pages);
+	return true;
+}
+
 static inline void uncharge_gather_clear(struct uncharge_gather *ug)
 {
 	memset(ug, 0, sizeof(*ug));
@@ -8661,9 +9410,13 @@ static void uncharge_batch(const struct uncharge_gather *ug)
 	unsigned long flags;
 
 	if (ug->nr_memory) {
-		page_counter_uncharge(&ug->memcg->memory, ug->nr_memory);
-		if (do_memsw_account())
-			page_counter_uncharge(&ug->memcg->memsw, ug->nr_memory);
+		if (!ckernel_restock_uncharge(ug->memcg, ug->nr_memory)) {
+			page_counter_uncharge(&ug->memcg->memory,
+					      ug->nr_memory);
+			if (do_memsw_account())
+				page_counter_uncharge(&ug->memcg->memsw,
+						      ug->nr_memory);
+		}
 		if (ug->nr_kmem)
 			memcg_account_kmem(ug->memcg, -ug->nr_kmem);
 		memcg_oom_recover(ug->memcg);
@@ -8733,7 +9486,17 @@ static void uncharge_folio(struct folio *folio, struct uncharge_gather *ug)
 		ug->pgpgout++;
 
 		WARN_ON_ONCE(folio_unqueue_deferred_split(folio));
+#ifdef CONFIG_FAASCALE_MEMORY
+		if (memcg->faascale &&
+		    region_is_initialized(&memcg->faascale->region) &&
+		    page_in_region(&folio->page, &memcg->faascale->region))
+			page_set_faascale_region(&folio->page,
+					       &memcg->faascale->region);
+		else
+			folio->memcg_data = 0;
+#else
 		folio->memcg_data = 0;
+#endif
 	}
 
 	css_put(&memcg->css);

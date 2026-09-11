@@ -13,6 +13,7 @@
 
 #include <linux/bpf.h>
 #include <linux/capability.h>
+#include <linux/ckernel.h>
 #include <linux/dcache.h>
 #include <linux/export.h>
 #include <linux/init.h>
@@ -29,6 +30,7 @@
 #include <linux/backing-dev.h>
 #include <linux/string.h>
 #include <linux/msg.h>
+#include <linux/net.h>
 #include <net/flow.h>
 
 /* How many LSMs were built into the kernel? */
@@ -4151,6 +4153,68 @@ int security_unix_may_send(struct socket *sock,  struct socket *other)
 }
 EXPORT_SYMBOL(security_unix_may_send);
 
+static struct ckernel *ckernel_socket_lsm_fast_ctx(int family, int type)
+{
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+	int sock_type = type & SOCK_TYPE_MASK;
+
+	if (!ck)
+		return NULL;
+
+	if (!READ_ONCE(ck->fast_check) ||
+	    !READ_ONCE(ck->socket_lsm_fast)) {
+		atomic_long_inc(&ck->socket_fast_fallback);
+		return NULL;
+	}
+
+	if (!ck->ck_net_fast_allow ||
+	    !ck->ck_net_fast_allow(ck, family, sock_type)) {
+		atomic_long_inc(&ck->socket_fast_fallback);
+		return NULL;
+	}
+
+	return ck;
+}
+
+static struct ckernel *
+ckernel_socket_lsm_fast_ctx_sock_policy(struct socket *sock)
+{
+	struct ckernel *ck;
+
+	if (!sock || !sock->sk) {
+		ck = READ_ONCE(current->ckernel);
+		if (ck)
+			atomic_long_inc(&ck->socket_fast_fallback);
+		return NULL;
+	}
+
+	if (!sock->ops) {
+		ck = READ_ONCE(current->ckernel);
+		if (ck)
+			atomic_long_inc(&ck->socket_fast_fallback);
+		return NULL;
+	}
+
+	return ckernel_socket_lsm_fast_ctx(sock->ops->family, sock->type);
+}
+
+static struct ckernel *ckernel_socket_lsm_fast_ctx_sock(struct socket *sock)
+{
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock_policy(sock);
+	if (!ck)
+		return NULL;
+
+	if (!ck->ck_socket_token_check ||
+	    !ck->ck_socket_token_check(ck, sock)) {
+		atomic_long_inc(&ck->socket_fast_fallback);
+		return NULL;
+	}
+
+	return ck;
+}
+
 /**
  * security_socket_create() - Check if creating a new socket is allowed
  * @family: protocol family
@@ -4164,6 +4228,20 @@ EXPORT_SYMBOL(security_unix_may_send);
  */
 int security_socket_create(int family, int type, int protocol, int kern)
 {
+	struct ckernel *ck;
+
+	if (!kern) {
+		ck = ckernel_socket_lsm_fast_ctx(family, type);
+		if (ck) {
+			atomic_long_inc(&ck->socket_create_fast);
+			return 0;
+		}
+	} else {
+		ck = READ_ONCE(current->ckernel);
+		if (ck && READ_ONCE(ck->socket_lsm_fast))
+			atomic_long_inc(&ck->socket_fast_fallback);
+	}
+
 	return call_int_hook(socket_create, 0, family, type, protocol, kern);
 }
 
@@ -4188,8 +4266,19 @@ int security_socket_create(int family, int type, int protocol, int kern)
 int security_socket_post_create(struct socket *sock, int family,
 				int type, int protocol, int kern)
 {
-	return call_int_hook(socket_post_create, 0, sock, family, type,
-			     protocol, kern);
+	struct ckernel *ck;
+	int ret;
+
+	ret = call_int_hook(socket_post_create, 0, sock, family, type,
+			    protocol, kern);
+	if (ret || kern)
+		return ret;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock_policy(sock);
+	if (ck && ck->ck_socket_token_learn)
+		ck->ck_socket_token_learn(ck, sock);
+
+	return 0;
 }
 
 /**
@@ -4223,6 +4312,14 @@ EXPORT_SYMBOL(security_socket_socketpair);
 int security_socket_bind(struct socket *sock,
 			 struct sockaddr *address, int addrlen)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock_policy(sock);
+	if (ck) {
+		atomic_long_inc(&ck->socket_bind_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_bind, 0, sock, address, addrlen);
 }
 
@@ -4240,6 +4337,14 @@ int security_socket_bind(struct socket *sock,
 int security_socket_connect(struct socket *sock,
 			    struct sockaddr *address, int addrlen)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock_policy(sock);
+	if (ck) {
+		atomic_long_inc(&ck->socket_connect_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_connect, 0, sock, address, addrlen);
 }
 
@@ -4254,6 +4359,14 @@ int security_socket_connect(struct socket *sock,
  */
 int security_socket_listen(struct socket *sock, int backlog)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock(sock);
+	if (ck) {
+		atomic_long_inc(&ck->socket_listen_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_listen, 0, sock, backlog);
 }
 
@@ -4270,7 +4383,33 @@ int security_socket_listen(struct socket *sock, int backlog)
  */
 int security_socket_accept(struct socket *sock, struct socket *newsock)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock(sock);
+	if (ck) {
+		/* The child socket is not materialized until after this hook. */
+		atomic_long_inc(&ck->socket_accept_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_accept, 0, sock, newsock);
+}
+
+/**
+ * security_socket_post_accept() - Learn a completed accepted socket
+ * @newsock: accepted socket after the protocol accept operation
+ *
+ * The regular accept hook runs before @newsock has an attached protocol
+ * socket. Learn the object token here so later operations can use the same
+ * checked CKernel socket path as sockets created directly by the task.
+ */
+void security_socket_post_accept(struct socket *newsock)
+{
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock_policy(newsock);
+	if (ck && ck->ck_socket_token_learn)
+		ck->ck_socket_token_learn(ck, newsock);
 }
 
 /**
@@ -4285,6 +4424,12 @@ int security_socket_accept(struct socket *sock, struct socket *newsock)
  */
 int security_socket_sendmsg(struct socket *sock, struct msghdr *msg, int size)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock_policy(sock);
+	if (ck)
+		return 0;
+
 	return call_int_hook(socket_sendmsg, 0, sock, msg, size);
 }
 
@@ -4302,6 +4447,12 @@ int security_socket_sendmsg(struct socket *sock, struct msghdr *msg, int size)
 int security_socket_recvmsg(struct socket *sock, struct msghdr *msg,
 			    int size, int flags)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock_policy(sock);
+	if (ck)
+		return 0;
+
 	return call_int_hook(socket_recvmsg, 0, sock, msg, size, flags);
 }
 
@@ -4316,6 +4467,14 @@ int security_socket_recvmsg(struct socket *sock, struct msghdr *msg,
  */
 int security_socket_getsockname(struct socket *sock)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock(sock);
+	if (ck) {
+		atomic_long_inc(&ck->socket_option_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_getsockname, 0, sock);
 }
 
@@ -4329,6 +4488,14 @@ int security_socket_getsockname(struct socket *sock)
  */
 int security_socket_getpeername(struct socket *sock)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock(sock);
+	if (ck) {
+		atomic_long_inc(&ck->socket_option_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_getpeername, 0, sock);
 }
 
@@ -4345,6 +4512,14 @@ int security_socket_getpeername(struct socket *sock)
  */
 int security_socket_getsockopt(struct socket *sock, int level, int optname)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock(sock);
+	if (ck) {
+		atomic_long_inc(&ck->socket_option_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_getsockopt, 0, sock, level, optname);
 }
 
@@ -4360,6 +4535,14 @@ int security_socket_getsockopt(struct socket *sock, int level, int optname)
  */
 int security_socket_setsockopt(struct socket *sock, int level, int optname)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock(sock);
+	if (ck) {
+		atomic_long_inc(&ck->socket_option_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_setsockopt, 0, sock, level, optname);
 }
 
@@ -4375,6 +4558,14 @@ int security_socket_setsockopt(struct socket *sock, int level, int optname)
  */
 int security_socket_shutdown(struct socket *sock, int how)
 {
+	struct ckernel *ck;
+
+	ck = ckernel_socket_lsm_fast_ctx_sock(sock);
+	if (ck) {
+		atomic_long_inc(&ck->socket_shutdown_fast);
+		return 0;
+	}
+
 	return call_int_hook(socket_shutdown, 0, sock, how);
 }
 

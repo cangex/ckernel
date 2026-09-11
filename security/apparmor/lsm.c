@@ -13,6 +13,8 @@
 #include <linux/mm.h>
 #include <linux/mman.h>
 #include <linux/mount.h>
+#include <linux/net.h>
+#include <linux/pipe_fs_i.h>
 #include <linux/namei.h>
 #include <linux/ptrace.h>
 #include <linux/ctype.h>
@@ -55,6 +57,41 @@ static int buffer_count;
 
 static LIST_HEAD(aa_global_buffers);
 static DEFINE_SPINLOCK(aa_buffers_lock);
+
+static struct ckernel *ckernel_fast_ctx(void)
+{
+	/*
+	 * Retrieve ckernel context if fast-path is enabled.
+	 * Uses READ_ONCE to avoid races.
+	 */
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+	if (ck && READ_ONCE(ck->fast_check))
+		return ck;
+	return NULL;
+}
+
+static bool ckernel_socket_stock_fast(struct socket *sock)
+{
+	struct ckernel *ck = ckernel_fast_ctx();
+	struct aa_sk_ctx *ctx;
+
+	if (!ck || !sock || !sock->sk)
+		return false;
+	ctx = SK_CTX(sock->sk);
+	if (!ctx || !READ_ONCE(ctx->fast_path))
+		return false;
+
+	/* Preserve the fixed socket path when the candidate stock is disabled. */
+	if (!READ_ONCE(ck->socket_stock_enabled))
+		return true;
+	if (!READ_ONCE(ck->socket_lsm_fast) ||
+	    !READ_ONCE(ck->ck_socket_token_check) ||
+	    !ck->ck_socket_token_check(ck, sock))
+		return false;
+
+	ck_socket_stock_count(ck, CK_SOCKET_STOCK_HOOK_FAST);
+	return true;
+}
 
 /*
  * LSM hook functions
@@ -212,10 +249,13 @@ static int common_perm(const char *op, const struct path *path, u32 mask,
 		       struct path_cond *cond)
 {
 	struct aa_label *label;
+	struct ckernel *ck;
 	int error = 0;
 
 	label = __begin_current_label_crit_section();
-	if (!unconfined(label))
+	ck = ckernel_fast_ctx();
+	if (!unconfined(label) &&
+	    (!ck || !ck->ck_check_path(ck, path)))
 		error = aa_path_perm(op, current_cred(), label, path, 0, mask,
 				     cond);
 	__end_current_label_crit_section(label);
@@ -358,6 +398,10 @@ static int apparmor_path_link(struct dentry *old_dentry, const struct path *new_
 	struct aa_label *label;
 	int error = 0;
 
+	struct ckernel *ck = ckernel_fast_ctx();
+	if (ck && ck->ck_check_path(ck, new_dir))
+		return 0;
+
 	if (!path_mediated_fs(old_dentry))
 		return 0;
 
@@ -380,6 +424,12 @@ static int apparmor_path_rename(const struct path *old_dir, struct dentry *old_d
 	if (!path_mediated_fs(old_dentry))
 		return 0;
 	if ((flags & RENAME_EXCHANGE) && !path_mediated_fs(new_dentry))
+		return 0;
+
+	struct ckernel *ck = ckernel_fast_ctx();
+	if (ck &&
+	    ck->ck_check_path(ck, old_dir) &&
+	    ck->ck_check_path(ck, new_dir))
 		return 0;
 
 	label = begin_current_label_crit_section();
@@ -448,6 +498,23 @@ static int apparmor_inode_getattr(const struct path *path)
 	return common_perm_cond(OP_GETATTR, path, AA_MAY_GETATTR);
 }
 
+static void apparmor_file_cache_label(struct aa_file_ctx *ctx,
+				      struct aa_label *label)
+{
+	spin_lock(&ctx->lock);
+	if (!rcu_access_pointer(ctx->label))
+		rcu_assign_pointer(ctx->label, aa_get_label(label));
+	spin_unlock(&ctx->lock);
+}
+
+static void apparmor_file_materialize_label(struct file *file)
+{
+	struct aa_label *label = aa_get_newest_cred_label(file->f_cred);
+
+	apparmor_file_cache_label(file_ctx(file), label);
+	aa_put_label(label);
+}
+
 static int apparmor_file_open(struct file *file)
 {
 	struct aa_file_ctx *fctx = file_ctx(file);
@@ -469,7 +536,25 @@ static int apparmor_file_open(struct file *file)
 		return 0;
 	}
 
+	struct ckernel *ck = ckernel_fast_ctx();
+	if (ck && file->f_ck_vfs_ref &&
+	    READ_ONCE(file->f_ck_vfs_ref->immutable_lease) &&
+	    READ_ONCE(file->f_ck_vfs_ref->ckernel_cookie) ==
+	    READ_ONCE(ck->cookie)) {
+		fctx->fast_ckernel_cookie = READ_ONCE(ck->cookie);
+		fctx->fast_path = true;
+		fctx->allow = aa_map_file_to_perms(file);
+		return 0;
+	}
+	if (ck && ck->ck_check_path(ck, &file->f_path)) {
+		fctx->fast_ckernel_cookie = READ_ONCE(ck->cookie);
+		fctx->fast_path = true;
+		fctx->allow = aa_map_file_to_perms(file);
+		return 0;
+	}
+
 	label = aa_get_newest_cred_label(file->f_cred);
+	apparmor_file_cache_label(fctx, label);
 	if (!unconfined(label)) {
 		struct mnt_idmap *idmap = file_mnt_idmap(file);
 		struct inode *inode = file_inode(file);
@@ -494,9 +579,18 @@ static int apparmor_file_open(struct file *file)
 static int apparmor_file_alloc_security(struct file *file)
 {
 	struct aa_file_ctx *ctx = file_ctx(file);
-	struct aa_label *label = begin_current_label_crit_section();
+	struct aa_label *label;
 
 	spin_lock_init(&ctx->lock);
+	ctx->fast_path = false;
+	ctx->fast_ckernel_cookie = 0;
+	RCU_INIT_POINTER(ctx->label, NULL);
+
+	/* The path is not known until file_open; defer the shared label ref. */
+	if (ckernel_fast_ctx())
+		return 0;
+
+	label = begin_current_label_crit_section();
 	rcu_assign_pointer(ctx->label, aa_get_label(label));
 	end_current_label_crit_section(label);
 	return 0;
@@ -505,20 +599,77 @@ static int apparmor_file_alloc_security(struct file *file)
 static void apparmor_file_free_security(struct file *file)
 {
 	struct aa_file_ctx *ctx = file_ctx(file);
+	struct aa_label *label;
 
-	if (ctx)
-		aa_put_label(rcu_access_pointer(ctx->label));
+	if (ctx) {
+		label = rcu_access_pointer(ctx->label);
+		if (label)
+			aa_put_label(label);
+	}
 }
 
 static int common_file_perm(const char *op, struct file *file, u32 mask,
 			    bool in_atomic)
 {
+	struct socket *sock;
 	struct aa_label *label;
 	int error = 0;
 
 	/* don't reaudit files closed during inheritance */
 	if (file->f_path.dentry == aa_null.dentry)
 		return -EACCES;
+
+	/*
+	 * Pipes are created through alloc_file_pseudo(), so they never pass
+	 * through security_file_open(). They also live on pipefs (SB_NOUSER),
+	 * so the regular open-time fast-path cache does not apply to them.
+	 *
+	 * Recover the old CKernel optimization narrowly for pipefs only,
+	 * without changing regular-file behavior.
+	 */
+	struct ckernel *ck = ckernel_fast_ctx();
+	struct aa_file_ctx *fctx = file_ctx(file);
+	if (likely(READ_ONCE(fctx->fast_path))) {
+		if (likely(ck && READ_ONCE(ck->fast_check) &&
+		    READ_ONCE(fctx->fast_ckernel_cookie) ==
+		    READ_ONCE(ck->cookie))) {
+			if (READ_ONCE(ck->socket_stock_enabled) &&
+			    S_ISSOCK(file_inode(file)->i_mode))
+				ck_socket_stock_count(
+					ck, CK_SOCKET_STOCK_FILE_PERM_FAST);
+			return 0;
+		}
+		return -EACCES;
+	}
+
+	/*
+	 * Socket files do not pass security_file_open(), so AppArmor otherwise
+	 * materializes and revalidates their label on every read/write. Cache the
+	 * result only when the socket carries this instance's lifetime token.
+	 */
+	sock = sock_from_file(file);
+	if (ck && sock && READ_ONCE(ck->socket_lsm_fast) &&
+	    ck->ck_socket_token_check &&
+	    ck->ck_socket_token_check(ck, sock)) {
+		WRITE_ONCE(fctx->fast_ckernel_cookie, READ_ONCE(ck->cookie));
+		WRITE_ONCE(fctx->fast_path, true);
+		if (READ_ONCE(ck->socket_stock_enabled))
+			ck_socket_stock_count(ck,
+					      CK_SOCKET_STOCK_FILE_PERM_FAST);
+		else
+			atomic_long_inc(&ck->socket_file_perm_fast);
+		return 0;
+	}
+
+	if (ck && ck->fast_check && !fctx->fast_path &&
+	    get_pipe_info(file, false)) {
+		fctx->fast_ckernel_cookie = READ_ONCE(ck->cookie);
+		fctx->fast_path = true;
+		return 0;
+	}
+
+	if (!fctx->fast_path && !rcu_access_pointer(fctx->label))
+		apparmor_file_materialize_label(file);
 
 	label = __begin_current_label_crit_section();
 	error = aa_file_perm(op, current_cred(), label, file, mask, in_atomic);
@@ -825,12 +976,107 @@ static int apparmor_task_setrlimit(struct task_struct *task,
 	return error;
 }
 
+struct ck_task_security_cache_domain {
+	struct aa_label *self_signal_label;
+};
+
+static void ck_task_security_cache_destroy(struct ckernel *ck)
+{
+	struct ck_task_security_cache_domain *domain;
+
+	domain = xchg(&ck->task_security_cache_domain, NULL);
+	if (!domain)
+		return;
+	aa_put_label(domain->self_signal_label);
+	kfree(domain);
+}
+
+static bool ck_task_security_label_unmediated(struct aa_label *label)
+{
+	struct aa_profile *profile;
+	struct label_it i;
+
+	label_for_each(i, label, profile) {
+		if (!profile_unconfined(profile) &&
+		    ANY_RULE_MEDIATES(&profile->rules, AA_CLASS_SIGNAL))
+			return false;
+	}
+	return true;
+}
+
+static void ck_task_security_cache_hit(struct ckernel *ck)
+{
+	unsigned long *hits;
+
+	preempt_disable();
+	hits = this_cpu_ptr(ck->task_security_cache_hits);
+	(*hits)++;
+	preempt_enable();
+}
+
+static bool ck_task_security_self_signal_fast(struct ckernel *ck,
+					      struct aa_label *label)
+{
+	struct ck_task_security_cache_domain *domain, *old;
+
+	domain = smp_load_acquire(&ck->task_security_cache_domain);
+	if (domain) {
+		if (READ_ONCE(domain->self_signal_label) == label &&
+		    !label_is_stale(label)) {
+			ck_task_security_cache_hit(ck);
+			return true;
+		}
+		atomic_long_inc(&ck->task_security_cache_fallbacks);
+		return false;
+	}
+
+	atomic_long_inc(&ck->task_security_cache_misses);
+	if (label_is_stale(label) ||
+	    !ck_task_security_label_unmediated(label)) {
+		atomic_long_inc(&ck->task_security_cache_fallbacks);
+		return false;
+	}
+
+	domain = kzalloc(sizeof(*domain), GFP_ATOMIC);
+	if (!domain) {
+		atomic_long_inc(&ck->task_security_cache_fallbacks);
+		return false;
+	}
+	domain->self_signal_label = aa_get_label(label);
+	WRITE_ONCE(ck->ck_task_security_cache_destroy,
+		   ck_task_security_cache_destroy);
+	smp_wmb();
+	old = cmpxchg(&ck->task_security_cache_domain, NULL, domain);
+	if (old) {
+		aa_put_label(domain->self_signal_label);
+		kfree(domain);
+		domain = old;
+	} else {
+		atomic_long_inc(&ck->task_security_cache_learns);
+	}
+
+	if (READ_ONCE(domain->self_signal_label) != label) {
+		atomic_long_inc(&ck->task_security_cache_fallbacks);
+		return false;
+	}
+	return true;
+}
+
 static int apparmor_task_kill(struct task_struct *target, struct kernel_siginfo *info,
 			      int sig, const struct cred *cred)
 {
 	const struct cred *tc;
 	struct aa_label *cl, *tl;
 	int error;
+
+	if (!cred && target == current && sig > 0) {
+		struct ckernel *ck = READ_ONCE(current->ckernel);
+
+		if (ck && READ_ONCE(ck->task_security_cache_enabled) &&
+		    ck_task_security_self_signal_fast(ck,
+						      aa_current_raw_label()))
+			return 0;
+	}
 
 	tc = get_task_cred(target);
 	tl = aa_get_newest_cred_label(tc);
@@ -863,6 +1109,13 @@ static int apparmor_sk_alloc_security(struct sock *sk, int family, gfp_t flags)
 	if (!ctx)
 		return -ENOMEM;
 
+	/*
+	 * Mark socket as fast-path if allowed by ckernel policy.
+	 */
+	struct ckernel *ck = ckernel_fast_ctx();
+	if (ck && ck->ck_net_fast_allow(ck, family, sk->sk_type))
+		ctx->fast_path = true;
+
 	SK_CTX(sk) = ctx;
 
 	return 0;
@@ -889,6 +1142,7 @@ static void apparmor_sk_clone_security(const struct sock *sk,
 {
 	struct aa_sk_ctx *ctx = SK_CTX(sk);
 	struct aa_sk_ctx *new = SK_CTX(newsk);
+	struct ckernel *ck = READ_ONCE(current->ckernel);
 
 	if (new->label)
 		aa_put_label(new->label);
@@ -897,6 +1151,15 @@ static void apparmor_sk_clone_security(const struct sock *sk,
 	if (new->peer)
 		aa_put_label(new->peer);
 	new->peer = aa_get_label(ctx->peer);
+	if (READ_ONCE(sk->sk_ckernel_cookie)) {
+		WRITE_ONCE(newsk->sk_ckernel_cookie,
+			   READ_ONCE(sk->sk_ckernel_cookie));
+		WRITE_ONCE(new->fast_path, READ_ONCE(ctx->fast_path));
+		if (ck && READ_ONCE(ck->socket_stock_enabled) &&
+		    READ_ONCE(sk->sk_ckernel_cookie) == READ_ONCE(ck->cookie))
+			ck_socket_stock_count(ck,
+					      CK_SOCKET_STOCK_CLONE_INHERIT);
+	}
 }
 
 /**
@@ -908,6 +1171,10 @@ static int apparmor_socket_create(int family, int type, int protocol, int kern)
 	int error = 0;
 
 	AA_BUG(in_interrupt());
+
+	struct ckernel *ck = ckernel_fast_ctx();
+	if (ck && ck->ck_net_fast_allow(ck, family, type))
+		return 0;
 
 	label = begin_current_label_crit_section();
 	if (!(kern || unconfined(label)))
@@ -943,9 +1210,14 @@ static int apparmor_socket_post_create(struct socket *sock, int family,
 
 	if (sock->sk) {
 		struct aa_sk_ctx *ctx = SK_CTX(sock->sk);
+		struct ckernel *ck = ckernel_fast_ctx();
 
 		aa_put_label(ctx->label);
 		ctx->label = aa_get_label(label);
+		if (ck && READ_ONCE(ck->socket_stock_enabled) &&
+		    READ_ONCE(ctx->fast_path) &&
+		    READ_ONCE(ck->ck_socket_token_learn))
+			ck->ck_socket_token_learn(ck, sock);
 	}
 	aa_put_label(label);
 
@@ -963,6 +1235,9 @@ static int apparmor_socket_bind(struct socket *sock,
 	AA_BUG(!address);
 	AA_BUG(in_interrupt());
 
+	if (ckernel_socket_stock_fast(sock))
+		return 0;
+
 	return af_select(sock->sk->sk_family,
 			 bind_perm(sock, address, addrlen),
 			 aa_sk_perm(OP_BIND, AA_MAY_BIND, sock->sk));
@@ -979,6 +1254,9 @@ static int apparmor_socket_connect(struct socket *sock,
 	AA_BUG(!address);
 	AA_BUG(in_interrupt());
 
+	if (ckernel_socket_stock_fast(sock))
+		return 0;
+
 	return af_select(sock->sk->sk_family,
 			 connect_perm(sock, address, addrlen),
 			 aa_sk_perm(OP_CONNECT, AA_MAY_CONNECT, sock->sk));
@@ -992,6 +1270,9 @@ static int apparmor_socket_listen(struct socket *sock, int backlog)
 	AA_BUG(!sock);
 	AA_BUG(!sock->sk);
 	AA_BUG(in_interrupt());
+
+	if (ckernel_socket_stock_fast(sock))
+		return 0;
 
 	return af_select(sock->sk->sk_family,
 			 listen_perm(sock, backlog),
@@ -1011,6 +1292,9 @@ static int apparmor_socket_accept(struct socket *sock, struct socket *newsock)
 	AA_BUG(!newsock);
 	AA_BUG(in_interrupt());
 
+	if (ckernel_socket_stock_fast(sock))
+		return 0;
+
 	return af_select(sock->sk->sk_family,
 			 accept_perm(sock, newsock),
 			 aa_sk_perm(OP_ACCEPT, AA_MAY_ACCEPT, sock->sk));
@@ -1023,6 +1307,9 @@ static int aa_sock_msg_perm(const char *op, u32 request, struct socket *sock,
 	AA_BUG(!sock->sk);
 	AA_BUG(!msg);
 	AA_BUG(in_interrupt());
+
+	if (ckernel_socket_stock_fast(sock))
+		return 0;
 
 	return af_select(sock->sk->sk_family,
 			 msg_perm(op, request, sock, msg, size),
@@ -1054,6 +1341,9 @@ static int aa_sock_perm(const char *op, u32 request, struct socket *sock)
 	AA_BUG(!sock->sk);
 	AA_BUG(in_interrupt());
 
+	if (ckernel_socket_stock_fast(sock))
+		return 0;
+
 	return af_select(sock->sk->sk_family,
 			 sock_perm(op, request, sock),
 			 aa_sk_perm(op, request, sock->sk));
@@ -1082,6 +1372,9 @@ static int aa_sock_opt_perm(const char *op, u32 request, struct socket *sock,
 	AA_BUG(!sock);
 	AA_BUG(!sock->sk);
 	AA_BUG(in_interrupt());
+
+	if (ckernel_socket_stock_fast(sock))
+		return 0;
 
 	return af_select(sock->sk->sk_family,
 			 opt_perm(op, request, sock, level, optname),
@@ -1139,6 +1432,9 @@ static int apparmor_socket_sock_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	if (!ctx->label)
 		return -EACCES;
 
+	if (ctx && ctx->fast_path)
+		return 0;
+
 	return apparmor_secmark_check(ctx->label, OP_RECVMSG, AA_MAY_RECEIVE,
 				      skb->secmark, sk);
 }
@@ -1168,6 +1464,10 @@ static int apparmor_socket_getpeersec_stream(struct socket *sock,
 	int slen, error = 0;
 	struct aa_label *label;
 	struct aa_label *peer;
+
+	struct aa_sk_ctx *ctx = SK_CTX(sock->sk);
+	if (ctx && ctx->fast_path)
+		return 0;
 
 	label = begin_current_label_crit_section();
 	peer = sk_peer_label(sock->sk);

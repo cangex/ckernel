@@ -958,8 +958,31 @@ EXPORT_SYMBOL_GPL(vm_memory_committed);
 int __vm_enough_memory(struct mm_struct *mm, long pages, int cap_sys_admin)
 {
 	long allowed;
+#ifdef CONFIG_FAASCALE_MEMORY
+	struct mem_cgroup *memcg;
+	struct faascale_memcg_state *state;
+	unsigned long used_pages;
+#endif
 
 	vm_acct_memory(pages);
+
+#ifdef CONFIG_FAASCALE_MEMORY
+	memcg = get_mem_cgroup_from_mm(mm);
+	if (memcg) {
+		state = memcg_faascale_state(memcg);
+		if (state && READ_ONCE(state->enabled)) {
+			used_pages = page_counter_read(&memcg->memory);
+			if ((READ_ONCE(state->provisioned_size) >> PAGE_SHIFT) <
+			    pages + used_pages) {
+				css_put(&memcg->css);
+				goto error;
+			}
+			css_put(&memcg->css);
+			return 0;
+		}
+		css_put(&memcg->css);
+	}
+#endif
 
 	/*
 	 * Sometimes we want to use more memory than we have

@@ -51,6 +51,7 @@
 	gfpflag_string(__GFP_DIRECT_RECLAIM),	\
 	gfpflag_string(__GFP_KSWAPD_RECLAIM),	\
 	gfpflag_string(__GFP_ZEROTAGS),		\
+	gfpflag_string(__GFP_FAASCALE),		\
 	gfpflag_string(__GFP_RELIABLE)
 
 #ifdef CONFIG_KASAN_HW_TAGS

@@ -41,6 +41,7 @@
 #include <linux/bitops.h>
 #include <linux/init_task.h>
 #include <linux/uaccess.h>
+#include <linux/ckernel.h>
 
 #include "internal.h"
 #include "mount.h"
@@ -3846,12 +3847,76 @@ static struct file *path_openat(struct nameidata *nd,
 	return ERR_PTR(error);
 }
 
+static bool ck_vfs_ref_open_supported(const struct filename *pathname,
+				      const struct open_flags *op)
+{
+	unsigned int allowed_flags = O_LARGEFILE | O_NOATIME;
+
+	if (!pathname || !pathname->name || pathname->name[0] != '/')
+		return false;
+	if ((op->open_flag & O_ACCMODE) != O_RDONLY ||
+	    (op->open_flag & ~allowed_flags) ||
+	    op->acc_mode != MAY_READ ||
+	    op->intent != LOOKUP_OPEN)
+		return false;
+	return op->lookup_flags == LOOKUP_FOLLOW;
+}
+
+static struct file *
+ck_vfs_ref_open(struct filename *pathname, const struct open_flags *op)
+{
+	struct ckernel *ck = READ_ONCE(current->ckernel);
+	ck_vfs_ref_lookup_fn lookup;
+	struct ck_vfs_ref *ref;
+	struct file *file;
+	struct path path;
+	int error;
+
+	if (!ck || !ck_vfs_ref_open_supported(pathname, op))
+		return NULL;
+	lookup = READ_ONCE(ck->ck_vfs_ref_lookup);
+	if (!READ_ONCE(ck->vfs_ref_enabled) || !lookup)
+		return NULL;
+
+	ref = lookup(ck, pathname->name, CK_VFS_REF_OPEN, &path);
+	if (!ref)
+		return NULL;
+
+	file = alloc_empty_file(op->open_flag, current_cred());
+	if (IS_ERR(file)) {
+		ref->put(ref);
+		return file;
+	}
+	error = may_open(mnt_idmap(path.mnt), &path, op->acc_mode,
+			 op->open_flag);
+	if (error) {
+		ref->put(ref);
+		fput(file);
+		return ERR_PTR(error);
+	}
+
+	audit_inode(pathname, path.dentry, 0);
+	error = vfs_open_ckernel_ref(&path, file, ref);
+	if (!error)
+		error = ima_file_check(file, op->acc_mode);
+	if (error) {
+		fput(file);
+		return ERR_PTR(error);
+	}
+	return file;
+}
+
 struct file *do_filp_open(int dfd, struct filename *pathname,
 		const struct open_flags *op)
 {
+	struct ckernel *ck = READ_ONCE(current->ckernel);
 	struct nameidata nd;
 	int flags = op->lookup_flags;
 	struct file *filp;
+
+	filp = ck_vfs_ref_open(pathname, op);
+	if (filp)
+		return filp;
 
 	set_nameidata(&nd, dfd, pathname, NULL);
 	filp = path_openat(&nd, op, flags | LOOKUP_RCU);
@@ -3860,6 +3925,10 @@ struct file *do_filp_open(int dfd, struct filename *pathname,
 	if (unlikely(filp == ERR_PTR(-ESTALE)))
 		filp = path_openat(&nd, op, flags | LOOKUP_REVAL);
 	restore_nameidata();
+	if (!IS_ERR(filp) && ck && ck_vfs_ref_open_supported(pathname, op) &&
+	    READ_ONCE(ck->vfs_ref_enabled) &&
+	    READ_ONCE(ck->ck_vfs_ref_learn))
+		ck->ck_vfs_ref_learn(ck, pathname->name, &filp->f_path);
 	return filp;
 }
 

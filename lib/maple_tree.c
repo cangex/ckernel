@@ -54,10 +54,15 @@
 
 
 #include <linux/maple_tree.h>
+#include <linux/ckernel.h>
 #include <linux/xarray.h>
 #include <linux/types.h>
 #include <linux/export.h>
+#include <linux/jump_label.h>
+#include <linux/percpu.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/smp.h>
 #include <linux/limits.h>
 #include <asm/barrier.h>
 
@@ -81,6 +86,105 @@
 #define ma_mnode_ptr(x) ((struct maple_node *)(x))
 #define ma_enode_ptr(x) ((struct maple_enode *)(x))
 static struct kmem_cache *maple_node_cache;
+
+#define CK_MAPLE_STOCK_MAX 16
+
+struct ck_maple_stock {
+	u64 cookie;
+	unsigned int nr;
+	struct maple_node *nodes[CK_MAPLE_STOCK_MAX];
+};
+
+static DEFINE_PER_CPU(struct ck_maple_stock, ck_maple_stocks);
+static DEFINE_STATIC_KEY_FALSE(ck_maple_meta_key);
+
+static void ck_maple_stock_flush(struct ck_maple_stock *stock)
+{
+	while (stock->nr)
+		kmem_cache_free(maple_node_cache, stock->nodes[--stock->nr]);
+	stock->cookie = 0;
+}
+
+static void ck_maple_stock_flush_cpu(void *unused)
+{
+	ck_maple_stock_flush(this_cpu_ptr(&ck_maple_stocks));
+}
+
+void ck_maple_meta_domain_enable(void)
+{
+	static_branch_enable(&ck_maple_meta_key);
+}
+EXPORT_SYMBOL_GPL(ck_maple_meta_domain_enable);
+
+void ck_maple_meta_domain_disable(void)
+{
+	static_branch_disable(&ck_maple_meta_key);
+	on_each_cpu(ck_maple_stock_flush_cpu, NULL, 1);
+}
+EXPORT_SYMBOL_GPL(ck_maple_meta_domain_disable);
+
+static struct maple_node *ck_maple_stock_pop(void)
+{
+	struct ckernel *ck;
+	struct ck_mm_meta_stats *stats;
+	struct ck_maple_stock *stock;
+	struct maple_node *node = NULL;
+
+	if (!static_branch_unlikely(&ck_maple_meta_key))
+		return NULL;
+	ck = READ_ONCE(current->ckernel);
+	if (!ck || !READ_ONCE(ck->mm_meta_domain_enabled) ||
+	    !READ_ONCE(ck->mm_meta_stats))
+		return NULL;
+
+	preempt_disable();
+	stock = this_cpu_ptr(&ck_maple_stocks);
+	stats = this_cpu_ptr(ck->mm_meta_stats);
+	if (unlikely(stock->cookie != READ_ONCE(ck->cookie))) {
+		ck_maple_stock_flush(stock);
+		stock->cookie = READ_ONCE(ck->cookie);
+	}
+	if (likely(stock->nr)) {
+		node = stock->nodes[--stock->nr];
+		stats->hits++;
+	} else {
+		stats->misses++;
+	}
+	preempt_enable();
+	return node;
+}
+
+static bool ck_maple_stock_push(struct maple_node *node)
+{
+	struct ckernel *ck;
+	struct ck_mm_meta_stats *stats;
+	struct ck_maple_stock *stock;
+	bool stored = false;
+
+	if (!static_branch_unlikely(&ck_maple_meta_key))
+		return false;
+	ck = READ_ONCE(current->ckernel);
+	if (!ck || !READ_ONCE(ck->mm_meta_domain_enabled) ||
+	    !READ_ONCE(ck->mm_meta_stats))
+		return false;
+
+	preempt_disable();
+	stock = this_cpu_ptr(&ck_maple_stocks);
+	stats = this_cpu_ptr(ck->mm_meta_stats);
+	if (unlikely(stock->cookie != READ_ONCE(ck->cookie))) {
+		ck_maple_stock_flush(stock);
+		stock->cookie = READ_ONCE(ck->cookie);
+	}
+	if (likely(stock->nr < CK_MAPLE_STOCK_MAX)) {
+		stock->nodes[stock->nr++] = node;
+		stats->returns++;
+		stored = true;
+	} else {
+		stats->evictions++;
+	}
+	preempt_enable();
+	return stored;
+}
 
 #ifdef CONFIG_DEBUG_MAPLE_TREE
 static const unsigned long mt_max[] = {
@@ -159,22 +263,46 @@ struct maple_subtree_state {
 /* Functions */
 static inline struct maple_node *mt_alloc_one(gfp_t gfp)
 {
-	return kmem_cache_alloc(maple_node_cache, gfp);
+	struct maple_node *node = ck_maple_stock_pop();
+
+	return node ? node : kmem_cache_alloc(maple_node_cache, gfp);
 }
 
 static inline int mt_alloc_bulk(gfp_t gfp, size_t size, void **nodes)
 {
-	return kmem_cache_alloc_bulk(maple_node_cache, gfp, size, nodes);
+	size_t count = 0;
+	struct maple_node *node;
+
+	while (count < size && (node = ck_maple_stock_pop()))
+		nodes[count++] = node;
+	if (count < size)
+		count += kmem_cache_alloc_bulk(maple_node_cache, gfp,
+					       size - count, nodes + count);
+	return count;
 }
 
 static inline void mt_free_one(struct maple_node *node)
 {
-	kmem_cache_free(maple_node_cache, node);
+	if (!ck_maple_stock_push(node))
+		kmem_cache_free(maple_node_cache, node);
 }
 
 static inline void mt_free_bulk(size_t size, void __rcu **nodes)
 {
-	kmem_cache_free_bulk(maple_node_cache, size, (void **)nodes);
+	struct ckernel *ck;
+	size_t index;
+
+	if (!static_branch_unlikely(&ck_maple_meta_key)) {
+		kmem_cache_free_bulk(maple_node_cache, size, (void **)nodes);
+		return;
+	}
+	ck = READ_ONCE(current->ckernel);
+	if (!ck || !READ_ONCE(ck->mm_meta_domain_enabled)) {
+		kmem_cache_free_bulk(maple_node_cache, size, (void **)nodes);
+		return;
+	}
+	for (index = 0; index < size; index++)
+		mt_free_one((struct maple_node *)nodes[index]);
 }
 
 static void mt_free_rcu(struct rcu_head *head)

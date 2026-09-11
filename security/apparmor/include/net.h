@@ -49,6 +49,7 @@
 struct aa_sk_ctx {
 	struct aa_label *label;
 	struct aa_label *peer;
+	bool fast_path;
 };
 
 #define SK_CTX(X) ((X)->sk_security)
