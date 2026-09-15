@@ -7,6 +7,7 @@ TARGETS += breakpoints
 TARGETS += cachestat
 TARGETS += capabilities
 TARGETS += cgroup
+TARGETS += ckernel_m
 TARGETS += clone3
 TARGETS += connector
 TARGETS += core

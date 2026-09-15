@@ -1,0 +1,20 @@
+CKernel-M small correctness regressions
+======================================
+
+Run only inside the dedicated guest. run_isolated.sh refuses accidental
+host execution unless CKM_ISOLATED_GUEST=1 is explicitly set.
+
+make -C tools/testing/selftests/ckernel_m
+CKM_ISOLATED_GUEST=1 tools/testing/selftests/ckernel_m/run_isolated.sh
+
+Each program has a 60-second timeout and returns 0 (PASS), 1 (FAIL), or
+4 (SKIP). The lifecycle ABI test skips when the header or device is absent.
+fd tests RLIMIT_NOFILE, fork inheritance and CLONE_FILES. maple_lifecycle
+tests VMA splits/merges, duplication, CLONE_VM, brk and mremap.
+lsm tests DAC denial, seccomp refusal and (when available) rejection of a
+transition to a nonexistent AppArmor profile. Policy load/reload remains
+explicitly untested, not a passed LSM policy regression.
+No program changes host sysctls or removes unrelated processes/resources.
+
+These small tests are necessary smoke checks, not semantic equivalence,
+fault-injection coverage or a performance/isolation acceptance suite.
