@@ -1,0 +1,16 @@
+config CKERNEL_M
+	bool "Experimental CKernel-M instance ownership"
+	depends on CGROUPS && MEMCG_KMEM && NUMA && 64BIT
+	default n
+	help
+	  Host-controlled ownership contexts for opt-in kernel state locality.
+	  This is experimental and does not provide a kernel security boundary.
+	  No application is enrolled unless a privileged control handle binds it.
+
+config CKERNEL_M_KUNIT_TEST
+	bool "CKernel-M core tests" if !KUNIT_ALL_TESTS
+	depends on KUNIT && CKERNEL_M=y
+	default KUNIT_ALL_TESTS
+	help
+	  Test the control ABI layout. VM lifecycle and permission regressions
+	  remain necessary; this option is not a production deployment switch.

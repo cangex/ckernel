@@ -42,6 +42,7 @@ KMSAN_SANITIZE_kcov.o := n
 CFLAGS_kcov.o := $(call cc-option, -fno-conserve-stack) -fno-stack-protector
 
 obj-y += sched/
+obj-$(CONFIG_CKERNEL_M) += ckernel_m/
 obj-y += locking/
 obj-y += power/
 obj-y += printk/

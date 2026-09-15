@@ -799,6 +799,10 @@ struct task_struct {
 	 */
 	randomized_struct_fields_start
 
+#ifdef CONFIG_CKERNEL_M
+	struct ckm_instance		*ckm_instance;
+#endif
+
 	void				*stack;
 	refcount_t			usage;
 	/* Per task flags (PF_*), defined further below: */

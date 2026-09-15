@@ -13,6 +13,7 @@
  */
 
 #include <linux/anon_inodes.h>
+#include <linux/ckernel_m.h>
 #include <linux/slab.h>
 #include <linux/sched/autogroup.h>
 #include <linux/sched/mm.h>
@@ -608,6 +609,7 @@ void put_task_stack(struct task_struct *tsk)
 
 void free_task(struct task_struct *tsk)
 {
+	ckm_task_free(tsk);
 #ifdef CONFIG_SECCOMP
 	WARN_ON_ONCE(tsk->seccomp.filter);
 #endif
@@ -1276,6 +1278,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 #ifdef CONFIG_FAST_SYSCALL
 	tsk->xinfo = NULL;
 #endif
+	ckm_task_fork(tsk, orig);
 	return tsk;
 
 free_stack:
@@ -1390,6 +1393,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	sp_init_mm(mm);
 	mm->user_ns = get_user_ns(user_ns);
 	lru_gen_init_mm(mm);
+	ckm_mm_init(mm, p);
 	return mm;
 
 fail_cid:
@@ -1425,6 +1429,7 @@ static inline void __mmput(struct mm_struct *mm)
 	ksm_exit(mm);
 	khugepaged_exit(mm); /* must run before exit_mmap */
 	exit_mmap(mm);
+	ckm_mm_exit(mm);
 	sp_mm_clean(mm);
 	mm_put_huge_zero_page(mm);
 	set_mm_exe_file(mm, NULL);
