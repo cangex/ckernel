@@ -182,19 +182,8 @@ static inline int mt_alloc_bulk(struct maple_tree *mt, gfp_t gfp,
 			       size_t size, void **nodes)
 {
 #ifdef CONFIG_CKERNEL_M_MAPLE
-	size_t n;
-
-	if (mt->ma_ckm_owner) {
-		for (n = 0; n < size; n++) {
-			nodes[n] = mt_alloc_one(mt, gfp);
-			if (!nodes[n]) {
-				while (n)
-					mt_free_one(nodes[--n]);
-				return 0;
-			}
-		}
-		return size;
-	}
+	if (mt->ma_ckm_owner)
+		return ckm_maple_alloc_bulk(mt, maple_node_cache, gfp, size, nodes);
 #endif
 	return kmem_cache_alloc_bulk(maple_node_cache, gfp, size, nodes);
 }

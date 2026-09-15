@@ -71,6 +71,11 @@ Counters are observational, not hard-limit accounting. Concurrent snapshots
 can observe in-progress reservation/transition; evaluate conservation only
 after quiescence. All memory costs must be included in performance claims.
 
+The additive CKM_IOC_DIAGNOSTICS query reports reason-specific fallback node
+requests, native bulk calls, registrations and release outcomes. The existing
+QUERY layout is unchanged. See ../ckernel-m/m2-convergence.rst for counter
+units, bulk suffix semantics and the same-kernel target/bystander probe.
+
 Validation boundary
 ===================
 

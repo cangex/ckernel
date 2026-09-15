@@ -17,6 +17,9 @@
 
 struct ckm_counters {
 	u64 hits_cpu, hits_numa, misses, fallbacks, returned;
+	u64 reasons[CKM_FB_COUNT];
+	u64 bulk_calls, bulk_requested, bulk_completed, bulk_failed;
+	u64 registered, alloc_failed, dispose_inactive, dispose_full;
 };
 
 struct ckm_instance {
@@ -42,7 +45,10 @@ void ckm_revoke(struct ckm_instance *inst);
 int ckm_bind_current(struct ckm_instance *inst);
 int ckm_locality_init(struct ckm_instance *inst);
 bool ckm_locality_compatible(struct ckm_instance *inst, int nid, gfp_t gfp);
+enum ckm_fallback_reason ckm_locality_reason(struct ckm_instance *inst,
+					    int nid, gfp_t gfp);
 void ckm_query_instance(struct ckm_instance *inst, struct ckm_query *q);
+void ckm_query_diagnostics(struct ckm_instance *inst, struct ckm_diagnostics *q);
 static inline bool ckm_active(struct ckm_instance *inst)
 {
 	return atomic_read(&inst->state) == CKM_ACTIVE;

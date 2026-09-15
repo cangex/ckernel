@@ -172,9 +172,72 @@ out:
 	kmem_cache_destroy(cache);
 }
 
+static void ckm_bulk_paths(struct kunit *test)
+{
+	struct ckm_create req = { .features = CKM_FEATURE_MAPLE, .max_nodes = 2 };
+	struct ckm_instance *i, *saved = current->ckm_instance;
+	struct ckm_diagnostics d = {};
+	struct ckm_query q = {};
+	struct kmem_cache *cache;
+	struct maple_tree mt;
+	void *nodes[8];
+	unsigned int n, pass;
+	u64 sum = 0;
+	int count;
+
+	cache = kmem_cache_create("ckm_kunit_bulk", sizeof(struct maple_node),
+				 sizeof(struct maple_node), 0, ckm_test_ctor);
+	KUNIT_ASSERT_NOT_NULL(test, cache);
+	i = ckm_create_instance(&req);
+	if (IS_ERR(i)) {
+		kmem_cache_destroy(cache);
+		KUNIT_FAIL(test, "instance allocation failed");
+		return;
+	}
+	mt_init(&mt);
+	mt.ma_ckm_owner = i;
+	current->ckm_instance = i;
+	migrate_disable();
+	for (pass = 0; pass < 3; pass++) {
+		/* Unsupported GFP, mixed tracked/native, and revoked owner. */
+		if (pass == 2) {
+			ckm_revoke(i);
+			flush_work(&i->revoke_work);
+		}
+		count = ckm_maple_alloc_bulk(&mt, cache,
+				pass ? GFP_KERNEL : GFP_ATOMIC, ARRAY_SIZE(nodes), nodes);
+		KUNIT_EXPECT_EQ(test, count, (int)ARRAY_SIZE(nodes));
+		for (n = 0; n < count; n++) {
+			KUNIT_EXPECT_NOT_NULL(test, nodes[n]);
+			if (!ckm_maple_free(nodes[n]))
+				kmem_cache_free(cache, nodes[n]);
+		}
+	}
+	migrate_enable();
+	current->ckm_instance = saved;
+	ckm_revoke(i);
+	flush_work(&i->revoke_work);
+	rcu_barrier();
+	ckm_query_instance(i, &q);
+	ckm_query_diagnostics(i, &d);
+	for (n = 0; n < CKM_FB_COUNT; n++)
+		sum += d.reasons[n];
+	KUNIT_EXPECT_EQ(test, sum, q.fallbacks);
+	KUNIT_EXPECT_GT(test, d.reasons[CKM_FB_GFP], 0ULL);
+	KUNIT_EXPECT_GT(test, d.reasons[CKM_FB_BUDGET], 0ULL);
+	KUNIT_EXPECT_GT(test, d.reasons[CKM_FB_INACTIVE], 0ULL);
+	KUNIT_EXPECT_EQ(test, d.bulk_calls, 3ULL);
+	KUNIT_EXPECT_EQ(test, d.bulk_requested, d.bulk_completed);
+	KUNIT_EXPECT_EQ(test, d.bulk_failed, 0ULL);
+	KUNIT_EXPECT_EQ(test, q.nodes, 0U);
+	ckm_put(i);
+	kmem_cache_destroy(cache);
+}
+
 static struct kunit_case ckm_pool_cases[] = {
 	KUNIT_CASE(ckm_pool_roundtrip),
 	KUNIT_CASE(ckm_two_owners),
+	KUNIT_CASE(ckm_bulk_paths),
 	{}
 };
 static struct kunit_suite ckm_pool_suite = {

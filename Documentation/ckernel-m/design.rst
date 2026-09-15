@@ -59,7 +59,8 @@ Inventory returns take a short CPU-slot or instance/NUMA lock. A full CPU
 slot falls back to the owner's NUMA pool; full pools free to SLUB. The
 global address hash has 4096 static buckets, RCU read lookup and per-bucket
 update locks. It is not an isolation boundary or a latency guarantee.
-Registration, backend release and node reservations are cold shared writes.
+Registration, backend release and node reservations write shared metadata.
+They are not necessarily cold: sustained inventory misses can make them hot.
 
 Revocation flips admission off, removes idle CPU slots and drains NUMA
 lists in worker context with rescheduling between batches. It issues no

@@ -37,10 +37,33 @@ static int control_edges(int control, struct ckm_create *r)
 	pid_t children[8], child;
 	void *stack = malloc(65536);
 	int fd, n, j;
+	struct ckm_diagnostics d = { .version = CKM_ABI_VERSION, .size = sizeof(d) };
 
 	CHECK(stack);
 	fd = ioctl(control, CKM_IOC_CREATE, r);
 	CHECK(fd >= 0);
+	if (!ioctl(fd, CKM_IOC_DIAGNOSTICS, &d)) {
+		d.version++;
+		CHECK(ioctl(fd, CKM_IOC_DIAGNOSTICS, &d) < 0 && errno == EINVAL);
+		d.version = CKM_ABI_VERSION;
+		d.size--;
+		CHECK(ioctl(fd, CKM_IOC_DIAGNOSTICS, &d) < 0 && errno == EINVAL);
+		d.size = sizeof(d);
+		d.reserved[0] = 1;
+		CHECK(ioctl(fd, CKM_IOC_DIAGNOSTICS, &d) < 0 && errno == EINVAL);
+		d.reserved[0] = 0;
+		CHECK(ioctl(fd, CKM_IOC_DIAGNOSTICS, (void *)1) < 0 && errno == EFAULT);
+		child = fork();
+		if (!child) {
+			if (setgid(65534) || setuid(65534))
+				_exit(1);
+			_exit(ioctl(fd, CKM_IOC_DIAGNOSTICS, &d) < 0 && errno == EPERM ? 0 : 1);
+		}
+		CHECK(!child_result(child));
+	} else {
+		CHECK(errno == ENOTTY);
+		puts("# SKIP diagnostic ioctl: older kernel ABI");
+	}
 	child = clone(reject_shared, (char *)stack + 65536, CLONE_VM | SIGCHLD, &fd);
 	CHECK(!child_result(child));
 	child = clone(reject_shared, (char *)stack + 65536, CLONE_FILES | SIGCHLD, &fd);

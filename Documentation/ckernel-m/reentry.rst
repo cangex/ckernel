@@ -15,9 +15,12 @@ CPU miss, NUMA hit
   instances do not use that pool lock, but still share cache/CPU resources.
 
 Pool miss or unsupported allocation
-  Business task returns to kmem_cache_alloc and native page allocation,
+  Business task returns to kmem_cache_alloc or kmem_cache_alloc_bulk and native page allocation,
   cpuset validation, memcg charge/reclaim as required by GFP. Reclaim and
   ancestor accounting can affect other containers. No bounded wait claim.
+  A delegated bulk suffix is handled in one native batch, without repeating
+  eligibility and inventory admission for every remaining node. Detailed
+  reasons and unchecked suffix requests are recorded separately.
 
 New tracked node
   Business task; bounded reservation, accounted metadata allocation,

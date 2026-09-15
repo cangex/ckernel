@@ -11,6 +11,44 @@
 #define CKM_DRAINING 2U
 #define CKM_DEAD 3U
 
+/* Mutually exclusive reasons for node requests left to native SLUB. */
+enum ckm_fallback_reason {
+	CKM_FB_NONE,
+	CKM_FB_NOT_READY,
+	CKM_FB_GFP,
+	CKM_FB_INACTIVE,
+	CKM_FB_TASK_OWNER,
+	CKM_FB_CPU_MASK,
+	CKM_FB_MEMPOLICY,
+	CKM_FB_ACTIVE_MEMCG,
+	CKM_FB_NODE_MASK,
+	CKM_FB_CPUSET,
+	CKM_FB_CGROUP,
+	CKM_FB_OBJCG,
+	CKM_FB_BUDGET,
+	CKM_FB_RECORD_ALLOC,
+	CKM_FB_RECORD_CHARGE,
+	CKM_FB_NUMA_ALLOC,
+	CKM_FB_NUMA_CHARGE,
+	CKM_FB_NUMA_INDEX,
+	CKM_FB_NODE_CHARGE,
+	CKM_FB_POST_NODE,
+	CKM_FB_POST_LOCALITY,
+	CKM_FB_POST_CHARGE,
+	/* Remaining requests were batched, not individually rechecked. */
+	CKM_FB_BULK_REMAINDER,
+	CKM_FB_COUNT
+};
+
+/* Additive, read-only diagnostic ABI; existing QUERY layout is unchanged. */
+struct ckm_diagnostics {
+	__u32 version, size;
+	__aligned_u64 reasons[CKM_FB_COUNT];
+	__aligned_u64 bulk_calls, bulk_requested, bulk_completed, bulk_failed;
+	__aligned_u64 registered, alloc_failed, dispose_inactive, dispose_full;
+	__aligned_u64 reserved[4];
+};
+
 struct ckm_create {
 	__u32 version;
 	__u32 size;
@@ -48,4 +86,5 @@ struct ckm_query {
 #define CKM_IOC_BIND _IO('M', 0x41)
 #define CKM_IOC_QUERY _IOWR('M', 0x42, struct ckm_query)
 #define CKM_IOC_REVOKE _IO('M', 0x43)
+#define CKM_IOC_DIAGNOSTICS _IOWR('M', 0x44, struct ckm_diagnostics)
 #endif

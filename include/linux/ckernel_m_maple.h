@@ -6,6 +6,8 @@
 
 #ifdef CONFIG_CKERNEL_M_MAPLE
 void *ckm_maple_alloc(struct maple_tree *mt, struct kmem_cache *cache, gfp_t gfp);
+int ckm_maple_alloc_bulk(struct maple_tree *mt, struct kmem_cache *cache,
+			 gfp_t gfp, size_t size, void **nodes);
 bool ckm_maple_free(void *node);
 void ckm_maple_retire(void *node);
 #else

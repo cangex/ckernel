@@ -14,10 +14,20 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 {
 	struct ckm_instance *i = file->private_data;
 	struct ckm_query q;
+	struct ckm_diagnostics d;
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	switch (cmd) {
+	case CKM_IOC_DIAGNOSTICS:
+		if (copy_from_user(&d, (void __user *)arg, sizeof(d)))
+			return -EFAULT;
+		if (d.version != CKM_ABI_VERSION || d.size != sizeof(d) ||
+		    d.reserved[0] || d.reserved[1] || d.reserved[2] || d.reserved[3])
+			return -EINVAL;
+		memset(&d, 0, sizeof(d));
+		ckm_query_diagnostics(i, &d);
+		return copy_to_user((void __user *)arg, &d, sizeof(d)) ? -EFAULT : 0;
 	case CKM_IOC_BIND:
 		return arg ? -EINVAL : ckm_bind_current(i);
 	case CKM_IOC_REVOKE:

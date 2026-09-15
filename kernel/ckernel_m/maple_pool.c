@@ -109,7 +109,8 @@ static void ckm_dispose(struct ckm_record *r)
 	call_rcu(&r->rcu, ckm_record_release);
 }
 
-static struct ckm_numa_pool *ckm_numa_get(struct ckm_instance *i, int nid)
+static struct ckm_numa_pool *ckm_numa_get(struct ckm_instance *i, int nid,
+					 enum ckm_fallback_reason *reason)
 {
 	struct ckm_numa_pool *p, *old;
 
@@ -117,9 +118,12 @@ static struct ckm_numa_pool *ckm_numa_get(struct ckm_instance *i, int nid)
 	if (p)
 		return p;
 	p = kzalloc_node(sizeof(*p), GFP_KERNEL_ACCOUNT, nid);
-	if (!p)
+	if (!p) {
+		*reason = CKM_FB_NUMA_ALLOC;
 		return NULL;
+	}
 	if (!ckm_charge_matches(i, p)) {
+		*reason = CKM_FB_NUMA_CHARGE;
 		kfree(p);
 		return NULL;
 	}
@@ -128,6 +132,8 @@ static struct ckm_numa_pool *ckm_numa_get(struct ckm_instance *i, int nid)
 	old = xa_cmpxchg(&i->numa_pools, nid, NULL, p, GFP_KERNEL_ACCOUNT);
 	if (old) {
 		kfree(p);
+		if (xa_is_err(old))
+			*reason = CKM_FB_NUMA_INDEX;
 		return xa_is_err(old) ? NULL : old;
 	}
 	return p;
@@ -256,21 +262,40 @@ static bool ckm_numa_return(struct ckm_record *r)
 	return done;
 }
 
-void *ckm_maple_alloc(struct maple_tree *mt, struct kmem_cache *cache, gfp_t gfp)
+static void ckm_fallback(struct ckm_instance *i,
+			 enum ckm_fallback_reason reason, size_t nr)
 {
-	struct ckm_instance *i = mt->ma_ckm_owner;
+	if (!i || !nr)
+		return;
+	preempt_disable();
+	this_cpu_add(i->stats->fallbacks, nr);
+	this_cpu_add(i->stats->reasons[reason], nr);
+	preempt_enable();
+}
+
+/* A nonzero reason with *out == NULL delegates allocation to the caller.
+ * NULL with reason NONE is a real allocator failure, not permission to retry.
+ */
+static enum ckm_fallback_reason ckm_try_alloc(struct ckm_instance *i,
+			struct kmem_cache *cache, gfp_t gfp, void **out)
+{
 	struct ckm_record *r;
 	struct ckm_bucket *b;
+	enum ckm_fallback_reason reason;
 	unsigned long flags;
 	void *node;
 	int nid = numa_node_id();
 	bool charged = false;
 
+	*out = NULL;
 	/* Narrow GFP contract: unsupported policies use the unchanged allocator. */
-	if (!READ_ONCE(ckm_pools_ready) || !i ||
-	    (gfp & ~(__GFP_ZERO | __GFP_ACCOUNT)) != GFP_KERNEL ||
-	    !ckm_locality_compatible(i, nid, gfp))
-		goto native;
+	if (!READ_ONCE(ckm_pools_ready))
+		return CKM_FB_NOT_READY;
+	if ((gfp & ~(__GFP_ZERO | __GFP_ACCOUNT)) != GFP_KERNEL)
+		return CKM_FB_GFP;
+	reason = ckm_locality_reason(i, nid, gfp);
+	if (reason)
+		return reason;
 	r = ckm_cpu_take(i, cache, gfp, nid);
 	if (!r)
 		r = ckm_numa_take(i, cache, gfp, nid);
@@ -279,26 +304,32 @@ void *ckm_maple_alloc(struct maple_tree *mt, struct kmem_cache *cache, gfp_t gfp
 		r->poisoned = false;
 		/* Conservatively honor allocation/free initialization hardening. */
 		memset(r->node, 0, sizeof(struct maple_node));
-		return r->node;
+		*out = r->node;
+		return CKM_FB_NONE;
 	}
 	preempt_disable();
 	this_cpu_inc(i->stats->misses);
 	preempt_enable();
-	if (atomic_inc_return(&i->nodes) > i->max_nodes) {
-		atomic_dec(&i->nodes);
-		goto native;
-	}
+	/* A full budget does not require a contended increment/decrement pair. */
+	if (!atomic_add_unless(&i->nodes, 1, i->max_nodes))
+		return CKM_FB_BUDGET;
 	r = kzalloc(sizeof(*r), GFP_KERNEL_ACCOUNT);
-	if (!r)
+	if (!r) {
+		reason = CKM_FB_RECORD_ALLOC;
 		goto unreserve;
-	if (!ckm_charge_matches(i, r))
+	}
+	if (!ckm_charge_matches(i, r)) {
+		reason = CKM_FB_RECORD_CHARGE;
 		goto free_record;
-	if (!ckm_numa_get(i, nid))
+	}
+	if (!ckm_numa_get(i, nid, &reason))
 		goto free_record;
 	/* Existing accounted SLUB objects keep their original charge. */
 	if (!(gfp & __GFP_ACCOUNT) && i->objcg) {
-		if (obj_cgroup_charge(i->objcg, GFP_KERNEL, sizeof(struct maple_node)))
+		if (obj_cgroup_charge(i->objcg, GFP_KERNEL, sizeof(struct maple_node))) {
+			reason = CKM_FB_NODE_CHARGE;
 			goto free_record;
+		}
 		charged = true;
 	}
 	node = kmem_cache_alloc(cache, gfp);
@@ -307,16 +338,25 @@ void *ckm_maple_alloc(struct maple_tree *mt, struct kmem_cache *cache, gfp_t gfp
 			obj_cgroup_uncharge(i->objcg, sizeof(struct maple_node));
 		kfree(r);
 		atomic_dec(&i->nodes);
-		return NULL;
+		preempt_disable();
+		this_cpu_inc(i->stats->alloc_failed);
+		preempt_enable();
+		return CKM_FB_NONE;
 	}
-	if (page_to_nid(virt_to_page(node)) != nid ||
-	    !ckm_locality_compatible(i, nid, gfp) ||
-	    ((gfp & __GFP_ACCOUNT) && !ckm_charge_matches(i, node))) {
+	*out = node;
+	reason = CKM_FB_NONE;
+	if (page_to_nid(virt_to_page(node)) != nid)
+		reason = CKM_FB_POST_NODE;
+	else if (!ckm_locality_compatible(i, nid, gfp))
+		reason = CKM_FB_POST_LOCALITY;
+	else if ((gfp & __GFP_ACCOUNT) && !ckm_charge_matches(i, node))
+		reason = CKM_FB_POST_CHARGE;
+	if (reason) {
 		if (charged)
 			obj_cgroup_uncharge(i->objcg, sizeof(struct maple_node));
 		kfree(r);
 		atomic_dec(&i->nodes);
-		return node;
+		return reason;
 	}
 	r->owner = i;
 	r->node = node;
@@ -333,18 +373,86 @@ void *ckm_maple_alloc(struct maple_tree *mt, struct kmem_cache *cache, gfp_t gfp
 	raw_spin_lock_irqsave(&b->lock, flags);
 	hlist_add_head_rcu(&r->index, &b->head);
 	raw_spin_unlock_irqrestore(&b->lock, flags);
-	return node;
+	preempt_disable();
+	this_cpu_inc(i->stats->registered);
+	preempt_enable();
+	return CKM_FB_NONE;
 free_record:
 	kfree(r);
 unreserve:
 	atomic_dec(&i->nodes);
-native:
-	if (i) {
-		preempt_disable();
-		this_cpu_inc(i->stats->fallbacks);
-		preempt_enable();
+	return reason;
+}
+
+void *ckm_maple_alloc(struct maple_tree *mt, struct kmem_cache *cache, gfp_t gfp)
+{
+	struct ckm_instance *i = mt->ma_ckm_owner;
+	enum ckm_fallback_reason reason;
+	void *node;
+
+	if (!i)
+		return kmem_cache_alloc(cache, gfp);
+	reason = ckm_try_alloc(i, cache, gfp, &node);
+	if (!reason)
+		return node;
+	ckm_fallback(i, reason, 1);
+	if (!node) {
+		node = kmem_cache_alloc(cache, gfp);
+		if (!node) {
+			preempt_disable();
+			this_cpu_inc(i->stats->alloc_failed);
+			preempt_enable();
+		}
 	}
-	return kmem_cache_alloc(cache, gfp);
+	return node;
+}
+
+int ckm_maple_alloc_bulk(struct maple_tree *mt, struct kmem_cache *cache,
+			 gfp_t gfp, size_t size, void **nodes)
+{
+	struct ckm_instance *i = mt->ma_ckm_owner;
+	enum ckm_fallback_reason reason;
+	size_t n;
+	int ret;
+
+	if (!i)
+		return kmem_cache_alloc_bulk(cache, gfp, size, nodes);
+	for (n = 0; n < size; n++) {
+		reason = ckm_try_alloc(i, cache, gfp, &nodes[n]);
+		if (reason)
+			ckm_fallback(i, reason, 1);
+		if (nodes[n])
+			continue;
+		if (!reason)
+			goto rollback;
+		/* No new eligibility or budget probes for the rest of this batch.
+		 * Later batches may use replenished inventory again.
+		 */
+		ckm_fallback(i, CKM_FB_BULK_REMAINDER, size - n - 1);
+		preempt_disable();
+		this_cpu_inc(i->stats->bulk_calls);
+		this_cpu_add(i->stats->bulk_requested, size - n);
+		preempt_enable();
+		ret = kmem_cache_alloc_bulk(cache, gfp, size - n, &nodes[n]);
+		preempt_disable();
+		if (ret)
+			this_cpu_add(i->stats->bulk_completed, size - n);
+		else {
+			this_cpu_inc(i->stats->bulk_failed);
+			this_cpu_add(i->stats->alloc_failed, size - n);
+		}
+		preempt_enable();
+		if (!ret)
+			goto rollback;
+		return size;
+	}
+	return size;
+rollback:
+	/* SLUB has already rolled back its own failed batch. */
+	while (n)
+		if (!ckm_maple_free(nodes[--n]))
+			kmem_cache_free(cache, nodes[n]);
+	return 0;
 }
 
 bool ckm_maple_free(void *node)
@@ -362,8 +470,15 @@ bool ckm_maple_free(void *node)
 		memset(r->node, 0, sizeof(struct maple_node));
 		kasan_slab_free_mempool(r->node);
 		r->poisoned = true;
-		if (!ckm_cpu_return(r) && !ckm_numa_return(r))
+		if (!ckm_cpu_return(r) && !ckm_numa_return(r)) {
+			preempt_disable();
+			if (!ckm_active(r->owner))
+				this_cpu_inc(r->owner->stats->dispose_inactive);
+			else
+				this_cpu_inc(r->owner->stats->dispose_full);
+			preempt_enable();
 			ckm_dispose(r);
+		}
 	}
 	rcu_read_unlock();
 	return !!r;
