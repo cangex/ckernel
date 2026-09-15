@@ -234,10 +234,77 @@ static void ckm_bulk_paths(struct kunit *test)
 	kmem_cache_destroy(cache);
 }
 
+static void ckm_empty_refill(struct kunit *test)
+{
+	struct ckm_create req = { .features = CKM_FEATURE_MAPLE, .max_nodes = 3 };
+	struct ckm_instance *i, *saved = current->ckm_instance;
+	struct kmem_cache *cache;
+	struct maple_tree mt;
+	struct ckm_query q = {};
+	void *nodes[3] = {};
+	unsigned int n, pass;
+
+	cache = kmem_cache_create("ckm_kunit_refill", sizeof(struct maple_node),
+				 sizeof(struct maple_node), 0, ckm_test_ctor);
+	KUNIT_ASSERT_NOT_NULL(test, cache);
+	i = ckm_create_instance(&req);
+	if (IS_ERR(i)) {
+		kmem_cache_destroy(cache);
+		KUNIT_FAIL(test, "instance allocation failed");
+		return;
+	}
+	mt_init(&mt);
+	mt.ma_ckm_owner = i;
+	current->ckm_instance = i;
+	migrate_disable();
+	/* Two CPU slots and one NUMA entry: consume, refill and consume again. */
+	for (pass = 0; pass < 3; pass++) {
+		/* The fixture constructor initializes cold objects. ZERO is tested
+		 * on reuse, not passed to a cold constructor-backed SLUB cache.
+		 */
+		gfp_t gfp = GFP_KERNEL | (pass ? __GFP_ZERO : 0);
+
+		for (n = 0; n < ARRAY_SIZE(nodes); n++) {
+			nodes[n] = ckm_maple_alloc(&mt, cache, gfp);
+			if (!nodes[n]) {
+				KUNIT_FAIL(test, "node allocation failed");
+				goto out;
+			}
+			KUNIT_EXPECT_PTR_EQ(test, memchr_inv(nodes[n], 0, sizeof(struct maple_node)), NULL);
+		}
+		for (n = 0; n < ARRAY_SIZE(nodes); n++) {
+			memset(nodes[n], 0xaa, sizeof(struct maple_node));
+			if (!ckm_maple_free(nodes[n])) {
+				kmem_cache_free(cache, nodes[n]);
+				KUNIT_FAIL(test, "eligible node was not tracked");
+			}
+			nodes[n] = NULL;
+		}
+	}
+	ckm_query_instance(i, &q);
+	KUNIT_EXPECT_EQ(test, q.nodes, 3U);
+	KUNIT_EXPECT_EQ(test, q.cached, 3ULL);
+	KUNIT_EXPECT_GE(test, q.hits_cpu, 4ULL);
+	KUNIT_EXPECT_GE(test, q.hits_numa, 2ULL);
+out:
+	migrate_enable();
+	current->ckm_instance = saved;
+	for (n = 0; n < ARRAY_SIZE(nodes); n++)
+		if (nodes[n] && !ckm_maple_free(nodes[n]))
+			kmem_cache_free(cache, nodes[n]);
+	ckm_revoke(i);
+	flush_work(&i->revoke_work);
+	rcu_barrier();
+	KUNIT_EXPECT_EQ(test, atomic_read(&i->nodes), 0);
+	ckm_put(i);
+	kmem_cache_destroy(cache);
+}
+
 static struct kunit_case ckm_pool_cases[] = {
 	KUNIT_CASE(ckm_pool_roundtrip),
 	KUNIT_CASE(ckm_two_owners),
 	KUNIT_CASE(ckm_bulk_paths),
+	KUNIT_CASE(ckm_empty_refill),
 	{}
 };
 static struct kunit_suite ckm_pool_suite = {

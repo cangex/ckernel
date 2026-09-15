@@ -5,6 +5,7 @@
 #include <linux/init.h>
 #include <linux/kasan.h>
 #include <linux/ckernel_m_maple.h>
+#include <trace/events/ckernel_m.h>
 #include "internal.h"
 
 #define CKM_BUCKET_BITS 12
@@ -48,6 +49,17 @@ static struct ckm_bucket ckm_index[1 << CKM_BUCKET_BITS];
 static DEFINE_PER_CPU(struct ckm_cpu_pool, ckm_cpu_pools);
 static bool ckm_pools_ready;
 
+/* Trace-only states 4 and 5 denote registration and release-callback entry.
+ * No timestamp, new counter or ownership field is added to cached nodes.
+ */
+static inline void ckm_record_state(struct ckm_record *r, int state)
+{
+	if (trace_ckm_maple_record_enabled())
+		trace_ckm_maple_record(r->owner->cookie, r,
+				       READ_ONCE(r->state), state);
+	WRITE_ONCE(r->state, state);
+}
+
 static bool ckm_charge_matches(struct ckm_instance *i, void *object)
 {
 	struct mem_cgroup *actual, *expected;
@@ -83,6 +95,7 @@ static void ckm_record_release(struct rcu_head *head)
 	struct ckm_instance *i = r->owner;
 	unsigned long flags;
 
+	trace_ckm_maple_record(i->cookie, r, CKM_RELEASED, 5);
 	raw_spin_lock_irqsave(&i->records_lock, flags);
 	list_del(&r->all);
 	raw_spin_unlock_irqrestore(&i->records_lock, flags);
@@ -97,7 +110,7 @@ static void ckm_dispose(struct ckm_record *r)
 	struct ckm_bucket *b = ckm_bucket(r->node);
 	unsigned long flags;
 
-	WRITE_ONCE(r->state, CKM_RELEASED);
+	ckm_record_state(r, CKM_RELEASED);
 	raw_spin_lock_irqsave(&b->lock, flags);
 	hlist_del_rcu(&r->index);
 	raw_spin_unlock_irqrestore(&b->lock, flags);
@@ -169,7 +182,7 @@ static struct ckm_record *ckm_cpu_take(struct ckm_instance *i,
 					slot->nodes[n] = slot->nodes[--slot->nr];
 					if (!slot->nr)
 						slot->owner = NULL;
-					WRITE_ONCE(r->state, CKM_BORROWED);
+					ckm_record_state(r, CKM_BORROWED);
 					this_cpu_inc(i->stats->hits_cpu);
 					break;
 				}
@@ -206,7 +219,7 @@ static bool ckm_cpu_return(struct ckm_record *r)
 
 			slot->owner = r->owner;
 			slot->nodes[slot->nr++] = r;
-			WRITE_ONCE(r->state, CKM_CACHED);
+			ckm_record_state(r, CKM_CACHED);
 			done = true;
 		}
 	}
@@ -230,7 +243,7 @@ static struct ckm_record *ckm_numa_take(struct ckm_instance *i,
 			if (ckm_match(r, i, cache, gfp, nid)) {
 				list_del_init(&r->free);
 				p->nr--;
-				WRITE_ONCE(r->state, CKM_BORROWED);
+				ckm_record_state(r, CKM_BORROWED);
 				found = r;
 				break;
 			}
@@ -255,7 +268,7 @@ static bool ckm_numa_return(struct ckm_record *r)
 	if (ckm_active(r->owner) && p->nr < CKM_NUMA_NODES) {
 		list_add(&r->free, &p->free);
 		p->nr++;
-		WRITE_ONCE(r->state, CKM_CACHED);
+		ckm_record_state(r, CKM_CACHED);
 		done = true;
 	}
 	raw_spin_unlock_irqrestore(&p->lock, flags);
@@ -366,6 +379,7 @@ static enum ckm_fallback_reason ckm_try_alloc(struct ckm_instance *i,
 	r->charged = charged;
 	INIT_LIST_HEAD(&r->free);
 	ckm_get(i);
+	trace_ckm_maple_record(i->cookie, r, 4, CKM_BORROWED);
 	raw_spin_lock_irqsave(&i->records_lock, flags);
 	list_add(&r->all, &i->records);
 	raw_spin_unlock_irqrestore(&i->records_lock, flags);
@@ -493,7 +507,7 @@ void ckm_maple_retire(void *node)
 	rcu_read_lock();
 	r = ckm_find(node);
 	if (r)
-		WRITE_ONCE(r->state, CKM_RETIRED);
+		ckm_record_state(r, CKM_RETIRED);
 	rcu_read_unlock();
 }
 
