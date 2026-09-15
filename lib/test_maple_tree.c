@@ -3927,6 +3927,23 @@ static int __init maple_tree_seed(void)
 #if defined(BENCH)
 skip:
 #endif
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	/* Generic trees must not acquire mm ownership through init or copy. */
+	{
+		struct maple_tree native, copy;
+
+		mt_init(&native);
+		mt_init(&copy);
+		MT_BUG_ON(&native, native.ma_ckm_owner != NULL);
+		MT_BUG_ON(&native, mtree_store(&native, 1, xa_mk_value(7), GFP_KERNEL));
+		/* mtree_dup takes both internal tree spinlocks. */
+		MT_BUG_ON(&native, mtree_dup(&native, &copy, GFP_ATOMIC));
+		MT_BUG_ON(&copy, copy.ma_ckm_owner != NULL);
+		MT_BUG_ON(&copy, mtree_load(&copy, 1) != xa_mk_value(7));
+		mtree_destroy(&copy);
+		mtree_destroy(&native);
+	}
+#endif
 	rcu_barrier();
 	pr_info("maple_tree: %u of %u tests passed\n",
 			atomic_read(&maple_tree_tests_passed),

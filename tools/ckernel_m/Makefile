@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 CFLAGS += -O2 -Wall -Wextra
-all: ckmctl
+all: ckmctl maple_probe
 clean:
-	$(RM) ckmctl
+	$(RM) ckmctl maple_probe
 .PHONY: all clean

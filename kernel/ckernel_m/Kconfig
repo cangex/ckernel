@@ -7,10 +7,20 @@ config CKERNEL_M
 	  This is experimental and does not provide a kernel security boundary.
 	  No application is enrolled unless a privileged control handle binds it.
 
+config CKERNEL_M_MAPLE
+	bool "CKernel-M bounded Maple inventory"
+	depends on CKERNEL_M && NUMA && SLUB && MEMCG_KMEM
+	default n
+	help
+	  Experimental owner-aware inventory for explicitly attached mm trees.
+	  Reuse is bounded by instance, CPU and NUMA limits. Unsupported contexts
+	  use the native allocator; this option does not guarantee lower latency.
+
 config CKERNEL_M_KUNIT_TEST
 	bool "CKernel-M core tests" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CKERNEL_M=y
 	default KUNIT_ALL_TESTS
 	help
-	  Test the control ABI layout. VM lifecycle and permission regressions
-	  remain necessary; this option is not a production deployment switch.
+	  Test the ABI layout and, when Maple inventory is enabled, basic owner
+	  separation, capacity and retirement. These tests are not performance
+	  acceptance or a complete substitute for VM lifecycle regressions.

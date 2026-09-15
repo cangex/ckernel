@@ -36233,7 +36233,7 @@ void farmer_tests(void)
 	tree.ma_root = xa_mk_value(0);
 	mt_dump(&tree, mt_dump_dec);
 
-	node = mt_alloc_one(GFP_KERNEL);
+	node = mt_alloc_one(NULL, GFP_KERNEL);
 	node->parent = (void *)((unsigned long)(&tree) | 1);
 	node->slot[0] = xa_mk_value(0);
 	node->slot[1] = xa_mk_value(1);

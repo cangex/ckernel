@@ -59,6 +59,9 @@
 #include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/limits.h>
+#ifdef __KERNEL__
+#include <linux/ckernel_m_maple.h>
+#endif
 #include <asm/barrier.h>
 
 #define CREATE_TRACE_POINTS
@@ -157,31 +160,65 @@ struct maple_subtree_state {
 #endif
 
 /* Functions */
-static inline struct maple_node *mt_alloc_one(gfp_t gfp)
+static inline struct maple_node *mt_alloc_one(struct maple_tree *mt, gfp_t gfp)
 {
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	return ckm_maple_alloc(mt, maple_node_cache, gfp);
+#else
 	return kmem_cache_alloc(maple_node_cache, gfp);
-}
-
-static inline int mt_alloc_bulk(gfp_t gfp, size_t size, void **nodes)
-{
-	return kmem_cache_alloc_bulk(maple_node_cache, gfp, size, nodes);
+#endif
 }
 
 static inline void mt_free_one(struct maple_node *node)
 {
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	if (ckm_maple_free(node))
+		return;
+#endif
 	kmem_cache_free(maple_node_cache, node);
+}
+
+static inline int mt_alloc_bulk(struct maple_tree *mt, gfp_t gfp,
+			       size_t size, void **nodes)
+{
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	size_t n;
+
+	if (mt->ma_ckm_owner) {
+		for (n = 0; n < size; n++) {
+			nodes[n] = mt_alloc_one(mt, gfp);
+			if (!nodes[n]) {
+				while (n)
+					mt_free_one(nodes[--n]);
+				return 0;
+			}
+		}
+		return size;
+	}
+#endif
+	return kmem_cache_alloc_bulk(maple_node_cache, gfp, size, nodes);
 }
 
 static inline void mt_free_bulk(size_t size, void __rcu **nodes)
 {
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	size_t n, native = 0;
+
+	for (n = 0; n < size; n++)
+		if (!ckm_maple_free((void __force *)nodes[n]))
+			nodes[native++] = nodes[n];
+	if (native)
+		kmem_cache_free_bulk(maple_node_cache, native, (void **)nodes);
+#else
 	kmem_cache_free_bulk(maple_node_cache, size, (void **)nodes);
+#endif
 }
 
 static void mt_free_rcu(struct rcu_head *head)
 {
 	struct maple_node *node = container_of(head, struct maple_node, rcu);
 
-	kmem_cache_free(maple_node_cache, node);
+	mt_free_one(node);
 }
 
 /*
@@ -194,6 +231,9 @@ static void mt_free_rcu(struct rcu_head *head)
 static void ma_free_rcu(struct maple_node *node)
 {
 	WARN_ON(node->parent != ma_parent_ptr(node));
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	ckm_maple_retire(node);
+#endif
 	call_rcu(&node->rcu, mt_free_rcu);
 }
 
@@ -322,6 +362,9 @@ static inline void mte_set_node_dead(struct maple_enode *mn)
 {
 	mte_to_node(mn)->parent = ma_parent_ptr(mte_to_node(mn));
 	smp_wmb(); /* Needed for RCU */
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	ckm_maple_retire(mte_to_node(mn));
+#endif
 }
 
 /* Bit 1 indicates the root is a node */
@@ -1268,7 +1311,7 @@ static inline void mas_alloc_nodes(struct ma_state *mas, gfp_t gfp)
 	}
 
 	if (!allocated || mas->alloc->node_count == MAPLE_ALLOC_SLOTS) {
-		node = (struct maple_alloc *)mt_alloc_one(gfp);
+		node = (struct maple_alloc *)mt_alloc_one(mas->tree, gfp);
 		if (!node)
 			goto nomem_one;
 
@@ -1290,7 +1333,7 @@ static inline void mas_alloc_nodes(struct ma_state *mas, gfp_t gfp)
 		max_req = MAPLE_ALLOC_SLOTS - node->node_count;
 		slots = (void **)&node->slot[node->node_count];
 		max_req = min(requested, max_req);
-		count = mt_alloc_bulk(gfp, max_req, slots);
+		count = mt_alloc_bulk(mas->tree, gfp, max_req, slots);
 		if (!count)
 			goto nomem_bulk;
 
@@ -5387,8 +5430,12 @@ next:
 free_leaf:
 	if (free)
 		mt_free_rcu(&node->rcu);
-	else
+	else {
+#ifdef CONFIG_CKERNEL_M_MAPLE
+		ckm_maple_retire(node);
+#endif
 		mt_clear_meta(mt, node, node->type);
+	}
 }
 
 /*
@@ -6738,7 +6785,7 @@ static inline void mas_dup_alloc(struct ma_state *mas, struct ma_state *new_mas,
 	type = mte_node_type(mas->node);
 	new_slots = ma_slots(new_node, type);
 	request = mas_data_end(mas) + 1;
-	count = mt_alloc_bulk(gfp, request, (void **)new_slots);
+	count = mt_alloc_bulk(new_mas->tree, gfp, request, (void **)new_slots);
 	if (unlikely(count < request)) {
 		memset(new_slots, 0, request * sizeof(void *));
 		mas_set_err(mas, -ENOMEM);
@@ -6785,7 +6832,7 @@ static inline void mas_dup_build(struct ma_state *mas, struct ma_state *new_mas,
 	if (mas_is_ptr(mas) || mas_is_none(mas))
 		goto set_new_tree;
 
-	node = mt_alloc_one(gfp);
+	node = mt_alloc_one(new_mas->tree, gfp);
 	if (!node) {
 		new_mas->status = ma_none;
 		mas_set_err(mas, -ENOMEM);

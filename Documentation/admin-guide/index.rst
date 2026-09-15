@@ -85,6 +85,7 @@ configure specific aspects of kernel behavior to your liking.
    btmrvl
    cgroup-v1/index
    cgroup-v2
+   ckernel-m
    cifs/index
    clearing-warn-once
    cpu-load

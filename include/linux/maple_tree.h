@@ -223,6 +223,9 @@ struct maple_tree {
 	};
 	unsigned int	ma_flags;
 	void __rcu      *ma_root;
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	struct ckm_instance *ma_ckm_owner;
+#endif
 };
 
 /**
@@ -771,6 +774,9 @@ static inline bool mt_external_lock(const struct maple_tree *mt)
  */
 static inline void mt_init_flags(struct maple_tree *mt, unsigned int flags)
 {
+#ifdef CONFIG_CKERNEL_M_MAPLE
+	mt->ma_ckm_owner = NULL;
+#endif
 	mt->ma_flags = flags;
 	if (!mt_external_lock(mt))
 		spin_lock_init(&mt->ma_lock);
