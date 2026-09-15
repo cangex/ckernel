@@ -31,6 +31,9 @@ static char line_prefix[256];
 static int log_fd;
 static unsigned int log_region;
 static size_t log_used;
+static uint64_t run_ns = RUN_NS;
+static int live_inventory;
+static int record_timeline;
 
 static void emit(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
@@ -121,6 +124,9 @@ static void wait_ok(pid_t pid)
 static void worker(const char *role, int cpu, int ready, int go)
 {
 	static uint64_t samples[MAX_SAMPLES];
+	static uint64_t begins[MAX_SAMPLES];
+	static uint64_t sorted[MAX_SAMPLES];
+	uint64_t *ranked = samples;
 	struct rusage before, after, children_before, children_after;
 	unsigned int count = 0, pages = 256;
 	int target = !strcmp(role, "target");
@@ -142,6 +148,7 @@ static void worker(const char *role, int cpu, int ready, int go)
 	CHECK(!getrusage(RUSAGE_SELF, &before));
 	CHECK(!getrusage(RUSAGE_CHILDREN, &children_before));
 	start = now();
+	CHECK(write(ready, "B", 1) == 1);
 	do {
 		uint64_t begin = now();
 
@@ -178,6 +185,8 @@ static void worker(const char *role, int cpu, int ready, int go)
 		if (!count)
 			cold = end - begin;
 		CHECK(count < MAX_SAMPLES);
+		if (record_timeline)
+			begins[count] = begin;
 		samples[count++] = end - begin;
 		if (follow) {
 			ssize_t got = read(go, &ch, 1);
@@ -185,28 +194,61 @@ static void worker(const char *role, int cpu, int ready, int go)
 			if (got == 1) { CHECK(ch == 'S'); break; }
 			CHECK(got == -1 && errno == EAGAIN);
 		}
-	} while (follow || end - start < RUN_NS);
+	} while (follow || end - start < run_ns);
 	if (follow)
 		CHECK(!fcntl(go, F_SETFL, 0));
 	CHECK(!getrusage(RUSAGE_SELF, &after));
 	CHECK(!getrusage(RUSAGE_CHILDREN, &children_after));
 	CHECK(write(ready, "D", 1) == 1);
 	CHECK(read(go, &ch, 1) == 1 && ch == 'E');
-	qsort(samples, count, sizeof(samples[0]), cmp);
+	if (record_timeline) {
+		unsigned int first, last;
+
+		for (first = 0; first < count; first = last) {
+			uint64_t max = 0;
+
+			for (last = first; last < count &&
+			     begins[last] - begins[first] < 100000000ULL; last++)
+				if (samples[last] > max)
+					max = samples[last];
+			prefix("timeblock", role);
+			emit("start_ns=%llu end_ns=%llu operations=%u max_ns=%llu\n",
+			       (unsigned long long)begins[first],
+			       (unsigned long long)(begins[last - 1] + samples[last - 1]),
+			       last - first, (unsigned long long)max);
+		}
+		memcpy(sorted, samples, count * sizeof(*samples));
+		ranked = sorted;
+	}
+	qsort(ranked, count, sizeof(ranked[0]), cmp);
 	prefix("latency", role);
-	emit("operations=%u duration_ns=%llu cold_ns=%llu p50_ns=%llu p95_ns=%llu p99_ns=%llu "
+	emit("operations=%u duration_ns=%llu start_ns=%llu end_ns=%llu cold_ns=%llu p50_ns=%llu p95_ns=%llu p99_ns=%llu "
 	       "max_ns=%llu user_us=%llu system_us=%llu children_user_us=%llu children_system_us=%llu "
 	       "maxrss_kib=%ld nvcsw=%ld nivcsw=%ld\n", count,
-	       (unsigned long long)(end - start), (unsigned long long)cold,
-	       (unsigned long long)samples[(count * 50 + 99) / 100 - 1],
-	       (unsigned long long)samples[(count * 95 + 99) / 100 - 1],
-	       (unsigned long long)samples[(count * 99 + 99) / 100 - 1],
-	       (unsigned long long)samples[count - 1],
+	       (unsigned long long)(end - start), (unsigned long long)start,
+	       (unsigned long long)end, (unsigned long long)cold,
+	       (unsigned long long)ranked[(count * 50 + 99) / 100 - 1],
+	       (unsigned long long)ranked[(count * 95 + 99) / 100 - 1],
+	       (unsigned long long)ranked[(count * 99 + 99) / 100 - 1],
+	       (unsigned long long)ranked[count - 1],
 	       (unsigned long long)(usec(after.ru_utime) - usec(before.ru_utime)),
 	       (unsigned long long)(usec(after.ru_stime) - usec(before.ru_stime)),
 	       (unsigned long long)(usec(children_after.ru_utime) - usec(children_before.ru_utime)),
 	       (unsigned long long)(usec(children_after.ru_stime) - usec(children_before.ru_stime)),
 	       after.ru_maxrss, after.ru_nvcsw - before.ru_nvcsw, after.ru_nivcsw - before.ru_nivcsw);
+	if (record_timeline) {
+		unsigned int n;
+		uint64_t threshold = ranked[(count * 99 + 99) / 100 - 1];
+
+		for (n = 0; n < count; n++)
+			if (samples[n] >= threshold) {
+				prefix("tail_operation", role);
+				emit("index=%u start_ns=%llu end_ns=%llu latency_ns=%llu threshold_ns=%llu\n",
+				       n, (unsigned long long)begins[n],
+				       (unsigned long long)(begins[n] + samples[n]),
+				       (unsigned long long)samples[n], (unsigned long long)threshold);
+			}
+	}
 	CHECK(!munmap(p, pages * page));
 }
 
@@ -219,9 +261,9 @@ static void query(int fd, const char *role)
 
 	CHECK(!ioctl(fd, CKM_IOC_QUERY, &q));
 	prefix("inventory", role);
-	emit("nodes=%u cached=%llu borrowed=%llu retired=%llu pending=%llu node_bytes=%llu "
+	emit("cookie=%llu nodes=%u cached=%llu borrowed=%llu retired=%llu pending=%llu node_bytes=%llu "
 	       "metadata_bytes=%llu hits_cpu=%llu hits_numa=%llu misses=%llu fallbacks=%llu\n",
-	       q.nodes, q.cached, q.borrowed, q.retired, q.pending_metadata, q.node_bytes,
+	       q.cookie, q.nodes, q.cached, q.borrowed, q.retired, q.pending_metadata, q.node_bytes,
 	       q.metadata_bytes, q.hits_cpu, q.hits_numa, q.misses, q.fallbacks);
 	if (ioctl(fd, CKM_IOC_DIAGNOSTICS, &d)) {
 		CHECK(errno == ENOTTY);
@@ -236,7 +278,7 @@ static void query(int fd, const char *role)
 			emit("id=%u count=%llu\n", n, d.reasons[n]);
 		}
 	}
-	/* The worker has exited: allocation counters are quiescent. */
+	/* Worker allocation has quiesced; do not waive accounting consistency. */
 	CHECK(sum == q.fallbacks);
 	prefix("diagnostics", role);
 	emit("bulk_calls=%llu bulk_requested=%llu bulk_completed=%llu bulk_failed=%llu "
@@ -278,7 +320,31 @@ static void supervise(const char *self, const char *role, const char *group,
 		execl(self, self, "--worker", role, cpu_s, ready_s, go_s, NULL);
 		_exit(127);
 	}
-	wait_ok(child);
+	if (live_inventory && fd >= 0) {
+		int status;
+		pid_t finished;
+		unsigned int tick = 0;
+
+		/* Querying records takes its owner lock: this is diagnostic-only. */
+		affinity(3, -1);
+		while (!(finished = waitpid(child, &status, WNOHANG))) {
+			struct ckm_query q = { .version = CKM_ABI_VERSION, .size = sizeof(q) };
+			uint64_t begin = now(), end;
+
+			CHECK(!ioctl(fd, CKM_IOC_QUERY, &q));
+			end = now();
+			prefix("live_inventory", role);
+			emit("tick=%u start_ns=%llu end_ns=%llu nodes=%u cached=%llu borrowed=%llu "
+			       "retired=%llu pending=%llu hits=%llu misses=%llu fallbacks=%llu\n",
+			       tick++, (unsigned long long)begin, (unsigned long long)end,
+			       q.nodes, q.cached, q.borrowed, q.retired, q.pending_metadata,
+			       q.hits_cpu + q.hits_numa, q.misses, q.fallbacks);
+			usleep(10000);
+		}
+		CHECK(finished == child && WIFEXITED(status) && !WEXITSTATUS(status));
+	} else {
+		wait_ok(child);
+	}
 	if (fd >= 0) {
 		uint64_t start = now();
 
@@ -438,6 +504,15 @@ int main(int argc, char **argv)
 	      !strcmp(scenario, "migration") || !strcmp(scenario, "exit") || !strcmp(scenario, "pressure"));
 	CHECK(!strcmp(layout, "target-only") || !strcmp(layout, "bystander-only") || !strcmp(layout, "pair"));
 	round_no = atoi(getenv("CKM_PAIR_ROUND"));
+	if (getenv("CKM_PAIR_SECONDS")) {
+		char *end;
+		unsigned long seconds = strtoul(getenv("CKM_PAIR_SECONDS"), &end, 10);
+
+		CHECK(!*end && seconds >= 1 && seconds <= 30);
+		run_ns = seconds * 1000000000ULL;
+	}
+	live_inventory = getenv("CKM_PAIR_LIVE") != NULL;
+	record_timeline = live_inventory || getenv("CKM_PAIR_TIMELINE") != NULL;
 	alarm(90);
 	if (argc == 6 && !strcmp(argv[1], "--worker")) {
 		CHECK(getenv("CKM_PAIR_LOG_FD"));
@@ -487,8 +562,12 @@ int main(int argc, char **argv)
 	}
 	snapshot(&before);
 	start = now();
-	for (n = 0; n < 2; n++)
-		if (active[n]) CHECK(write(go[n][1], "G", 1) == 1);
+	/* Start the bystander first and acknowledge its measurement boundary. */
+	for (n = 1; n >= 0; n--)
+		if (active[n]) {
+			CHECK(write(go[n][1], "G", 1) == 1);
+			CHECK(read(ready[n][0], &ch, 1) == 1 && ch == 'B');
+		}
 	if (active[0]) {
 		CHECK(read(ready[0][0], &ch, 1) == 1 && ch == 'D');
 		if (active[1]) CHECK(write(go[1][1], "S", 1) == 1);
