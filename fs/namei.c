@@ -22,6 +22,7 @@
 #include <linux/fs.h>
 #include <linux/filelock.h>
 #include <linux/namei.h>
+#include <linux/ckernel_m_vfs.h>
 #include <linux/pagemap.h>
 #include <linux/sched/mm.h>
 #include <linux/fsnotify.h>
@@ -2470,7 +2471,8 @@ static int handle_lookup_down(struct nameidata *nd)
 }
 
 /* Returns 0 and nd will be valid on success; Retuns error, otherwise. */
-static int path_lookupat(struct nameidata *nd, unsigned flags, struct path *path)
+static int path_lookupat(struct nameidata *nd, unsigned flags, struct path *path,
+			 struct ckm_path_lease *lease)
 {
 	const char *s = path_init(nd, flags);
 	int err;
@@ -2488,7 +2490,20 @@ static int path_lookupat(struct nameidata *nd, unsigned flags, struct path *path
 		err = handle_lookup_down(nd);
 		nd->state &= ~ND_JUMPED; // no d_weak_revalidate(), please...
 	}
-	if (!err)
+	if (!err && lease && (nd->flags & LOOKUP_RCU) && !nd->depth &&
+	    !nd->total_link_count && !(nd->flags & (LOOKUP_IS_SCOPED | LOOKUP_DIRECTORY)) &&
+	    !(nd->state & (ND_ROOT_PRESET | ND_ROOT_GRABBED)) &&
+	    !(nd->path.dentry->d_flags & (DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE))) {
+		int borrowed = ckm_vfs_complete_rcu(lease, &nd->path, nd->seq, nd->m_seq);
+
+		if (borrowed < 0)
+			err = borrowed;
+		else if (borrowed) {
+			nd->root.mnt = NULL;
+			leave_rcu(nd);
+		}
+	}
+	if (!err && (!lease || !lease->borrowed))
 		err = complete_walk(nd);
 
 	if (!err && nd->flags & LOOKUP_DIRECTORY)
@@ -2503,25 +2518,38 @@ static int path_lookupat(struct nameidata *nd, unsigned flags, struct path *path
 	return err;
 }
 
-int filename_lookup(int dfd, struct filename *name, unsigned flags,
-		    struct path *path, struct path *root)
+static int lookup_with_lease(int dfd, struct filename *name, unsigned flags,
+			     struct path *path, struct path *root,
+			     struct ckm_path_lease *lease)
 {
 	int retval;
 	struct nameidata nd;
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 	set_nameidata(&nd, dfd, name, root);
-	retval = path_lookupat(&nd, flags | LOOKUP_RCU, path);
+	retval = path_lookupat(&nd, flags | LOOKUP_RCU, path, lease);
 	if (unlikely(retval == -ECHILD))
-		retval = path_lookupat(&nd, flags, path);
+		retval = path_lookupat(&nd, flags, path, NULL);
 	if (unlikely(retval == -ESTALE))
-		retval = path_lookupat(&nd, flags | LOOKUP_REVAL, path);
+		retval = path_lookupat(&nd, flags | LOOKUP_REVAL, path, NULL);
 
 	if (likely(!retval))
 		audit_inode(name, path->dentry,
 			    flags & LOOKUP_MOUNTPOINT ? AUDIT_INODE_NOEVAL : 0);
 	restore_nameidata();
 	return retval;
+}
+
+int filename_lookup(int dfd, struct filename *name, unsigned flags,
+		    struct path *path, struct path *root)
+{
+	return lookup_with_lease(dfd, name, flags, path, root, NULL);
+}
+
+int filename_lookup_lease(int dfd, struct filename *name, unsigned int flags,
+			  struct path *path, struct ckm_path_lease *lease)
+{
+	return lookup_with_lease(dfd, name, flags, path, NULL, lease);
 }
 
 /* Returns 0 and nd will be valid on success; Retuns error, otherwise. */
@@ -3777,7 +3805,7 @@ static int do_tmpfile(struct nameidata *nd, unsigned flags,
 		struct file *file)
 {
 	struct path path;
-	int error = path_lookupat(nd, flags | LOOKUP_DIRECTORY, &path);
+	int error = path_lookupat(nd, flags | LOOKUP_DIRECTORY, &path, NULL);
 
 	if (unlikely(error))
 		return error;
@@ -3798,7 +3826,7 @@ out:
 static int do_o_path(struct nameidata *nd, unsigned flags, struct file *file)
 {
 	struct path path;
-	int error = path_lookupat(nd, flags, &path);
+	int error = path_lookupat(nd, flags, &path, NULL);
 	if (!error) {
 		audit_inode(nd->name, path.dentry, 0);
 		error = vfs_open(&path, file);

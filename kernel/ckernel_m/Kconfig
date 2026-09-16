@@ -16,6 +16,16 @@ config CKERNEL_M_MAPLE
 	  Reuse is bounded by instance, CPU and NUMA limits. Unsupported contexts
 	  use the native allocator; this option does not guarantee lower latency.
 
+config CKERNEL_M_VFS
+	bool "CKernel-M terminal dentry reference loans"
+	depends on CKERNEL_M && TMPFS
+	default n
+	help
+	  Opt-in, bounded reference loans for a registered read-only tmpfs mount.
+	  Native path traversal, permissions and mount references remain intact.
+	  This experimental prototype adds instance-local read-side locking and
+	  does not imply faster pathname lookup or a security boundary.
+
 config CKERNEL_M_KUNIT_TEST
 	bool "CKernel-M core tests" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CKERNEL_M=y

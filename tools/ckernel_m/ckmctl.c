@@ -5,6 +5,7 @@
 #include "../../include/uapi/linux/ckernel_m.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -19,17 +20,22 @@ int main(int argc, char **argv)
 	int control, instance, status, attempt;
 	struct timespec start, finish;
 	pid_t child;
+	int vfs = argc > 1 && !strcmp(argv[1], "--vfs");
+	int program = vfs ? 4 : 2;
+	struct ckm_vfs_query vq;
 
-	if (argc < 3) {
+	if (argc <= program) {
 		fprintf(stderr, "usage: %s MAX_NODES PROGRAM [ARGS...] (0 = Core only)\n", argv[0]);
+		fprintf(stderr, "       %s --vfs READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
 		return 2;
 	}
 	errno = 0;
-	n = strtoul(argv[1], &end, 10);
-	if (errno || end == argv[1] || *end || n > 4096)
+	n = strtoul(argv[vfs ? 3 : 1], &end, 10);
+	if (errno || end == argv[vfs ? 3 : 1] || *end ||
+	    n > (vfs ? CKM_VFS_MAX_ENTRIES : 4096) || (vfs && !n))
 		return 2;
-	r.max_nodes = n;
-	r.features = n ? CKM_FEATURE_MAPLE : 0;
+	r.max_nodes = vfs ? 0 : n;
+	r.features = vfs ? CKM_FEATURE_VFS : n ? CKM_FEATURE_MAPLE : 0;
 	control = open("/dev/ckernel-m", O_RDWR | O_CLOEXEC);
 	if (control < 0) {
 		perror("open control");
@@ -42,13 +48,27 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	close(control);
+	if (vfs) {
+		struct ckm_vfs_root root = { .version = CKM_ABI_VERSION,
+			.size = sizeof(root), .capacity = n };
+
+		root.fd = open(argv[2], O_PATH | O_CLOEXEC);
+		if (root.fd < 0 || ioctl(instance, CKM_IOC_VFS_ROOT, &root)) {
+			perror("register VFS root");
+			if (root.fd >= 0)
+				close(root.fd);
+			close(instance);
+			return 1;
+		}
+		close(root.fd);
+	}
 	child = fork();
 	if (!child) {
 		if (ioctl(instance, CKM_IOC_BIND, 0UL)) {
 			perror("bind");
 			_exit(125);
 		}
-		execvp(argv[2], argv + 2);
+		execvp(argv[program], argv + program);
 		perror("exec");
 		_exit(126);
 	}
@@ -70,6 +90,14 @@ int main(int argc, char **argv)
 	       q.cookie, q.state, q.tasks, q.mms, q.nodes, q.hits_cpu,
 	       q.hits_numa, q.misses, q.fallbacks, q.returned, q.cached,
 	       q.borrowed, q.retired, q.metadata_bytes, q.node_bytes);
+	if (vfs) {
+		vq = (struct ckm_vfs_query){ .version = CKM_ABI_VERSION, .size = sizeof(vq) };
+		if (ioctl(instance, CKM_IOC_VFS_QUERY, &vq)) {
+			perror("VFS query"); close(instance); return 1;
+		}
+		printf("vfs_hits=%llu vfs_native=%llu vfs_retries=%llu vfs_cached=%u vfs_payload_bytes=%llu\n",
+		       vq.hits, vq.native, vq.retries, vq.cached, vq.metadata_payload_bytes);
+	}
 	if (ioctl(instance, CKM_IOC_REVOKE, 0UL)) {
 		perror("revoke");
 		close(instance);
@@ -82,7 +110,13 @@ int main(int argc, char **argv)
 			close(instance);
 			return 1;
 		}
-		if (!q.tasks && !q.mms && !q.nodes)
+		if (vfs) {
+			vq = (struct ckm_vfs_query){ .version = CKM_ABI_VERSION, .size = sizeof(vq) };
+			if (ioctl(instance, CKM_IOC_VFS_QUERY, &vq)) {
+				perror("VFS drain query"); close(instance); return 1;
+			}
+		}
+		if (!q.tasks && !q.mms && !q.nodes && (!vfs || (vq.stopped && !vq.cached)))
 			break;
 		usleep(10000);
 	}

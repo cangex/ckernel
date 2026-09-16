@@ -13,6 +13,7 @@
 #include <linux/highuid.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
+#include <linux/ckernel_m_vfs.h>
 #include <linux/security.h>
 #include <linux/cred.h>
 #include <linux/syscalls.h>
@@ -233,6 +234,7 @@ static int vfs_statx(int dfd, struct filename *filename, int flags,
 	      struct kstat *stat, u32 request_mask)
 {
 	struct path path;
+	struct ckm_path_lease lease = {};
 	unsigned int lookup_flags = getname_statx_lookup_flags(flags);
 	int error;
 
@@ -241,9 +243,12 @@ static int vfs_statx(int dfd, struct filename *filename, int flags,
 		return -EINVAL;
 
 retry:
-	error = filename_lookup(dfd, filename, lookup_flags, &path, NULL);
-	if (error)
+	ckm_vfs_begin(&lease);
+	error = filename_lookup_lease(dfd, filename, lookup_flags, &path, &lease);
+	if (error) {
+		ckm_vfs_end(&lease, NULL);
 		goto out;
+	}
 
 	error = vfs_getattr(&path, stat, request_mask, flags);
 
@@ -262,7 +267,7 @@ retry:
 			bdev_statx_dioalign(inode, stat);
 	}
 
-	path_put(&path);
+	ckm_vfs_end(&lease, &path);
 	if (retry_estale(error, lookup_flags)) {
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;

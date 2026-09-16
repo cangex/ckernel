@@ -15,10 +15,32 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 	struct ckm_instance *i = file->private_data;
 	struct ckm_query q;
 	struct ckm_diagnostics d;
+#ifdef CONFIG_CKERNEL_M_VFS
+	struct ckm_vfs_root root;
+	struct ckm_vfs_query vfs;
+#endif
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	switch (cmd) {
+#ifdef CONFIG_CKERNEL_M_VFS
+	case CKM_IOC_VFS_ROOT:
+		if (copy_from_user(&root, (void __user *)arg, sizeof(root)))
+			return -EFAULT;
+		if (root.version != CKM_ABI_VERSION || root.size != sizeof(root) ||
+		    root.reserved[0] || root.reserved[1] || root.reserved[2] || root.reserved[3])
+			return -EINVAL;
+		return ckm_vfs_register(i, root.fd, root.capacity);
+	case CKM_IOC_VFS_QUERY:
+		if (copy_from_user(&vfs, (void __user *)arg, sizeof(vfs)))
+			return -EFAULT;
+		if (vfs.version != CKM_ABI_VERSION || vfs.size != sizeof(vfs) ||
+		    vfs.reserved[0] || vfs.reserved[1] || vfs.reserved[2] || vfs.reserved[3])
+			return -EINVAL;
+		memset(&vfs, 0, sizeof(vfs));
+		ckm_vfs_query(i, &vfs);
+		return copy_to_user((void __user *)arg, &vfs, sizeof(vfs)) ? -EFAULT : 0;
+#endif
 	case CKM_IOC_DIAGNOSTICS:
 		if (copy_from_user(&d, (void __user *)arg, sizeof(d)))
 			return -EFAULT;
@@ -29,7 +51,11 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 		ckm_query_diagnostics(i, &d);
 		return copy_to_user((void __user *)arg, &d, sizeof(d)) ? -EFAULT : 0;
 	case CKM_IOC_BIND:
+#ifdef CONFIG_CKERNEL_M_VFS
+		return arg ? -EINVAL : ckm_vfs_bind(i);
+#else
 		return arg ? -EINVAL : ckm_bind_current(i);
+#endif
 	case CKM_IOC_REVOKE:
 		if (arg)
 			return -EINVAL;
@@ -80,11 +106,13 @@ static long ckm_control_ioctl(struct file *file, unsigned int cmd, unsigned long
 	if (copy_from_user(&r, (void __user *)arg, sizeof(r)))
 		return -EFAULT;
 	if (r.version != CKM_ABI_VERSION || r.size != sizeof(r) ||
-	    r.features & ~CKM_FEATURE_MAPLE || r.max_nodes > 4096 ||
+	    r.features & ~(CKM_FEATURE_MAPLE | CKM_FEATURE_VFS) || r.max_nodes > 4096 ||
 	    r.reserved[0] || r.reserved[1] || r.reserved[2] || r.reserved[3])
 		return -EINVAL;
 	if ((r.features & CKM_FEATURE_MAPLE) &&
 	    (!IS_ENABLED(CONFIG_CKERNEL_M_MAPLE) || !r.max_nodes))
+		return -EOPNOTSUPP;
+	if ((r.features & CKM_FEATURE_VFS) && !IS_ENABLED(CONFIG_CKERNEL_M_VFS))
 		return -EOPNOTSUPP;
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0)

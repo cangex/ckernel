@@ -22,6 +22,7 @@
  */
 
 #include <linux/export.h>
+#include <linux/ckernel_m_vfs.h>
 #include <linux/slab.h>
 #include <linux/blkdev.h>
 #include <linux/mount.h>
@@ -1129,6 +1130,8 @@ int reconfigure_super(struct fs_context *fc)
 			remount_ro = !sb_rdonly(sb);
 		}
 	}
+	if (remount_rw)
+		ckm_vfs_before_write_remount(sb);
 	shrink_dcache_sb(sb);
 
 	/* If we are reconfiguring to RDONLY and current sb is read/write,

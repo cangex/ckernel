@@ -15,6 +15,7 @@ static void ckm_release_work(struct work_struct *work)
 	WARN_ON(atomic_read(&i->tasks) || atomic_read(&i->mms) ||
 		atomic_read(&i->nodes));
 	ckm_maple_destroy(i);
+	ckm_vfs_destroy(i);
 	atomic_set(&i->state, CKM_DEAD);
 	trace_ckm_lifecycle(i->cookie, CKM_DEAD);
 	if (i->objcg)
@@ -44,6 +45,7 @@ static void ckm_revoke_work(struct work_struct *work)
 	atomic_set(&i->state, CKM_DRAINING);
 	trace_ckm_lifecycle(i->cookie, CKM_DRAINING);
 	ckm_maple_drain(i);
+	ckm_vfs_drain(i);
 	ckm_put(i);
 }
 
@@ -87,6 +89,13 @@ struct ckm_instance *ckm_create_instance(const struct ckm_create *r)
 	xa_init(&i->numa_pools);
 	raw_spin_lock_init(&i->records_lock);
 	INIT_LIST_HEAD(&i->records);
+	if (ckm_vfs_init(i)) {
+		if (i->objcg)
+			obj_cgroup_put(i->objcg);
+		cgroup_put(i->cgroup);
+		free_cpumask_var(i->cpus);
+		goto fail_stats;
+	}
 	trace_ckm_lifecycle(i->cookie, CKM_ACTIVE);
 	return i;
 fail_stats:

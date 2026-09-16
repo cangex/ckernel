@@ -22,3 +22,4 @@ static inline void init_fs_pin(struct fs_pin *p, void (*kill)(struct fs_pin *))
 void pin_remove(struct fs_pin *);
 void pin_insert(struct fs_pin *, struct vfsmount *);
 void pin_kill(struct fs_pin *);
+void group_pin_kill_matching(struct hlist_head *, void (*)(struct fs_pin *));

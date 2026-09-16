@@ -95,3 +95,27 @@ void group_pin_kill(struct hlist_head *p)
 		pin_kill(hlist_entry(q, struct fs_pin, s_list));
 	}
 }
+
+/* Cold invalidation only; other pin users on this superblock are untouched. */
+void group_pin_kill_matching(struct hlist_head *head, void (*kill)(struct fs_pin *))
+{
+	struct fs_pin *p, *found;
+
+	for (;;) {
+		found = NULL;
+		rcu_read_lock();
+		spin_lock(&pin_lock);
+		hlist_for_each_entry(p, head, s_list) {
+			if (p->kill == kill) {
+				found = p;
+				break;
+			}
+		}
+		spin_unlock(&pin_lock);
+		if (!found) {
+			rcu_read_unlock();
+			return;
+		}
+		pin_kill(found);
+	}
+}

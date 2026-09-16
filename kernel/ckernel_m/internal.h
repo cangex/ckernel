@@ -5,6 +5,7 @@
 #include <linux/cgroup.h>
 #include <linux/cpumask.h>
 #include <linux/ckernel_m.h>
+#include <linux/ckernel_m_vfs.h>
 #include <linux/list.h>
 #include <linux/memcontrol.h>
 #include <linux/nodemask.h>
@@ -36,6 +37,9 @@ struct ckm_instance {
 	struct xarray numa_pools;
 	raw_spinlock_t records_lock;
 	struct list_head records;
+#ifdef CONFIG_CKERNEL_M_VFS
+	struct ckm_vfs_state *vfs;
+#endif
 };
 
 struct ckm_instance *ckm_create_instance(const struct ckm_create *req);
