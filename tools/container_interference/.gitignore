@@ -1,0 +1,4 @@
+/cisd
+/cisctl
+/bpf/*.o
+/bpf/vmlinux.h*
