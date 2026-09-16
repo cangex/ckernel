@@ -16,9 +16,11 @@
 #include <time.h>
 #include <unistd.h>
 
+static uint64_t requested_start_ns;
 static struct cis_reply request(unsigned int op,int fd,uint64_t id,uint64_t gen,const char *name)
 {
-	struct cis_request q={.version=1,.size=sizeof(q),.command=op,.id=id,.generation=gen};
+	struct cis_request q={.version=CIS_VERSION,.size=sizeof(q),.command=op,.id=id,.generation=gen,
+		.start_ns=op==CIS_DIAGNOSE?requested_start_ns:0};
 	struct cis_reply r={.error=-EIO};
 	struct sockaddr_un a={.sun_family=AF_UNIX,.sun_path="/run/cis-fleet.sock"};
 	char control[CMSG_SPACE(sizeof(fd))]={0};
@@ -123,6 +125,7 @@ int main(int argc,char **argv)
 		if(fixture) {
 			snprintf(slot,sizeof(slot),"%u",!strcmp(work,"fixture-private")?i%2:0);
 			args[1]="fixture"; args[2]=slot;
+			if(!strcmp(work,"fixture-reuse")) args[4]="reuse";
 		}
 		snprintf(path,sizeof(path),"/sys/fs/cgroup/cis-fleet-%u",i);
 		snprintf(out,sizeof(out),"/tmp/container-%d-%u.log",getpid(),i);
@@ -139,12 +142,14 @@ int main(int argc,char **argv)
 			if(r.error) ret=1;
 		}
 	}
-	until(start);
-	snapshot("start");
 	if(!strcmp(mode,"diag") && !fixture && !async) {
+		until(start-1000000000ULL);
+		requested_start_ns=start;
 		struct cis_reply r=request(CIS_DIAGNOSE,-1,ids[target].id,ids[target].generation,reclaim?"reclaim":"sched");
 		if(r.error) ret=1;
 	}
+	until(start);
+	snapshot("start");
 	if(idle) until(start+seconds*1000000000ULL);
 	else for(i=0;i<count;i++) { if(cis_container_wait(pids[i])) ret=1; pids[i]=0; }
 	snapshot("end");

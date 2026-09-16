@@ -8,14 +8,17 @@ void cis_budget_tick(struct cis_context *ctx,uint64_t now)
 	struct timespec t;
 	unsigned long rss=0,unused;
 	uint64_t cpu;
+	int known=0;
 	FILE *f;
 	char detail[256];
 	if (now-ctx->last_budget_ns<1000000000ULL) return;
-	clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&t);
+	if(clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&t)) goto unavailable;
 	cpu=(uint64_t)t.tv_sec*1000000000+t.tv_nsec;
 	f=fopen("/proc/self/statm","r");
-	if (f) { if(fscanf(f,"%lu %lu",&unused,&rss)!=2) rss=0; fclose(f); }
-	snprintf(detail,sizeof(detail),"user_cpu_ns=%llu rss_bytes=%llu errors=%u drops=%u maps_and_perf_budget_reserved_bytes=16777216",
+	if (f) { known=fscanf(f,"%lu %lu",&unused,&rss)==2; fclose(f); }
+	if(!known || sysconf(_SC_PAGESIZE)<=0) goto unavailable;
+	snprintf(detail,sizeof(detail),"process_cpu_ns=%llu user_cpu_ns=%llu rss_bytes=%llu errors=%u drops=%u maps_and_perf_budget_reserved_bytes=16777216",
+		(unsigned long long)(cpu-ctx->last_process_ns),
 		(unsigned long long)(cpu-ctx->last_process_ns),(unsigned long long)rss*sysconf(_SC_PAGESIZE),ctx->errors,ctx->dropped);
 	cis_report(ctx,"budget",NULL,detail);
 	if ((rss*(uint64_t)sysconf(_SC_PAGESIZE)+(16ULL<<20)>ctx->memory_limit) ||
@@ -28,4 +31,9 @@ void cis_budget_tick(struct cis_context *ctx,uint64_t now)
 		cis_capture_stop(ctx);
 	}
 	ctx->last_process_ns=cpu; ctx->last_budget_ns=now;
+	return;
+unavailable:
+	ctx->errors++;
+	cis_report(ctx,"budget_unavailable",NULL,"CPU/RSS unavailable, not zero; all sampling and metrics stopped");
+	cis_capture_stop(ctx); ctx->mode=0; ctx->last_budget_ns=now;
 }

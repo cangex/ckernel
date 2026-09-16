@@ -59,6 +59,7 @@ static void request(struct cis_context *ctx, int fd)
 	if (n != sizeof(req) || (msg.msg_flags & (MSG_TRUNC|MSG_CTRUNC)) || req.version != CIS_VERSION ||
 	    req.size != sizeof(req) || req.reserved || !memchr(req.name, 0, sizeof(req.name))) goto done;
 	if (req.command != CIS_REGISTER && nfds) goto done;
+	if (req.command != CIS_DIAGNOSE && req.start_ns) goto done;
 	switch (req.command) {
 	case CIS_REGISTER:
 		if (nfds != 1) break;
@@ -77,6 +78,10 @@ static void request(struct cis_context *ctx, int fd)
 			 (unsigned long long)ctx->epoch); break;
 	case CIS_DIAGNOSE:
 		if(strcmp(req.name,"sched") && strcmp(req.name,"lock") && strcmp(req.name,"reclaim") && strcmp(req.name,"work")) break;
+		{
+			uint64_t now=cis_clock_ns();
+			if(req.start_ns && (req.start_ns<=now || req.start_ns-now>2000000000ULL)) break;
+		}
 		rep.error = -ENOENT;
 		for (i = 0; i < CIS_MAX_ROOTS; i++) {
 			r = &ctx->roots[i];
@@ -85,6 +90,7 @@ static void request(struct cis_context *ctx, int fd)
 				if (r->state == CIS_COOLDOWN || r->state == CIS_DIAGNOSING) { rep.error = -EAGAIN; break; }
 				r->diagnostic_kind = !strcmp(req.name,"lock")?2:!strcmp(req.name,"reclaim")?4:!strcmp(req.name,"work")?8:1;
 				r->manual_diagnostic = 1;
+				r->requested_start_ns = req.start_ns;
 				r->pending = 1; rep.error = 0; break;
 			}
 		}
@@ -107,6 +113,7 @@ int main(int argc, char **argv)
 	umask(077);
 	ctx->warmup=5; ctx->max_diagnostics=2; ctx->cooldown_s=30; ctx->window_ms=2000;
 	ctx->ip_hz=1000; ctx->memory_limit=64ULL<<20; ctx->user_cpu_limit_ns=20000000;
+	ctx->entry_rate_limit=200000;
 	ctx->epoch=1; ctx->mode=1; ctx->socket_fd=-1; ctx->output_fd=STDOUT_FILENO;
 	if (getrandom(&ctx->boot_generation, sizeof(ctx->boot_generation), 0) != sizeof(ctx->boot_generation)) goto out;
 	ctx->boot_generation &= 0x7fffffffffff0000ULL;
@@ -118,6 +125,12 @@ int main(int argc, char **argv)
 			const char *m=argv[++i]; ctx->mode=!strcmp(m,"off")?0:!strcmp(m,"metrics")?1:!strcmp(m,"ip")?2:-1;
 		} else if (!strcmp(argv[i], "--seconds") && i+1 < argc) end=cis_clock_ns()+strtoul(argv[++i],NULL,10)*1000000000ULL;
 		else if (!strcmp(argv[i], "--ready-fd") && i+1 < argc) ready_fd=atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--entry-rate-limit") && i+1 < argc) {
+			char *endp;
+			unsigned long value=strtoul(argv[++i],&endp,10);
+			if(*endp || !value || value>200000) goto out;
+			ctx->entry_rate_limit=value;
+		}
 		else { fprintf(stderr, "invalid option: %s\n", argv[i]); goto out; }
 	}
 	if (ctx->mode < 0) goto out;
@@ -143,6 +156,11 @@ int main(int argc, char **argv)
 		cis_report(ctx,"capture_failure",NULL,"requested IP mode did not start; no silent metrics fallback"); goto out;
 	}
 	cis_report(ctx,"start",NULL,"no workload interference percentage inferred; report files host-admin only");
+	{
+		char budget[96];
+		snprintf(budget,sizeof(budget),"entry_rate_limit=%u ip_hz=%u",ctx->entry_rate_limit,ctx->ip_hz);
+		cis_report(ctx,"capture_policy",NULL,budget);
+	}
 	if (ready_fd >= 0) { if (write(ready_fd,"R",1)!=1) goto out; close(ready_fd); }
 	while (!quitting && !ctx->stopping && (!end || cis_clock_ns()<end)) {
 		struct pollfd pfd={ctx->socket_fd,POLLIN,0};

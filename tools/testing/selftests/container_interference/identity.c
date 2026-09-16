@@ -14,11 +14,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 static unsigned int checks,failures;
+static uint64_t requested_start;
+static const char *entry_limit="200000";
 #define CHECK(name,expr) do { int ok=!!(expr); printf("CIS_CHECK %s %s\n",name,ok?"PASS":"FAIL"); checks++; failures+=!ok; } while(0)
 static struct cis_reply call(unsigned int command,int fd,uint64_t id,uint64_t generation,const char *name)
 {
 	struct sockaddr_un a={.sun_family=AF_UNIX,.sun_path="/run/cis-test.sock"};
-	struct cis_request q={.version=CIS_VERSION,.size=sizeof(q),.command=command,.id=id,.generation=generation};
+	struct cis_request q={.version=CIS_VERSION,.size=sizeof(q),.command=command,.id=id,.generation=generation,
+		.start_ns=requested_start};
 	struct cis_reply r={.error=-EIO};
 	char control[CMSG_SPACE(sizeof(int))]={0};
 	struct iovec iov={&q,sizeof(q)};
@@ -46,7 +49,7 @@ static pid_t start(const char *mode)
 	if(!pid) {
 		close(pipefd[0]); snprintf(fdtext,sizeof(fdtext),"%d",pipefd[1]);
 		snprintf(out,sizeof(out),"/tmp/cis-%s-%d.jsonl",mode,getpid());
-		execl("/cisd","cisd","--socket","/run/cis-test.sock","--mode",mode,"--bpf","/cis.bpf.o","--ready-fd",fdtext,"--output",out,NULL); _exit(127);
+		execl("/cisd","cisd","--socket","/run/cis-test.sock","--mode",mode,"--bpf","/cis.bpf.o","--ready-fd",fdtext,"--output",out,"--entry-rate-limit",entry_limit,NULL); _exit(127);
 	}
 	close(pipefd[1]);
 	if(read(pipefd[0],&c,1)!=1) { close(pipefd[0]); waitpid(pid,NULL,0); return -1; }
@@ -64,6 +67,58 @@ static int config_change_seen(const char *mode,pid_t daemon,uint64_t id)
 		if(strstr(line,"\"kind\":\"config_epoch\"") && strstr(line,identity)) found=1;
 	fclose(f); return found;
 }
+static void trigger_storm(void)
+{
+	pid_t daemon=start("ip"),workers[8]={0};
+	struct cis_reply roots[8];
+	char path[128],name[32],log[128],line[2048];
+	char *args[]={"/workload","bench","10",NULL};
+	unsigned int i,seen=0;
+	int healthy=1;
+	CHECK("storm_daemon_start",daemon>0); if(daemon<0) return;
+	for(i=0;i<8;i++) {
+		int fd;
+		snprintf(path,sizeof(path),"/sys/fs/cgroup/cis-storm-%u",i);
+		if(mkdir(path,0755)) { healthy=0; break; }
+		fd=open(path,O_RDONLY|O_DIRECTORY); snprintf(name,sizeof(name),"storm-%u",i);
+		roots[i]=call(CIS_REGISTER,fd,0,0,name); if(fd>=0) close(fd);
+		if(roots[i].error) { healthy=0; break; }
+		workers[i]=cis_container_start(path,"/container-root",args,1+i%4);
+		if(workers[i]<0) { workers[i]=0; healthy=0; break; }
+	}
+	CHECK("storm_eight_containers_registered",healthy);
+	if(healthy) for(i=0;i<8;i++) {
+		struct cis_reply r=call(CIS_DIAGNOSE,-1,roots[i].id,roots[i].generation,"sched");
+		healthy&=!r.error;
+	}
+	CHECK("storm_eight_requests_queued",healthy);
+	if(healthy) for(i=0;i<40;i++) {
+		struct cis_reply r=call(CIS_STATUS,-1,0,0,"");
+		unsigned int active=999;
+		char *p=strstr(r.text,"diagnostics=");
+		if(p) sscanf(p,"diagnostics=%u",&active);
+		if(r.error || active>2 || !strstr(r.text,"capture=1")) healthy=0;
+		usleep(250000);
+	}
+	CHECK("storm_live_capacity_and_capture",healthy);
+	for(i=0;i<8;i++) if(workers[i]) CHECK("storm_business_completes",!cis_container_wait(workers[i]));
+	call(CIS_STOP,-1,0,0,""); CHECK("storm_clean_stop",!cis_container_wait(daemon));
+	snprintf(log,sizeof(log),"/tmp/cis-ip-%d.jsonl",daemon);
+	FILE *f=fopen(log,"r");
+	if(f) {
+		while(fgets(line,sizeof(line),f)) if(strstr(line,"\"kind\":\"diagnostic_start\"")) {
+			char *p=strstr(line,"\"name\":\"storm-");
+			unsigned int slot=8;
+			if(p && sscanf(p,"\"name\":\"storm-%u",&slot)==1 && slot<8) seen|=1U<<slot;
+		}
+		fclose(f);
+	}
+	CHECK("storm_all_eight_eventually_served",seen==255);
+	for(i=0;i<8;i++) {
+		snprintf(path,sizeof(path),"/sys/fs/cgroup/cis-storm-%u",i);
+		if(rmdir(path) && errno!=ENOENT) CHECK("storm_cleanup",0);
+	}
+}
 int main(int argc,char **argv)
 {
 	const char *mode=argc>1?argv[1]:"metrics";
@@ -77,6 +132,12 @@ int main(int argc,char **argv)
 	daemon=start(mode); CHECK("daemon_start",daemon>0); if(daemon<0) return 1;
 	ra=call(CIS_REGISTER,a,0,0,"a"); rb=call(CIS_REGISTER,b,0,0,"b");
 	CHECK("register_two",!ra.error && !rb.error && ra.id!=rb.id && ra.generation!=rb.generation);
+	requested_start=1;
+	reply=call(CIS_DIAGNOSE,-1,ra.id,ra.generation,"sched"); CHECK("past_window_rejected",reply.error==-EINVAL);
+	requested_start=cis_now_ns()+10000000000ULL;
+	reply=call(CIS_DIAGNOSE,-1,ra.id,ra.generation,"sched"); CHECK("unbounded_future_window_rejected",reply.error==-EINVAL);
+	reply=call(CIS_STATUS,-1,0,0,""); CHECK("unexpected_schedule_field_rejected",reply.error==-EINVAL);
+	requested_start=0;
 	reply=call(CIS_REGISTER,a,0,0,"duplicate"); CHECK("duplicate_rejected",reply.error==-EEXIST);
 	mkdir("/sys/fs/cgroup/cis-a/child",0755); child=open("/sys/fs/cgroup/cis-a/child",O_RDONLY|O_DIRECTORY);
 	reply=call(CIS_REGISTER,child,0,0,"overlap"); CHECK("overlap_rejected",reply.error==-EEXIST);
@@ -152,6 +213,23 @@ int main(int argc,char **argv)
 		struct stat st;
 		CHECK("new_cgroup_identity",!fstat(a,&st) && (uint64_t)st.st_ino!=ra.id);
 		close(a); CHECK("remove_recreated",!rmdir("/sys/fs/cgroup/cis-a"));
+	}
+	if(!strcmp(mode,"ip")) {
+		trigger_storm();
+		entry_limit="1";
+		CHECK("budget_test_root",!mkdir("/sys/fs/cgroup/cis-limit",0755));
+		a=open("/sys/fs/cgroup/cis-limit",O_RDONLY|O_DIRECTORY);
+		daemon=start(mode); CHECK("budget_test_daemon",daemon>0);
+		if(daemon>0 && a>=0) {
+			ra=call(CIS_REGISTER,a,0,0,"limit-fixture"); CHECK("budget_test_register",!ra.error);
+			worker=cis_container_start("/sys/fs/cgroup/cis-limit","/container-root",args,1);
+			CHECK("budget_detach_keeps_business_running",worker>0 && !cis_container_wait(worker));
+			reply=call(CIS_STATUS,-1,0,0,"");
+			CHECK("injected_low_entry_budget_detaches",!reply.error && strstr(reply.text,"capture=0") && strstr(reply.text,"errors=0 "));
+			call(CIS_STOP,-1,0,0,""); CHECK("budget_daemon_clean_exit",!cis_container_wait(daemon));
+		}
+		if(a>=0) close(a);
+		CHECK("budget_test_cleanup",!rmdir("/sys/fs/cgroup/cis-limit"));
 	}
 	printf("CIS_IDENTITY_RESULT checks=%u failures=%u\n",checks,failures);
 	return failures?1:0;

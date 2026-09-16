@@ -55,7 +55,7 @@ static __always_inline int identity(struct task_struct *task,struct cis_identity
 static __always_inline int allowed(struct cis_identity *id,__u32 kind,__u64 now)
 {
 	struct cis_target *t=bpf_map_lookup_elem(&targets,&id->id);
-	return t && t->generation==id->generation && t->deadline_ns>now && (t->kind&kind);
+	return t && t->generation==id->generation && now>=t->start_ns && t->deadline_ns>now && (t->kind&kind);
 }
 
 static __always_inline int same_window(struct cis_event *e,__u32 kind,__u64 now)

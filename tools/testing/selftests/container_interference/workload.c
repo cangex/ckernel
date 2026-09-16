@@ -13,6 +13,8 @@
 #include <sys/utsname.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include "fixture/uapi.h"
@@ -38,6 +40,40 @@ static int one_operation(void)
     return close(fd) || ret;
 }
 
+static void cpu_until(uint64_t end)
+{
+    volatile uint64_t value=1;
+    do {
+        for(unsigned int i=0;i<1024;i++) value=value*6364136223846793005ULL+1;
+    } while(cis_now_ns()<end);
+}
+
+static int internal_phase(uint64_t start,unsigned int seconds)
+{
+    uint64_t span=(uint64_t)seconds*1000000000ULL/3;
+    pid_t children[3]={0};
+    if(seconds<9) return 13;
+    until(start);
+    printf("CIS_PHASE begin_ns=%" PRIu64 " concurrency=1 relation=container_internal\n",cis_now_ns());
+    cpu_until(start+span);
+    printf("CIS_PHASE begin_ns=%" PRIu64 " concurrency=4 relation=container_internal\n",cis_now_ns());
+    fflush(stdout);
+    for(unsigned int i=0;i<3;i++) {
+        children[i]=fork();
+        if(!children[i]) { cpu_until(start+2*span); _exit(0); }
+        if(children[i]<0) return 14;
+    }
+    cpu_until(start+2*span);
+    for(unsigned int i=0;i<3;i++) {
+        int status;
+        if(waitpid(children[i],&status,0)!=children[i] || !WIFEXITED(status) || WEXITSTATUS(status)) return 15;
+    }
+    printf("CIS_PHASE begin_ns=%" PRIu64 " concurrency=1 relation=container_internal\n",cis_now_ns());
+    cpu_until(start+3*span);
+    printf("CIS_PHASE_DONE end_ns=%" PRIu64 "\n",cis_now_ns());
+    return 0;
+}
+
 static int fixture(int argc,char **argv)
 {
     struct cis_fixture_request q={.slot=argc>2?strtoul(argv[2],NULL,10):0,.hold_us=1000};
@@ -46,10 +82,16 @@ static int fixture(int argc,char **argv)
     if(fd<0) { perror("fixture"); return 6; }
     until(start);
     for(unsigned int i=0;i<200;i++) {
+        if(i==100 && argc>4 && !strcmp(argv[4],"reuse")) {
+            if(ioctl(fd,CIS_FIXTURE_RESET,&q)) { close(fd); return 7; }
+            printf("CIS_RESET object=0x%" PRIx64 " generation=%" PRIu64 " time_ns=%" PRIu64 " fixture_reinitialization=1\n",
+                   (uint64_t)q.object,(uint64_t)q.object_generation,(uint64_t)q.begin_ns);
+            fflush(stdout);
+        }
         if(ioctl(fd,CIS_FIXTURE_LOCK,&q)) { perror("ioctl"); close(fd); return 7; }
-        char line[384];
-        int size=snprintf(line,sizeof(line),"CIS_TRUTH slot=%u object=0x%" PRIx64 " begin_ns=%" PRIu64 " acquired_ns=%" PRIu64 " released_ns=%" PRIu64 " cgroup_id=%" PRIu64 "\n",
-               q.slot,(uint64_t)q.object,(uint64_t)q.begin_ns,(uint64_t)q.acquired_ns,(uint64_t)q.released_ns,(uint64_t)q.cgroup_id);
+        char line[448];
+        int size=snprintf(line,sizeof(line),"CIS_TRUTH slot=%u object=0x%" PRIx64 " begin_ns=%" PRIu64 " acquired_ns=%" PRIu64 " released_ns=%" PRIu64 " cgroup_id=%" PRIu64 " generation=%" PRIu64 "\n",
+               q.slot,(uint64_t)q.object,(uint64_t)q.begin_ns,(uint64_t)q.acquired_ns,(uint64_t)q.released_ns,(uint64_t)q.cgroup_id,(uint64_t)q.object_generation);
         if(size<0 || size>=(int)sizeof(line) || write(STDOUT_FILENO,line,size)!=size) { close(fd); return 10; }
     }
     close(fd); return 0;
@@ -97,8 +139,9 @@ int main(int argc, char **argv)
     if (!seconds || seconds > 300) return 4;
     uint64_t start = argc>3?strtoull(argv[3],NULL,10):cis_now_ns();
     uint64_t end = start + seconds * 1000000000ULL, ops = 0;
-    until(start);
+    if(!strcmp(argv[1],"internal-phase")) return internal_phase(start,seconds);
     if(!strcmp(argv[1],"reclaim")) {
+        until(start);
         const size_t bytes=64ULL<<20;
         do {
             volatile unsigned char *p=mmap(NULL,bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
@@ -116,20 +159,38 @@ int main(int argc, char **argv)
         uint64_t count=(uint64_t)rate*seconds,timeouts=0,max=0;
         if(!rate || count>1000000) return 8;
         uint64_t *latency=calloc(count,sizeof(*latency));
-        if(!latency) return 9;
+        uint64_t *waiting=calloc(count,sizeof(*waiting)), *service=calloc(count,sizeof(*service));
+        uint64_t *sorted=calloc(count,sizeof(*sorted));
+        if(!latency || !waiting || !service || !sorted) return 9;
+        /* Fault in the result buffers before the common measurement barrier. */
+        for(uint64_t i=0;i<count;i++) latency[i]=waiting[i]=service[i]=sorted[i]=1;
+        unsigned long slack=prctl(PR_GET_TIMERSLACK,0,0,0,0);
+        until(start);
         for(uint64_t i=0;i<count;i++) {
             uint64_t due=start+i*1000000000ULL/rate;
             until(due);
-            if(one_operation()) { free(latency); return 5; }
-            latency[i]=cis_now_ns()-due;
+            uint64_t begin=cis_now_ns();
+            if(one_operation()) return 5;
+            uint64_t finish=cis_now_ns();
+            waiting[i]=begin-due; service[i]=finish-begin; latency[i]=finish-due;
             if(latency[i]>100000000) timeouts++;
             if(latency[i]>max) max=latency[i];
         }
-        qsort(latency,count,sizeof(*latency),order);
+        uint64_t finish=cis_now_ns();
+        memcpy(sorted,latency,count*sizeof(*latency)); qsort(sorted,count,sizeof(*sorted),order);
+        uint64_t p99=sorted[(count*99+99)/100-1],tail_count=0,tail_wait=0,tail_service=0;
+        for(uint64_t i=0;i<count;i++) if(latency[i]>=p99) {
+            tail_count++; tail_wait+=waiting[i]; tail_service+=service[i];
+        }
         printf("CIS_LATENCY cgroup=%.*s count=%" PRIu64 " p99_ns=%" PRIu64 " max_ns=%" PRIu64 " timeouts=%" PRIu64 " rate=%u start_ns=%" PRIu64 " end_ns=%" PRIu64 "\n",
-               (int)strcspn(cg,"\n"),cg,count,latency[(count*99+99)/100-1],max,timeouts,rate,start,cis_now_ns());
-        free(latency); return 0;
+               (int)strcspn(cg,"\n"),cg,count,p99,max,timeouts,rate,start,finish);
+        qsort(waiting,count,sizeof(*waiting),order); qsort(service,count,sizeof(*service),order);
+        printf("CIS_LATENCY_PARTS cgroup=%.*s wait_p99_ns=%" PRIu64 " execution_p99_ns=%" PRIu64 " tail_count=%" PRIu64 " tail_wait_mean_ns=%" PRIu64 " tail_execution_mean_ns=%" PRIu64 " timerslack_ns=%lu percentiles_not_additive=1 execution_includes_blocking=1\n",
+               (int)strcspn(cg,"\n"),cg,waiting[(count*99+99)/100-1],service[(count*99+99)/100-1],tail_count,
+               tail_wait/tail_count,tail_service/tail_count,slack);
+        free(latency);free(waiting);free(service);free(sorted); return 0;
     }
+    until(start);
     do {
         for (unsigned i = 0; i < 256; i++) {
             if(one_operation()) return 5;
@@ -137,6 +198,6 @@ int main(int argc, char **argv)
         }
     } while (cis_now_ns() < end);
     uint64_t finish = cis_now_ns();
-    printf("CIS_RESULT cgroup=%.*s operations=%" PRIu64 " start_ns=%" PRIu64 " end_ns=%" PRIu64 " errors=0\n", (int)strcspn(cg,"\n"),cg,ops,start,finish);
+    printf("CIS_RESULT cgroup=%.*s operations=%" PRIu64 " start_ns=%" PRIu64 " end_ns=%" PRIu64 " scheduled_end_ns=%" PRIu64 " last_batch_ops=256 errors=0\n", (int)strcspn(cg,"\n"),cg,ops,start,finish,end);
     return 0;
 }

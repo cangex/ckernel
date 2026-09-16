@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/perf_event.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,9 @@ struct capture {
 	uint64_t perf_lost, perf_throttle, perf_unthrottle, perf_bad_records;
 	unsigned int active_kinds;
 	uint64_t last_stats_ns, last_received;
+	uint64_t counter_enabled[CIS_CPU_CAP],counter_running[CIS_CPU_CAP],counter_read_ns[CIS_CPU_CAP];
+	unsigned int counter_cursor;
+	uint64_t next_counter_ns;
 	struct cis_bpf_stats *cpu_stats;
 	int possible_cpus;
 };
@@ -74,6 +78,7 @@ static void lost(void *opaque,int cpu,__u64 count)
 {
 	struct capture *c=opaque;
 	char detail[128];
+	c->ctx->dropped=count>UINT_MAX-c->ctx->dropped?UINT_MAX:c->ctx->dropped+count;
 	snprintf(detail,sizeof(detail),"cpu=%d lost=%llu per_cpu_buffer_full=1",cpu,(unsigned long long)count);
 	cis_report(c->ctx,"buffer_loss",NULL,detail);
 }
@@ -133,7 +138,8 @@ static void export_stacks(struct capture *c,struct cis_root *r)
 	__u32 key,next;
 	__u64 ips[CIS_STACK_DEPTH];
 	int err=bpf_map_get_next_key(c->stacks,NULL,&key);
-	while(!err) {
+	unsigned int visited=0;
+	while(!err && visited++<CIS_STACKS*2) {
 		unsigned int i;
 		char detail[1200];
 		size_t n=snprintf(detail,sizeof(detail),"stack_id=%u ips=",key);
@@ -144,6 +150,7 @@ static void export_stacks(struct capture *c,struct cis_root *r)
 		}
 		err=bpf_map_get_next_key(c->stacks,&key,&next); key=next;
 	}
+	if(!err) cis_report(c->ctx,"stack_scan_limited",r,"concurrent updates exceeded bounded export; stack coverage incomplete");
 }
 
 static void unfinished_work(struct capture *c,struct cis_root *r)
@@ -173,17 +180,23 @@ static void unfinished_work(struct capture *c,struct cis_root *r)
 int cis_capture_diagnostic(struct cis_context *ctx,struct cis_root *r,int enable)
 {
 	struct capture *c=ctx->capture;
-	struct cis_target target={.generation=r->generation,.start_ns=cis_clock_ns(),.kind=r->diagnostic_kind};
+	struct cis_target target={.generation=r->generation,.kind=r->diagnostic_kind};
 	unsigned int kinds=enable?r->diagnostic_kind:0,i;
 	unsigned int previous_kinds;
 	if(!c) return enable?-EOPNOTSUPP:0;
-	target.deadline_ns=target.start_ns+ctx->window_ms*1000000ULL;
 	previous_kinds=c->active_kinds;
 	for(i=0;i<CIS_MAX_ROOTS;i++)
 		if(&ctx->roots[i]!=r && ctx->roots[i].used && ctx->roots[i].state==CIS_DIAGNOSING) kinds|=ctx->roots[i].diagnostic_kind;
 	if(enable) {
 		if(configure_links(c,kinds)) { configure_links(c,previous_kinds); return -EOPNOTSUPP; }
+		target.start_ns=cis_clock_ns();
+		if(r->requested_start_ns) {
+			if(r->requested_start_ns<=target.start_ns) { configure_links(c,previous_kinds); return -ETIME; }
+			target.start_ns=r->requested_start_ns;
+		}
+		target.deadline_ns=target.start_ns+ctx->window_ms*1000000ULL;
 		if(bpf_map_update_elem(c->targets,&r->id,&target,BPF_NOEXIST)) { configure_links(c,previous_kinds); return -errno; }
+		r->diagnostic_start_ns=target.start_ns; r->deadline_ns=target.deadline_ns;
 	} else {
 		bpf_map_delete_elem(c->targets,&r->id);
 		configure_links(c,kinds);
@@ -288,18 +301,34 @@ int cis_capture_poll(struct cis_context *ctx)
 	if(!c) return 0;
 	ret=perf_buffer__poll(c->ring,0);
 	if(ret<0 && ret!=-EINTR) return ret;
+	/* Spread perf reads across one second rather than sending an all-CPU burst. */
+	if(now>=c->next_counter_ns) {
+		unsigned int batch=(c->ncpu+9)/10,j;
+		for(j=0;j<batch;j++) {
+			unsigned int cpu=c->counter_cursor++%c->ncpu;
+			struct { uint64_t value,enabled,running; } counter;
+			if(c->perf_fds[cpu]<0) continue;
+			perf_ring(c,cpu);
+			if(read(c->perf_fds[cpu],&counter,sizeof(counter))!=sizeof(counter)) { ctx->errors++; continue; }
+			c->counter_enabled[cpu]=counter.enabled; c->counter_running[cpu]=counter.running;
+			c->counter_read_ns[cpu]=now;
+		}
+		c->next_counter_ns=now+100000000;
+	}
 	if(now-c->last_stats_ns<1000000000) return 0;
 	{
-		uint64_t enabled=0,running=0;
+		uint64_t enabled=0,running=0,max_age=0;
+		unsigned int unread=0;
 		for(i=0;i<c->ncpu;i++) if(c->perf_fds[i]>=0) {
-			struct { uint64_t value,enabled,running; } counter;
 			perf_ring(c,i);
-			if(read(c->perf_fds[i],&counter,sizeof(counter))==sizeof(counter)) { enabled+=counter.enabled; running+=counter.running; }
-			else ctx->errors++;
+			enabled+=c->counter_enabled[i]; running+=c->counter_running[i];
+			if(!c->counter_read_ns[i]) unread++;
+			else if(now-c->counter_read_ns[i]>max_age) max_age=now-c->counter_read_ns[i];
 		}
-		snprintf(detail,sizeof(detail),"enabled_ns=%llu running_ns=%llu lost=%llu throttle=%llu unthrottle=%llu invalid_records=%llu",
+		snprintf(detail,sizeof(detail),"enabled_ns=%llu running_ns=%llu lost=%llu throttle=%llu unthrottle=%llu invalid_records=%llu staggered=1 unread_cpus=%u max_counter_age_ns=%llu",
 			(unsigned long long)enabled,(unsigned long long)running,(unsigned long long)c->perf_lost,
-			(unsigned long long)c->perf_throttle,(unsigned long long)c->perf_unthrottle,(unsigned long long)c->perf_bad_records);
+			(unsigned long long)c->perf_throttle,(unsigned long long)c->perf_unthrottle,(unsigned long long)c->perf_bad_records,
+			unread,(unsigned long long)max_age);
 		cis_report(ctx,"perf_quality",NULL,detail);
 	}
 	if(bpf_map_lookup_elem(c->stats,&zero,c->cpu_stats)) return -EIO;
@@ -317,8 +346,10 @@ int cis_capture_poll(struct cis_context *ctx)
 		(unsigned long long)total.unknown,(unsigned long long)total.overdepth,(unsigned long long)total.unmatched,
 		(unsigned long long)total.nested,(unsigned long long)total.rejected,(unsigned long long)total.expired,(unsigned long long)total.phase_changes,(unsigned long long)total.irq_context);
 	cis_report(ctx,"coverage",NULL,detail);
-	if(c->last_stats_ns && (received-c->last_received)*1000000000.0/(now-c->last_stats_ns)>200000) {
-		cis_report(ctx,"entry_budget_disable",NULL,"entry rate exceeded 200000/s, detaching collectors"); return -E2BIG;
+	if(c->last_stats_ns && (received-c->last_received)*1000000000.0/(now-c->last_stats_ns)>ctx->entry_rate_limit) {
+		snprintf(detail,sizeof(detail),"configured_limit=%u delta_entries=%llu interval_ns=%llu detaching_collectors=1",
+			ctx->entry_rate_limit,(unsigned long long)(received-c->last_received),(unsigned long long)(now-c->last_stats_ns));
+		cis_report(ctx,"entry_budget_disable",NULL,detail); return -E2BIG;
 	}
 	c->last_stats_ns=now; c->last_received=received;
 	return 0;

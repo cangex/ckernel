@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <sys/types.h>
-#define CIS_VERSION 1
+#define CIS_VERSION 2
 #define CIS_MAX_ROOTS 256
 #define CIS_MAX_DEPTH 32
 #define CIS_MAX_HISTORY 32
@@ -14,6 +14,7 @@ enum cis_state { CIS_WARMUP, CIS_AMBIENT, CIS_SUSPECT, CIS_DIAGNOSING, CIS_COOLD
 struct cis_request {
 	uint32_t version, size, command, reserved;
 	uint64_t id, generation;
+	uint64_t start_ns;
 	char name[64];
 };
 struct cis_reply { int32_t error; uint32_t size; uint64_t id, generation; char text[256]; };
@@ -27,6 +28,7 @@ struct cis_root {
 	unsigned int diagnostic_kind;
 	unsigned int ip_samples, lock_samples, reclaim_samples;
 	uint64_t id, generation, epoch, next_ns, deadline_ns, last_diag_ns;
+	uint64_t requested_start_ns, diagnostic_start_ns;
 	uint64_t config_hash, config_due_ns, policy_epoch;
 	dev_t dev;
 	char name[64], path[4096];
@@ -41,6 +43,7 @@ struct cis_context {
 	uint64_t boot_generation, serial, epoch, next_export_ns;
 	unsigned int active, diagnostic, warmup, queue_cursor;
 	unsigned int max_diagnostics, cooldown_s, window_ms, ip_hz;
+	unsigned int entry_rate_limit;
 	unsigned int metrics_reads, errors, dropped, unknown;
 	uint64_t memory_limit, user_cpu_limit_ns, last_process_ns, last_budget_ns;
 	int mode, stopping, output_fd, socket_fd;

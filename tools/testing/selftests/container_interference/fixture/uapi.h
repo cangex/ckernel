@@ -5,7 +5,7 @@
 #include <linux/ioctl.h>
 struct cis_fixture_request {
 	__u32 slot, hold_us;
-	__u64 object, begin_ns, acquired_ns, released_ns, cgroup_id;
+	__u64 object, begin_ns, acquired_ns, released_ns, cgroup_id, object_generation;
 };
 #define CIS_FIXTURE_LOCK _IOWR('C', 1, struct cis_fixture_request)
 struct cis_fixture_async {
@@ -15,4 +15,5 @@ struct cis_fixture_async {
 #define CIS_FIXTURE_QUEUE _IOWR('C',2,struct cis_fixture_async)
 #define CIS_FIXTURE_WAIT _IOWR('C',3,struct cis_fixture_async)
 #define CIS_FIXTURE_CANCEL _IOWR('C',4,struct cis_fixture_async)
+#define CIS_FIXTURE_RESET _IOWR('C',5,struct cis_fixture_request)
 #endif

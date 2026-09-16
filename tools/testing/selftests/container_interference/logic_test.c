@@ -9,7 +9,13 @@ uint64_t cis_clock_ns(void) { return now; }
 void cis_report(struct cis_context *c,const char *kind,const struct cis_root *r,const char *d)
 { (void)c; (void)kind; (void)r; (void)d; }
 int cis_capture_diagnostic(struct cis_context *c,struct cis_root *r,int enable)
-{ (void)c; (void)r; if(enable) starts++; else stops++; return 0; }
+{
+	if(enable) {
+		starts++; r->diagnostic_start_ns=r->requested_start_ns?r->requested_start_ns:now;
+		r->deadline_ns=r->diagnostic_start_ns+c->window_ms*1000000ULL;
+	} else stops++;
+	return 0;
+}
 #define CHECK(n,x) do { int ok=!!(x); checks++; failures+=!ok; printf("CIS_LOGIC %s %s\n",n,ok?"PASS":"FAIL"); } while(0)
 int main(void)
 {

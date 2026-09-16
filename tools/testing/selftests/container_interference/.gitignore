@@ -4,5 +4,6 @@
 /truth
 /fleet
 /logic_test
+/budget_test
 __pycache__/
 *.pyc

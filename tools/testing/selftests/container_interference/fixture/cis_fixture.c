@@ -12,11 +12,14 @@
 #include <linux/slab.h>
 #include <linux/completion.h>
 #include <linux/workqueue.h>
+#include <linux/rwsem.h>
 #include "uapi.h"
 static bool isolated_vm;
 module_param(isolated_vm,bool,0400);
 static DEFINE_MUTEX(lock_a);
 static DEFINE_MUTEX(lock_b);
+static DECLARE_RWSEM(fixture_lifetime);
+static u64 object_generation=1;
 struct async_context {
 	struct work_struct work;
 	struct completion done;
@@ -93,18 +96,31 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 	(void)file;
 	if(!capable(CAP_SYS_ADMIN)) return -EPERM;
 	if(cmd==CIS_FIXTURE_QUEUE || cmd==CIS_FIXTURE_WAIT || cmd==CIS_FIXTURE_CANCEL) return async_ioctl(file,cmd,arg);
-	if(cmd!=CIS_FIXTURE_LOCK) return -ENOTTY;
+	if(cmd!=CIS_FIXTURE_LOCK && cmd!=CIS_FIXTURE_RESET) return -ENOTTY;
 	if(copy_from_user(&q,(void __user *)arg,sizeof(q))) return -EFAULT;
+	if(cmd==CIS_FIXTURE_RESET) {
+		/* Drain all old users, then deliberately reuse the same mutex addresses. */
+		down_write(&fixture_lifetime);
+		mutex_destroy(&lock_a); mutex_destroy(&lock_b);
+		mutex_init(&lock_a); mutex_init(&lock_b);
+		q.object_generation=++object_generation; q.object=(unsigned long)&lock_a;
+		q.begin_ns=ktime_get_ns();
+		up_write(&fixture_lifetime);
+		return copy_to_user((void __user*)arg,&q,sizeof(q))?-EFAULT:0;
+	}
 	if(q.slot>1 || !q.hold_us || q.hold_us>2000) return -EINVAL;
+	down_read(&fixture_lifetime);
+	q.object_generation=object_generation;
 	lock=q.slot?&lock_b:&lock_a;
 	q.object=(unsigned long)lock;
 	rcu_read_lock(); q.cgroup_id=cgroup_id(task_dfl_cgroup(current)); rcu_read_unlock();
 	q.begin_ns=ktime_get_ns();
-	if(mutex_lock_interruptible(lock)) return -EINTR;
+	if(mutex_lock_interruptible(lock)) { up_read(&fixture_lifetime); return -EINTR; }
 	q.acquired_ns=ktime_get_ns();
 	usleep_range(q.hold_us,q.hold_us+50);
 	q.released_ns=ktime_get_ns();
 	mutex_unlock(lock);
+	up_read(&fixture_lifetime);
 	return copy_to_user((void __user *)arg,&q,sizeof(q))?-EFAULT:0;
 }
 static const struct file_operations ops={.owner=THIS_MODULE,.open=fixture_open,.release=fixture_release,.unlocked_ioctl=fixture_ioctl,.compat_ioctl=fixture_ioctl};

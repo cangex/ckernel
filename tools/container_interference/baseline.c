@@ -53,6 +53,7 @@ void cis_baseline_update(struct cis_context *ctx, struct cis_root *r, const stru
 			if (r->deviations >= 3) {
 				r->pending = 1;
 				r->manual_diagnostic = 0;
+				r->requested_start_ns = 0;
 				r->diagnostic_kind = pressure ? 4 : r->lock_samples>=4 && r->ip_samples>=8 ? 2 : 1;
 			}
 			cis_report(ctx, "E0", r, "sustained deviation; demand/phase/external cause unresolved");
@@ -90,9 +91,15 @@ void cis_diagnostics_tick(struct cis_context *ctx, uint64_t now)
 		if (!ctx->capture || cis_capture_diagnostic(ctx, r, 1)) {
 			cis_report(ctx, "diagnostic_unavailable", r, "capture unavailable; no evidence fabricated"); continue;
 		}
-		r->state = CIS_DIAGNOSING; r->deadline_ns = now+ctx->window_ms*1000000ULL;
+		r->state = CIS_DIAGNOSING;
 		ctx->diagnostic++; ctx->queue_cursor = (k+1)%CIS_MAX_ROOTS;
-		cis_report(ctx, "diagnostic_start", r, "bounded target window");
+		{
+			char detail[192];
+			snprintf(detail,sizeof(detail),"start_ns=%llu deadline_ns=%llu ready_ns=%llu bounded_target_window=1",
+				(unsigned long long)r->diagnostic_start_ns,(unsigned long long)r->deadline_ns,
+				(unsigned long long)cis_clock_ns());
+			cis_report(ctx, "diagnostic_start", r, detail);
+		}
 		break;
 	}
 }
