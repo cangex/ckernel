@@ -15,6 +15,9 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 	struct ckm_instance *i = file->private_data;
 	struct ckm_query q;
 	struct ckm_diagnostics d;
+#ifdef CONFIG_CKERNEL_M_VFS_OPEN
+	struct ckm_vfs_open_query openq;
+#endif
 #ifdef CONFIG_CKERNEL_M_VFS
 	struct ckm_vfs_root root;
 	struct ckm_vfs_query vfs;
@@ -23,6 +26,17 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	switch (cmd) {
+#ifdef CONFIG_CKERNEL_M_VFS_OPEN
+	case CKM_IOC_VFS_OPEN_QUERY:
+		if (copy_from_user(&openq, (void __user *)arg, sizeof(openq)))
+			return -EFAULT;
+		if (openq.version != CKM_ABI_VERSION || openq.size != sizeof(openq) ||
+		    openq.reserved[0] || openq.reserved[1] || openq.reserved[2] || openq.reserved[3])
+			return -EINVAL;
+		memset(&openq, 0, sizeof(openq));
+		ckm_vfs_open_query(i, &openq);
+		return copy_to_user((void __user *)arg, &openq, sizeof(openq)) ? -EFAULT : 0;
+#endif
 #ifdef CONFIG_CKERNEL_M_VFS
 	case CKM_IOC_VFS_ROOT:
 		if (copy_from_user(&root, (void __user *)arg, sizeof(root)))
@@ -106,13 +120,16 @@ static long ckm_control_ioctl(struct file *file, unsigned int cmd, unsigned long
 	if (copy_from_user(&r, (void __user *)arg, sizeof(r)))
 		return -EFAULT;
 	if (r.version != CKM_ABI_VERSION || r.size != sizeof(r) ||
-	    r.features & ~(CKM_FEATURE_MAPLE | CKM_FEATURE_VFS) || r.max_nodes > 4096 ||
+	    r.features & ~(CKM_FEATURE_MAPLE | CKM_FEATURE_VFS | CKM_FEATURE_VFS_OPEN) || r.max_nodes > 4096 ||
 	    r.reserved[0] || r.reserved[1] || r.reserved[2] || r.reserved[3])
 		return -EINVAL;
 	if ((r.features & CKM_FEATURE_MAPLE) &&
 	    (!IS_ENABLED(CONFIG_CKERNEL_M_MAPLE) || !r.max_nodes))
 		return -EOPNOTSUPP;
 	if ((r.features & CKM_FEATURE_VFS) && !IS_ENABLED(CONFIG_CKERNEL_M_VFS))
+		return -EOPNOTSUPP;
+	if ((r.features & CKM_FEATURE_VFS_OPEN) &&
+	    (!IS_ENABLED(CONFIG_CKERNEL_M_VFS_OPEN) || !(r.features & CKM_FEATURE_VFS)))
 		return -EOPNOTSUPP;
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0)

@@ -26,6 +26,15 @@ config CKERNEL_M_VFS
 	  This experimental prototype adds instance-local read-side locking and
 	  does not imply faster pathname lookup or a security boundary.
 
+config CKERNEL_M_VFS_OPEN
+	bool "CKernel-M read-only open-file dentry loans"
+	depends on CKERNEL_M_VFS
+	default n
+	help
+	  Borrow a terminal dentry reference for independently opened read-only
+	  files on the registered tmpfs mount. All permission checks and file
+	  state remain native. Adds an ownership pointer to struct file.
+
 config CKERNEL_M_KUNIT_TEST
 	bool "CKernel-M core tests" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CKERNEL_M=y

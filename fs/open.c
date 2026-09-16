@@ -34,6 +34,7 @@
 #include <linux/compat.h>
 #include <linux/mnt_idmapping.h>
 #include <linux/filelock.h>
+#include <linux/ckernel_m_vfs.h>
 
 #include "internal.h"
 
@@ -901,7 +902,8 @@ static int do_dentry_open(struct file *f,
 	static const struct file_operations empty_fops = {};
 	int error;
 
-	path_get(&f->f_path);
+	if (!ckm_vfs_file_get(f))
+		path_get(&f->f_path);
 	f->f_inode = inode;
 	f->f_mapping = inode->i_mapping;
 	f->f_wb_err = filemap_sample_wb_err(f->f_mapping);
@@ -1005,7 +1007,9 @@ cleanup_all:
 	fops_put(f->f_op);
 	put_file_access(f);
 cleanup_file:
-	path_put(&f->f_path);
+	if (!ckm_vfs_file_dput(f))
+		dput(f->f_path.dentry);
+	mntput(f->f_path.mnt);
 	f->f_path.mnt = NULL;
 	f->f_path.dentry = NULL;
 	f->f_inode = NULL;

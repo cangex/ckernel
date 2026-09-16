@@ -1067,6 +1067,9 @@ struct file {
 	errseq_t		f_wb_err;
 	errseq_t		f_sb_err; /* for syncfs */
 	fmode_t			f_ctl_mode;
+#ifdef CONFIG_CKERNEL_M_VFS_OPEN
+	struct ckm_vfs_entry	*f_ckm_vfs_entry;
+#endif
 	KABI_RESERVE(1)
 	KABI_RESERVE(2)
 } __randomize_layout

@@ -27,6 +27,7 @@
 #define CHECK(x) do { if (!(x)) { perror(#x); exit(1); } } while (0)
 static const char *mode, *scenario, *layout;
 static int round_no;
+static int open_workload;
 static char line_prefix[256];
 static int log_fd;
 static unsigned int log_region;
@@ -90,8 +91,9 @@ static void affinity(int cpu, int sibling)
 
 static void prefix(const char *type, const char *role)
 {
-	snprintf(line_prefix, sizeof(line_prefix), "CKM_VFS_PAIR type=%s round=%d mode=%s scenario=%s layout=%s role=%s ",
-	       type, round_no, mode, scenario, layout, role);
+	snprintf(line_prefix, sizeof(line_prefix), "CKM_VFS_PAIR type=%s round=%d mode=%s scenario=%s layout=%s role=%s operation=%s ",
+	       type, round_no, mode, scenario, layout, role,
+	       open_workload ? "open-fstat-close" : "statx");
 }
 
 static int cmp(const void *a, const void *b)
@@ -127,12 +129,25 @@ static void make_objects(const char *root)
 	CHECK(!mount(NULL, root, NULL, MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL));
 }
 
+static void operation(const char *path)
+{
+	if (open_workload) {
+		struct stat st;
+		int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+		CHECK(fd >= 0 && !fstat(fd, &st) && st.st_size == 6 && !close(fd));
+	} else {
+		struct statx st;
+
+		CHECK(!statx(AT_FDCWD, path, 0, STATX_BASIC_STATS, &st) && st.stx_size == 6);
+	}
+}
+
 static void worker(const char *role, int cpu, int ready, int go)
 {
 	static uint64_t samples[MAX_SAMPLES];
 	static uint64_t response[MAX_SAMPLES];
 	struct rusage before, after;
-	struct statx st;
 	char names[32][320], ch;
 	unsigned int count, files = !strcmp(scenario, "exhaust") ? 32 : 16;
 	uint64_t start, end, first;
@@ -145,10 +160,10 @@ static void worker(const char *role, int cpu, int ready, int go)
 	for (count = 0; count < 32; count++)
 		snprintf(names[count], sizeof(names[count]), "%s/file%u", object_root, count);
 	first = now();
-	CHECK(!statx(AT_FDCWD, names[0], 0, STATX_BASIC_STATS, &st) && st.stx_size == 6);
+	operation(names[0]);
 	first = now() - first;
 	for (count = 0; count < 64; count++)
-		CHECK(!statx(AT_FDCWD, names[count % files], 0, STATX_BASIC_STATS, &st));
+		operation(names[count % files]);
 	CHECK(write(ready, "R", 1) == 1 && read(go, &ch, 1) == 1 && ch == 'G');
 	CHECK(!getrusage(RUSAGE_SELF, &before));
 	CHECK(!clock_gettime(CLOCK_MONOTONIC, &pace));
@@ -176,7 +191,7 @@ static void worker(const char *role, int cpu, int ready, int go)
 			CHECK(!mount(NULL, object_root, NULL, MS_REMOUNT | MS_NOSUID | MS_NODEV, NULL));
 			CHECK(!mount(NULL, object_root, NULL, MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL));
 		}
-		CHECK(!statx(AT_FDCWD, names[count % files], 0, STATX_BASIC_STATS, &st) && st.stx_size == 6);
+		operation(names[count % files]);
 		end = now();
 		samples[count] = end - begin;
 		response[count] = interval_ns ? end - ((uint64_t)pace.tv_sec * 1000000000ULL + pace.tv_nsec) : end - begin;
@@ -210,11 +225,20 @@ static void query(int fd, const char *role)
 {
 	struct ckm_vfs_query q = { .version = CKM_ABI_VERSION, .size = sizeof(q) };
 	CHECK(!ioctl(fd, CKM_IOC_VFS_QUERY, &q));
-	if (!strcmp(mode, "vfs"))
+	if (!strcmp(mode, "vfs") && !open_workload)
 		CHECK(q.hits > 0);
 	prefix("vfs_inventory", role);
 	emit("capacity=%u cached=%u stopped=%u hits=%llu retries=%llu native=%llu full=%llu metadata_payload_bytes=%llu\n",
 	     q.capacity, q.cached, q.stopped, q.hits, q.retries, q.native, q.full, q.metadata_payload_bytes);
+	if (open_workload) {
+		struct ckm_vfs_open_query oq = { .version = CKM_ABI_VERSION, .size = sizeof(oq) };
+
+		CHECK(!ioctl(fd, CKM_IOC_VFS_OPEN_QUERY, &oq));
+		if (!strcmp(mode, "vfs"))
+			CHECK(oq.hits > 0 && oq.hits == oq.released);
+		prefix("open_inventory", role);
+		emit("hits=%llu native=%llu released=%llu\n", oq.hits, oq.native, oq.released);
+	}
 }
 
 static void supervise(const char *self, const char *role, const char *group,
@@ -235,7 +259,7 @@ static void supervise(const char *self, const char *role, const char *group,
 	}
 	if (!strcmp(mode, "core") || !strcmp(mode, "vfs")) {
 		if (!strcmp(mode, "vfs"))
-			c.features = CKM_FEATURE_VFS;
+			c.features = CKM_FEATURE_VFS | (open_workload ? CKM_FEATURE_VFS_OPEN : 0);
 		control = open("/dev/ckernel-m", O_RDWR);
 		CHECK(control >= 0);
 		fd = ioctl(control, CKM_IOC_CREATE, &c);
@@ -416,6 +440,7 @@ int main(int argc, char **argv)
 
 	setvbuf(stdout, NULL, _IONBF, 0);
 	CHECK(getenv("CKM_ISOLATED_GUEST"));
+	open_workload = getenv("CKM_PAIR_OPEN") != NULL;
 	mode = getenv("CKM_PAIR_MODE"); scenario = getenv("CKM_PAIR_SCENARIO");
 	layout = getenv("CKM_PAIR_LAYOUT");
 	CHECK(mode && scenario && layout && getenv("CKM_PAIR_ROUND"));

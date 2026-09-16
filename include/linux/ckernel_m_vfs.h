@@ -10,12 +10,23 @@ struct path;
 struct filename;
 struct vfsmount;
 struct ckm_vfs_query;
+struct ckm_vfs_open_query;
+struct file;
 struct ckm_path_lease {
 	struct ckm_vfs_state *state;
 	struct vfsmount *pending_mnt;
 	struct ckm_vfs_entry *entry;
 	bool borrowed;
 };
+
+#ifdef CONFIG_CKERNEL_M_VFS_OPEN
+bool ckm_vfs_file_get(struct file *file);
+bool ckm_vfs_file_dput(struct file *file);
+void ckm_vfs_open_query(struct ckm_instance *inst, struct ckm_vfs_open_query *q);
+#else
+static inline bool ckm_vfs_file_get(struct file *file) { return false; }
+static inline bool ckm_vfs_file_dput(struct file *file) { return false; }
+#endif
 
 int filename_lookup_lease(int dfd, struct filename *name, unsigned int flags,
 			  struct path *path, struct ckm_path_lease *lease);

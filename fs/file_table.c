@@ -29,6 +29,7 @@
 #include <linux/ima.h>
 #include <linux/swap.h>
 #include <linux/kmemleak.h>
+#include <linux/ckernel_m_vfs.h>
 
 #include <linux/atomic.h>
 
@@ -389,7 +390,8 @@ static void __fput(struct file *file)
 	fops_put(file->f_op);
 	put_pid(file->f_owner.pid);
 	put_file_access(file);
-	dput(dentry);
+	if (!ckm_vfs_file_dput(file))
+		dput(dentry);
 	if (unlikely(mode & FMODE_NEED_UNMOUNT))
 		dissolve_on_fput(mnt);
 	mntput(mnt);

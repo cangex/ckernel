@@ -12,11 +12,17 @@
 
 struct ckm_vfs_counters {
 	u64 hits, retries, native, full;
+#ifdef CONFIG_CKERNEL_M_VFS_OPEN
+	u64 open_hits, open_native, open_released;
+#endif
 };
 
 struct ckm_vfs_entry {
 	struct dentry *dentry;
 	refcount_t refs;
+#ifdef CONFIG_CKERNEL_M_VFS_OPEN
+	struct ckm_vfs_state *state;
+#endif
 };
 
 struct ckm_vfs_state {
@@ -243,11 +249,95 @@ static void ckm_vfs_learn(struct ckm_vfs_state *s, const struct path *p)
 		goto out;
 	}
 	s->entries[s->count].dentry = dget(p->dentry);
+#ifdef CONFIG_CKERNEL_M_VFS_OPEN
+	s->entries[s->count].state = s;
+#endif
 	refcount_set(&s->entries[s->count].refs, 1);
 	s->count++;
 out:
 	up_write(&s->guard);
 }
+
+#ifdef CONFIG_CKERNEL_M_VFS_OPEN
+bool ckm_vfs_file_get(struct file *file)
+{
+	struct ckm_path_lease lease;
+	struct ckm_vfs_state *s;
+	const struct path *p = &file->f_path;
+	unsigned int n;
+	bool learn = false;
+
+	if (current->flags & PF_KTHREAD || file->f_flags &
+	    (O_PATH | O_CREAT | O_TRUNC | __FMODE_EXEC) ||
+	    (file->f_mode & (FMODE_READ | FMODE_WRITE | FMODE_BACKING | FMODE_NOACCOUNT)) != FMODE_READ)
+		return false;
+	ckm_vfs_begin(&lease);
+	s = lease.state;
+	if (!s || !(s->owner->features & CKM_FEATURE_VFS_OPEN))
+		return false;
+	/* The caller already owns a resolved path; no name or permission caching. */
+	if (!down_read_trylock(&s->guard))
+		goto native;
+	if (!ckm_active(s->owner) || s->stopped || p->mnt != s->mount ||
+	    !d_is_reg(p->dentry) || !(READ_ONCE(p->mnt->mnt_flags) & MNT_READONLY) ||
+	    !sb_rdonly(p->mnt->mnt_sb))
+		goto unlock;
+	for (n = 0; n < s->count; n++) {
+		struct ckm_vfs_entry *entry = &s->entries[n];
+
+		if (entry->dentry != p->dentry)
+			continue;
+		ckm_get(s->owner);
+		refcount_inc(&entry->refs);
+		mntget(p->mnt);
+		file->f_ckm_vfs_entry = entry;
+		this_cpu_inc(s->counters->open_hits);
+		up_read(&s->guard);
+		return true;
+	}
+	learn = true;
+unlock:
+	up_read(&s->guard);
+	if (learn)
+		ckm_vfs_learn(s, p);
+native:
+	this_cpu_inc(s->counters->open_native);
+	return false;
+}
+
+bool ckm_vfs_file_dput(struct file *file)
+{
+	struct ckm_vfs_entry *entry = file->f_ckm_vfs_entry;
+	struct ckm_vfs_state *s;
+
+	if (!entry)
+		return false;
+	s = entry->state;
+	file->f_ckm_vfs_entry = NULL;
+	this_cpu_inc(s->counters->open_released);
+	ckm_vfs_entry_put(entry);
+	ckm_put(s->owner);
+	return true;
+}
+
+void ckm_vfs_open_query(struct ckm_instance *inst, struct ckm_vfs_open_query *q)
+{
+	struct ckm_vfs_state *s = inst->vfs;
+	int cpu;
+
+	q->version = CKM_ABI_VERSION;
+	q->size = sizeof(*q);
+	if (!s)
+		return;
+	for_each_possible_cpu(cpu) {
+		struct ckm_vfs_counters *c = per_cpu_ptr(s->counters, cpu);
+
+		q->hits += READ_ONCE(c->open_hits);
+		q->native += READ_ONCE(c->open_native);
+		q->released += READ_ONCE(c->open_released);
+	}
+}
+#endif
 
 void ckm_vfs_end(struct ckm_path_lease *lease, struct path *path)
 {

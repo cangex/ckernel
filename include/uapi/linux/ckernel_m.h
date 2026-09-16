@@ -7,6 +7,7 @@
 #define CKM_ABI_VERSION 1
 #define CKM_FEATURE_MAPLE 1U
 #define CKM_FEATURE_VFS 2U
+#define CKM_FEATURE_VFS_OPEN 4U
 #define CKM_VFS_MAX_ENTRIES 16U
 #define CKM_ACTIVE 0U
 #define CKM_REVOKING 1U
@@ -99,6 +100,12 @@ struct ckm_vfs_query {
 	__aligned_u64 reserved[4];
 };
 
+struct ckm_vfs_open_query {
+	__u32 version, size;
+	__aligned_u64 hits, native, released;
+	__aligned_u64 reserved[4];
+};
+
 /* CREATE returns an O_CLOEXEC instance fd, not a cookie-as-capability. */
 #define CKM_IOC_CREATE _IOW('M', 0x40, struct ckm_create)
 #define CKM_IOC_BIND _IO('M', 0x41)
@@ -107,4 +114,5 @@ struct ckm_vfs_query {
 #define CKM_IOC_DIAGNOSTICS _IOWR('M', 0x44, struct ckm_diagnostics)
 #define CKM_IOC_VFS_ROOT _IOW('M', 0x45, struct ckm_vfs_root)
 #define CKM_IOC_VFS_QUERY _IOWR('M', 0x46, struct ckm_vfs_query)
+#define CKM_IOC_VFS_OPEN_QUERY _IOWR('M', 0x47, struct ckm_vfs_open_query)
 #endif

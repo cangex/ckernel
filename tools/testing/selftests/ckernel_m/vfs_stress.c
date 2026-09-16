@@ -34,6 +34,8 @@ static int create(int ctl)
 	struct ckm_create r = { .version = CKM_ABI_VERSION,
 		.size = sizeof(r), .features = CKM_FEATURE_VFS };
 
+	if (getenv("CKM_OPEN_TEST"))
+		r.features |= CKM_FEATURE_VFS_OPEN;
 	return ioctl(ctl, CKM_IOC_CREATE, &r);
 }
 
@@ -95,6 +97,11 @@ static int lease_worker(const char *root, int barrier)
 		snprintf(path, sizeof(path), "%s/f%d", root, k % 16);
 		CHECK(!statx(AT_FDCWD, path, 0, STATX_BASIC_STATS, &st));
 		CHECK(st.stx_size == 4096);
+		if (getenv("CKM_OPEN_TEST")) {
+			int fd = open(path, O_RDONLY);
+
+			CHECK(fd >= 0 && !close(fd));
+		}
 	}
 	CHECK(!ioctl(inst, CKM_IOC_VFS_QUERY, &q) && q.hits && q.cached == 16);
 	CHECK(!ioctl(inst, CKM_IOC_REVOKE, 0));

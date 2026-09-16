@@ -20,13 +20,16 @@ int main(int argc, char **argv)
 	int control, instance, status, attempt;
 	struct timespec start, finish;
 	pid_t child;
-	int vfs = argc > 1 && !strcmp(argv[1], "--vfs");
+	int open_vfs = argc > 1 && !strcmp(argv[1], "--vfs-open");
+	int vfs = open_vfs || (argc > 1 && !strcmp(argv[1], "--vfs"));
 	int program = vfs ? 4 : 2;
 	struct ckm_vfs_query vq;
+	struct ckm_vfs_open_query oq = {};
 
 	if (argc <= program) {
 		fprintf(stderr, "usage: %s MAX_NODES PROGRAM [ARGS...] (0 = Core only)\n", argv[0]);
 		fprintf(stderr, "       %s --vfs READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
+		fprintf(stderr, "       %s --vfs-open READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
 		return 2;
 	}
 	errno = 0;
@@ -36,6 +39,8 @@ int main(int argc, char **argv)
 		return 2;
 	r.max_nodes = vfs ? 0 : n;
 	r.features = vfs ? CKM_FEATURE_VFS : n ? CKM_FEATURE_MAPLE : 0;
+	if (open_vfs)
+		r.features |= CKM_FEATURE_VFS_OPEN;
 	control = open("/dev/ckernel-m", O_RDWR | O_CLOEXEC);
 	if (control < 0) {
 		perror("open control");
@@ -98,6 +103,13 @@ int main(int argc, char **argv)
 		printf("vfs_hits=%llu vfs_native=%llu vfs_retries=%llu vfs_cached=%u vfs_payload_bytes=%llu\n",
 		       vq.hits, vq.native, vq.retries, vq.cached, vq.metadata_payload_bytes);
 	}
+	if (open_vfs) {
+		oq = (struct ckm_vfs_open_query){ .version = CKM_ABI_VERSION, .size = sizeof(oq) };
+		if (ioctl(instance, CKM_IOC_VFS_OPEN_QUERY, &oq)) {
+			perror("VFS open query"); close(instance); return 1;
+		}
+		printf("vfs_open_hits=%llu native=%llu released=%llu\n", oq.hits, oq.native, oq.released);
+	}
 	if (ioctl(instance, CKM_IOC_REVOKE, 0UL)) {
 		perror("revoke");
 		close(instance);
@@ -116,7 +128,14 @@ int main(int argc, char **argv)
 				perror("VFS drain query"); close(instance); return 1;
 			}
 		}
-		if (!q.tasks && !q.mms && !q.nodes && (!vfs || (vq.stopped && !vq.cached)))
+		if (open_vfs) {
+			oq = (struct ckm_vfs_open_query){ .version = CKM_ABI_VERSION, .size = sizeof(oq) };
+			if (ioctl(instance, CKM_IOC_VFS_OPEN_QUERY, &oq)) {
+				perror("VFS open drain query"); close(instance); return 1;
+			}
+		}
+		if (!q.tasks && !q.mms && !q.nodes && (!vfs || (vq.stopped && !vq.cached)) &&
+		    (!open_vfs || oq.hits == oq.released))
 			break;
 		usleep(10000);
 	}
