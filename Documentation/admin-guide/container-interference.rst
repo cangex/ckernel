@@ -32,8 +32,8 @@ architecture-specific interrupt-context handling portable. Revalidate both
 before using a different kernel or architecture. Hardware sampling falls back
 only to explicitly reported kernel CPU-clock samples, never fake cycles.
 
-Operate
-=======
+Operation
+=========
 
 Run in the host PID, mount and initial user namespaces. Do not expose the socket
 or reports to tenants. The daemon requires access to perf/BPF/cgroup resources
