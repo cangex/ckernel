@@ -9,7 +9,7 @@ import re
 PAIR = re.compile(r'(\w+)=([^ ;]+)')
 
 
-def parse(text):
+def parse(text, expected_operations=800):
     truth, observations, objects, parse_errors = [], [], set(), []
     scenario = None
     for line in text.splitlines():
@@ -62,15 +62,17 @@ def parse(text):
             'limitations': ['Manual diagnostic window, not automatic detection recall.',
                             'Ground truth covers two static mutex objects only; not arbitrary spinlocks.',
                             'Other recorded locks may belong to test logging or kernel paths and are not ground-truth negatives.'],
-            'pass': len(truth) == 800 and len(positives) > 100 and not missed and not bad and not parse_errors}
+            'expected_operations': expected_operations,
+            'pass': len(truth) == expected_operations and len(positives) > 100 and not missed and not bad and not parse_errors}
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('log', type=pathlib.Path)
     parser.add_argument('output', type=pathlib.Path)
+    parser.add_argument('--operations', type=int, choices=(800,1200), default=800)
     args = parser.parse_args()
-    result = parse(args.log.read_text())
+    result = parse(args.log.read_text(), args.operations)
     with args.output.open('x') as dest:
         json.dump(result, dest, indent=2)
         dest.write('\n')

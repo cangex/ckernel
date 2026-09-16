@@ -16,14 +16,15 @@ def interval(values):
     mean = statistics.mean(values)
     if len(values) < 2:
         return [None, None]
-    # Two-sided 95% t interval, pre-specified n=5. Other n require a new plan.
-    if len(values) != 5:
+    # Only predeclared cohort sizes; never extend sampling until the CI passes.
+    critical = {5: 2.776445105, 20: 2.093024054}
+    if len(values) not in critical:
         return [None, None]
-    half = 2.776445105 * statistics.stdev(values) / math.sqrt(len(values))
+    half = critical[len(values)] * statistics.stdev(values) / math.sqrt(len(values))
     return [mean-half, mean+half]
 
 
-def analyze(text):
+def analyze(text, rounds=5, modes=('metrics', 'ip')):
     records = {}
     current = None
     failures = []
@@ -47,11 +48,15 @@ def analyze(text):
                 begin, finish = windows[case]
                 if begin <= int(fields['sample_time_ns']) <= finish:
                     sampled[case][event['id']] += 1
-            if event.get('kind') in ('capture_failure','budget_disable','capture_error','sample_schema_error','metrics_budget_disable','buffer_loss'):
+            if event.get('kind') in ('capture_failure','budget_disable','capture_error','sample_schema_error','metrics_budget_disable','budget_unavailable','entry_budget_disable','buffer_loss'):
                 observer_errors.append(event)
             if event.get('kind') == 'budget':
                 quality = dict(VALUES.findall(event.get('detail', '')))
                 if int(quality.get('errors', '0')) or int(quality.get('drops', '0')):
+                    observer_errors.append(event)
+            if event.get('kind') == 'perf_quality':
+                quality = dict(VALUES.findall(event.get('detail', '')))
+                if int(quality.get('invalid_records', '0')) or int(quality.get('lost', '0')):
                     observer_errors.append(event)
         if line.startswith('CIS_FILE /tmp/measure-s2-'):
             match = re.search(r'measure-s2-(\d+)-(bench|open-loop)-(off|metrics|ip)\.log', line)
@@ -77,13 +82,15 @@ def analyze(text):
                 value = int(fields['p99_ns'])
                 if int(fields['timeouts']):
                     failures.append({'case': current, 'reason': 'response timeouts', 'count': int(fields['timeouts'])})
+            if (*current, container) in records:
+                failures.append({'case': current, 'reason': 'duplicate container result'})
             records[(*current, container)] = value
     results = []
     for workload in ('bench', 'open-loop'):
-        for mode in ('metrics', 'ip'):
+        for mode in modes:
             for role in ('target', 'bystander'):
                 pairs, absolute = [], []
-                for run in range(1, 6):
+                for run in range(1, rounds+1):
                     container = run % 2 if role == 'target' else 1-run % 2
                     baseline = records.get((run, workload, 'off', container))
                     measured = records.get((run, workload, mode, container))
@@ -93,14 +100,14 @@ def analyze(text):
                     absolute.append(measured-baseline)
                 bound = 1 if workload == 'bench' else 2
                 ci = interval(pairs) if pairs else [None, None]
-                status = 'BLOCKED' if len(pairs) != 5 or ci[1] is None else 'PASS' if ci[1] <= bound else 'FAIL' if ci[0] > bound else 'BLOCKED'
+                status = 'BLOCKED' if len(pairs) != rounds or ci[1] is None else 'PASS' if ci[1] <= bound else 'FAIL' if ci[0] > bound else 'BLOCKED'
                 results.append({'workload': workload, 'mode': mode, 'role': role, 'n': len(pairs),
                                 'degradation_percent': pairs, 'mean_percent': statistics.mean(pairs) if pairs else None,
                                 '95pct_interval': ci, 'threshold_percent': bound, 'status': status,
                                 'mean_absolute_change': statistics.mean(absolute) if absolute else None,
                                 'reason': 'confidence_insufficient' if status == 'BLOCKED' else 'predefined_t_interval'})
     missing_coverage=[]
-    for run in range(1,6):
+    for run in range(1,rounds+1):
         for workload in ('bench','open-loop'):
             case=(run,workload,'ip')
             if len(roots[case])!=2 or any(not sampled[case][root] for root in roots[case]):
@@ -111,7 +118,8 @@ def analyze(text):
             'observer_kind_counts': dict(observer_kinds), 'observer_errors': observer_errors,
             'missing_coverage': missing_coverage,
             'coverage_valid': not missing_coverage and not observer_errors,
-            'pass': len(records) == 60 and not failures and not observer_errors and not missing_coverage and all(x['status'] == 'PASS' for x in results),
+            'predeclared_rounds': rounds, 'compared_modes': modes,
+            'pass': len(records) == rounds*2*2*(1+len(modes)) and not failures and not observer_errors and not missing_coverage and all(x['status'] == 'PASS' for x in results),
             'limitations': ['Initial screen: 2 active containers only, not S6 scale coverage.',
                             'Paired t interval assumes independent paired rounds; no significance claim from non-rejection.',
                             'Only read/open/fstat/close workload; not all applications.',
@@ -122,8 +130,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('input', type=pathlib.Path)
     p.add_argument('output', type=pathlib.Path)
+    p.add_argument('--rounds', type=int, choices=(5,20), default=5)
+    p.add_argument('--full-mode-only', action='store_true')
     args = p.parse_args()
-    result = analyze(args.input.read_text())
+    result = analyze(args.input.read_text(), args.rounds, ('ip',) if args.full_mode_only else ('metrics','ip'))
     with args.output.open('x') as output:
         json.dump(result, output, indent=2)
         output.write('\n')

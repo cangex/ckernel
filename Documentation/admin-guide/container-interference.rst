@@ -62,6 +62,19 @@ two-second diagnostic can select sched, lock, reclaim or work. Automatic windows
 are triggered by sustained anomalies; explicit windows use the same budget and
 cooldown. No business interference percentage is inferred from CPU time alone.
 
+The local control protocol is version 2. Rebuild the daemon and every client
+together; version 1 clients are rejected, not interpreted using a different
+layout. The diagnostic request may specify start_ns in CLOCK_MONOTONIC time,
+no more than two seconds ahead. Links must be ready before that instant or the
+request fails. Zero selects an immediate interval after attachment. BPF filters
+both ends of the interval, and diagnostic_start records readiness, start and
+deadline. The future form is used by the isolated matched-window tests.
+
+The optional --entry-rate-limit argument may lower, never raise, the default
+200000 entries/second budget. The chosen value is always reported. Tests using
+an injected low limit validate detachment, not performance under a real
+200000-entry/second storm. Production acceptance retains the default.
+
 Stopping and failures
 ====================
 
@@ -74,6 +87,9 @@ Errors, buffer losses, unknown identity, unmatched/expired pairs and degradation
 are report records, not zero values. When the process or entry budget trips,
 collectors are detached. Continued metrics overrun disables polling as well.
 A successful daemon exit is not evidence that coverage remained active.
+Unavailable process CPU/RSS budget inputs stop capture and metrics. They must
+not be interpreted as zero consumption. The legacy user_cpu_ns report field
+means total process CPU, not user-only CPU; process_cpu_ns now names it correctly.
 
 Reports contain kernel addresses and cross-container information and are
 administrator-only. The fixed-size JSONL format is versioned. Do not stream it

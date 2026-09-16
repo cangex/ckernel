@@ -30,7 +30,8 @@ def performance_gate(stage, name, reports):
         if report.get('failures') or report.get('observer_errors') or report.get('missing_coverage'):
             continue
         rows = [row for row in report.get('results', [])
-                if row.get('workload') == workload and row.get('mode') == mode]
+                if row.get('workload') == workload and row.get('mode') == mode and
+                (stage != 'S6' or row.get('family') == ('diagnostic' if mode == 'diag' else 'ambient'))]
         required = {(None, role) for role in ('target', 'bystander')}
         if stage == 'S6':
             required = {(count, role) for count in (1, 12, 24, 48)
