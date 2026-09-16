@@ -52,6 +52,18 @@ static pid_t start(const char *mode)
 	if(read(pipefd[0],&c,1)!=1) { close(pipefd[0]); waitpid(pid,NULL,0); return -1; }
 	close(pipefd[0]); return pid;
 }
+static int config_change_seen(const char *mode,pid_t daemon,uint64_t id)
+{
+	char path[128],line[2048],identity[64];
+	FILE *f;
+	int found=0;
+	snprintf(path,sizeof(path),"/tmp/cis-%s-%d.jsonl",mode,daemon);
+	snprintf(identity,sizeof(identity),"\"id\":%llu,",(unsigned long long)id);
+	f=fopen(path,"r"); if(!f) return 0;
+	while(fgets(line,sizeof(line),f))
+		if(strstr(line,"\"kind\":\"config_epoch\"") && strstr(line,identity)) found=1;
+	fclose(f); return found;
+}
 int main(int argc,char **argv)
 {
 	const char *mode=argc>1?argv[1]:"metrics";
@@ -109,6 +121,12 @@ int main(int argc,char **argv)
 		CHECK("diagnostic_deadline_stopped",!reply.error && strstr(reply.text,"diagnostics=0"));
 		reply=call(CIS_DIAGNOSE,-1,ra.id,ra.generation,"sched");
 		CHECK("diagnostic_cooldown",reply.error==-EAGAIN);
+	}
+	CHECK("configuration_write",!cis_write_text("/sys/fs/cgroup/cis-a/cpu.max","50000 100000\n"));
+	{
+		unsigned int attempt;
+		for(attempt=0;attempt<70 && !config_change_seen(mode,daemon,ra.id);attempt++) usleep(100000);
+		CHECK("configuration_epoch_observed",config_change_seen(mode,daemon,ra.id));
 	}
 	reply=call(CIS_UNREGISTER,-1,ra.id,ra.generation,""); CHECK("unregister",!reply.error);
 	again=call(CIS_REGISTER,a,0,0,"a-new-generation"); CHECK("reregister_generation",!again.error && again.generation!=ra.generation);
