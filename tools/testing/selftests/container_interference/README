@@ -1,0 +1,49 @@
+CIS container selftests (development status)
+============================================
+
+Run only in the disposable ARM64 VM created for this task. The host's running
+kernel and other containers are not test fixtures. Never use global pkill,
+docker prune, host reboot or unscoped cgroup deletion.
+
+Build: make LDFLAGS=-static
+Local logic: ./logic_test
+Offline logic: python3 test_attribution.py; python3 test_acceptance.py
+Guest lifecycle: /identity metrics; /identity ip
+Guest fleet: /fleet COUNT off|metrics|ip|diag bench|open-loop SECONDS TARGET
+Guest controls: /fleet 2 ip cpu-compete 14 0; /fleet 2 ip quota 14 0
+Guest reclaim: /fleet 1 diag reclaim 3 0
+Guest idle registration: /fleet 128 ip idle 3 0; /fleet 256 ip idle 3 0
+
+The guest must mount cgroup2, proc, sysfs and tracefs, enable the CPU and memory
+controllers for test children, and make the tested BPF program and binaries
+available at /cisd, /cis.bpf.o and /container-root/workload. The immutable
+container root includes sample, proc and tmp. All business programs execute as
+PID 1 inside new PID/mount/network/IPC/UTS/cgroup namespaces. The host helper is
+not counted as a business container. This minimal namespace runtime is not OCI.
+
+Build fixture/cis_fixture.ko against the exact tested Image and load it inside
+the VM with isolated_vm=1. Copy only its misc device node into the test root.
+Run fixture-shared, fixture-private and async-fixture fleets with two containers
+and ip mode. They request short diagnostics explicitly. Kernel mutex fixtures
+are not user-futex substitutes. The current protocol uses 200 operations per
+container and 800 total shared/private truth records; old 100-operation pilot
+logs retain their original checker/version and are not silently reinterpreted.
+
+Collect every stdout record and cisd JSONL only after measurement. Each child
+writes its own log; the parent merges completed logs to avoid interleaving.
+Check actual IP/interval samples, not only process exit codes:
+
+  python3 sample_check.py identity.log identity-samples.json
+  python3 truth_check.py mutex.log mutex-truth.json
+  python3 async_check.py async.log async-truth.json
+
+Fixed-arrival latency includes dispatch delay and backlog; a memory.high test
+can take longer than its requested duration because the final allocation must
+finish. Such time is retained, not truncated into an artificial fast result.
+
+The S6 plan generator refuses admission if S2 overhead/coverage has not passed.
+Diagnostic timing must be checked against attachment windows; a two-second
+collector cannot be averaged over a 15-second workload to claim <=3% impact.
+No script exit status alone marks S0-S6 complete. See acceptance.py and the
+artifact-hashed result inventory. Unsupported hardware does not waive core
+coverage, correctness or performance requirements.

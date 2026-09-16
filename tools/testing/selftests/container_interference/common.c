@@ -34,11 +34,12 @@ int cis_write_text(const char *path, const char *text)
     return err;
 }
 
-struct child_args { int read_fd, write_fd, cpu; const char *root; char *const *argv; };
+struct child_args { int read_fd, write_fd, cpu, output; const char *root; char *const *argv; };
 static int child_main(void *ptr)
 {
     struct child_args *a = ptr;
     char ch;
+    if(a->output>=0 && (dup2(a->output,STDOUT_FILENO)<0 || dup2(a->output,STDERR_FILENO)<0)) return 124;
     close(a->write_fd);
     if (prctl(PR_SET_PDEATHSIG, SIGKILL) || read(a->read_fd, &ch, 1) != 1) return 120;
     close(a->read_fd);
@@ -61,14 +62,14 @@ static int child_main(void *ptr)
     return 123;
 }
 
-pid_t cis_container_start(const char *cg, const char *root, char *const argv[], int cpu)
+pid_t cis_container_start_output(const char *cg, const char *root, char *const argv[], int cpu,int output)
 {
     char path[PATH_MAX], pidbuf[32];
     int pipes[2];
     void *stack = malloc(1024 * 1024);
     if (!stack) return -1;
     if (pipe2(pipes, O_CLOEXEC)) { free(stack); return -1; }
-    struct child_args a = { pipes[0], pipes[1], cpu, root, argv };
+    struct child_args a = { pipes[0], pipes[1], cpu, output, root, argv };
     int flags = CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWIPC |
                 CLONE_NEWNET | CLONE_NEWCGROUP | SIGCHLD;
     pid_t pid = clone(child_main, (char *)stack + 1024 * 1024, flags, &a);
@@ -85,6 +86,11 @@ pid_t cis_container_start(const char *cg, const char *root, char *const argv[], 
     close(pipes[1]);
     free(stack);
     return pid;
+}
+
+pid_t cis_container_start(const char *cg, const char *root, char *const argv[], int cpu)
+{
+    return cis_container_start_output(cg,root,argv,cpu,-1);
 }
 
 int cis_container_wait(pid_t pid)

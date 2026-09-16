@@ -3,3 +3,6 @@
 /identity
 /truth
 /fleet
+/logic_test
+__pycache__/
+*.pyc
