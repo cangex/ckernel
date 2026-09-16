@@ -17,11 +17,12 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
+#define CIS_DIAGNOSTIC_LINKS 12
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
-	struct ring_buffer *ring;
-	struct bpf_link *perf_links[CIS_CPU_CAP], *diagnostic_links[5];
+	struct perf_buffer *ring;
+	struct bpf_link *diagnostic_links[CIS_DIAGNOSTIC_LINKS];
 	int perf_fds[CIS_CPU_CAP], ncpu, roots, targets, pending, stacks, stats;
 	void *perf_pages[CIS_CPU_CAP];
 	size_t perf_page_size;
@@ -37,22 +38,44 @@ static int mapfd(struct capture *c,const char *name)
 	return bpf_object__find_map_fd_by_name(c->object,name);
 }
 
-static int event(void *opaque,void *data,size_t size)
+static void event(void *opaque,int cpu,void *data,__u32 size)
 {
 	struct capture *c=opaque;
 	struct cis_context *ctx=c->ctx;
 	struct cis_event *e=data;
 	struct cis_root *r;
-	char detail[512];
-	if(size!=sizeof(*e)) { ctx->errors++; return 0; }
+	char detail[768];
+	const char *symbol;
+	(void)cpu;
+	/* PERF_SAMPLE_RAW includes trailing alignment bytes in its reported size. */
+	if(size<sizeof(*e) || size>sizeof(*e)+7) {
+		if(!ctx->errors) {
+			snprintf(detail,sizeof(detail),"payload_bytes=%u expected=%zu",size,sizeof(*e));
+			cis_report(ctx,"sample_schema_error",NULL,detail);
+		}
+		ctx->errors++; return;
+	}
 	r=cis_registry_lookup(ctx,e->id,e->generation);
-	if(!r) { ctx->unknown++; return 0; }
-	snprintf(detail,sizeof(detail),"sample_time_ns=%llu type=%u tid=%llu cpu=%u object=0x%llx duration_ns=%llu ip=0x%llx weight=%llu stack_id=%d flags=%u owner=unknown",
+	if(!r) { ctx->unknown++; return; }
+	symbol=cis_symbol(ctx,e->ip);
+	if(e->type==CIS_IP) {
+		r->ip_samples++;
+		if(strstr(symbol,"mutex") || strstr(symbol,"spin_lock") || strstr(symbol,"rwsem")) r->lock_samples++;
+		if(strstr(symbol,"reclaim") || strstr(symbol,"shrink_")) r->reclaim_samples++;
+	}
+	snprintf(detail,sizeof(detail),"sample_time_ns=%llu type=%u tid=%llu cpu=%u object=0x%llx duration_ns=%llu ip=0x%llx weight=%llu stack_id=%d flags=%u executor_tid=%llu sequence_ns=%llu symbol=%s owner=unknown execution_context=task_or_irq_unresolved",
 		(unsigned long long)e->time_ns,e->type,(unsigned long long)e->tid,e->cpu,
 		(unsigned long long)e->object,(unsigned long long)e->duration_ns,(unsigned long long)e->ip,
-		(unsigned long long)e->weight,e->stack_id,e->flags);
-	cis_report(ctx,e->type==CIS_IP?"IP":"E1",r,detail);
-	return 0;
+		(unsigned long long)e->weight,e->stack_id,e->flags,(unsigned long long)e->executor_tid,(unsigned long long)e->sequence_ns,symbol);
+	cis_report(ctx,e->type==CIS_IP?"IP":(e->type>=CIS_WORK_QUEUED && e->type<=CIS_WORK_UNRESOLVED)?"async_submitter":"E1",r,detail);
+}
+
+static void lost(void *opaque,int cpu,__u64 count)
+{
+	struct capture *c=opaque;
+	char detail[128];
+	snprintf(detail,sizeof(detail),"cpu=%d lost=%llu per_cpu_buffer_full=1",cpu,(unsigned long long)count);
+	cis_report(c->ctx,"buffer_loss",NULL,detail);
 }
 
 static int attach(struct capture *c,const char *name,struct bpf_link **slot)
@@ -66,10 +89,10 @@ static int attach(struct capture *c,const char *name,struct bpf_link **slot)
 
 static int configure_links(struct capture *c,unsigned int kinds)
 {
-	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end"};
-	static const unsigned int masks[]={1,2,2,4,4};
+	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end"};
+	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4};
 	unsigned int i;
-	for(i=0;i<5;i++) {
+	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
 		if(!(kinds&masks[i])) { bpf_link__destroy(c->diagnostic_links[i]); c->diagnostic_links[i]=NULL; }
 		else if(!c->diagnostic_links[i] && attach(c,names[i],&c->diagnostic_links[i])) return -EIO;
 	}
@@ -88,8 +111,9 @@ static void unfinished(struct capture *c,struct cis_root *r)
 {
 	struct cis_pending_key key,next;
 	struct cis_event value;
+	unsigned int visited=0;
 	int present=bpf_map_get_next_key(c->pending,NULL,&key);
-	while(!present) {
+	while(!present && visited++<CIS_INFLIGHT*2) {
 		int end=bpf_map_get_next_key(c->pending,&key,&next);
 		if(!bpf_map_lookup_elem(c->pending,&key,&value) && value.id==r->id && value.generation==r->generation) {
 			char detail[256];
@@ -101,6 +125,7 @@ static void unfinished(struct capture *c,struct cis_root *r)
 		if(end) break;
 		key=next;
 	}
+	if(visited>=CIS_INFLIGHT*2) cis_report(c->ctx,"incomplete_scan_limited",r,"bounded scan under concurrent map updates; residual remains auditable at shutdown");
 }
 
 static void export_stacks(struct capture *c,struct cis_root *r)
@@ -121,21 +146,48 @@ static void export_stacks(struct capture *c,struct cis_root *r)
 	}
 }
 
+static void unfinished_work(struct capture *c,struct cis_root *r)
+{
+	int fd=mapfd(c,"work_items"),ret;
+	__u64 key,next;
+	struct cis_work_state state;
+	unsigned int visited=0;
+	ret=bpf_map_get_next_key(fd,NULL,&key);
+	while(!ret && visited++<256) {
+		int end=bpf_map_get_next_key(fd,&key,&next);
+		if(!bpf_map_lookup_elem(fd,&key,&state)) {
+			struct cis_event *e=state.active_valid?&state.active:&state.queued;
+			if(e->id==r->id && e->generation==r->generation) {
+				char detail[256];
+				snprintf(detail,sizeof(detail),"object=0x%llx sequence_ns=%llu queued=%u active=%u cancellation/requeue/lifetime unresolved",
+					(unsigned long long)key,(unsigned long long)e->sequence_ns,state.queued_valid,state.active_valid);
+				cis_report(c->ctx,"async_incomplete",r,detail);
+				bpf_map_delete_elem(fd,&key);
+			}
+		}
+		if(end) break;
+		key=next;
+	}
+}
+
 int cis_capture_diagnostic(struct cis_context *ctx,struct cis_root *r,int enable)
 {
 	struct capture *c=ctx->capture;
-	struct cis_target target={r->generation,cis_clock_ns()+ctx->window_ms*1000000ULL,r->diagnostic_kind,0};
+	struct cis_target target={.generation=r->generation,.start_ns=cis_clock_ns(),.kind=r->diagnostic_kind};
 	unsigned int kinds=enable?r->diagnostic_kind:0,i;
+	unsigned int previous_kinds;
 	if(!c) return enable?-EOPNOTSUPP:0;
+	target.deadline_ns=target.start_ns+ctx->window_ms*1000000ULL;
+	previous_kinds=c->active_kinds;
 	for(i=0;i<CIS_MAX_ROOTS;i++)
 		if(&ctx->roots[i]!=r && ctx->roots[i].used && ctx->roots[i].state==CIS_DIAGNOSING) kinds|=ctx->roots[i].diagnostic_kind;
 	if(enable) {
-		if(configure_links(c,kinds)) { configure_links(c,c->active_kinds); return -EOPNOTSUPP; }
-		if(bpf_map_update_elem(c->targets,&r->id,&target,BPF_NOEXIST)) { configure_links(c,c->active_kinds & ~r->diagnostic_kind); return -errno; }
+		if(configure_links(c,kinds)) { configure_links(c,previous_kinds); return -EOPNOTSUPP; }
+		if(bpf_map_update_elem(c->targets,&r->id,&target,BPF_NOEXIST)) { configure_links(c,previous_kinds); return -errno; }
 	} else {
 		bpf_map_delete_elem(c->targets,&r->id);
 		configure_links(c,kinds);
-		ring_buffer__poll(c->ring,0); unfinished(c,r); export_stacks(c,r);
+		perf_buffer__poll(c->ring,0); unfinished(c,r); unfinished_work(c,r); export_stacks(c,r);
 	}
 	return 0;
 }
@@ -148,6 +200,11 @@ int cis_capture_start(struct cis_context *ctx,const char *path)
 	struct rlimit limit={RLIM_INFINITY,RLIM_INFINITY};
 	char detail[256];
 	if(!c) return -ENOMEM;
+	/* The audited kernel-memory reserve assumes 4 KiB perf pages. */
+	if(sysconf(_SC_PAGESIZE)!=4096) {
+		cis_report(ctx,"capture_failure",NULL,"unsupported_page_size: kernel-memory budget not validated");
+		free(c); return -EOPNOTSUPP;
+	}
 	c->ctx=ctx; ctx->capture=c;
 	for(i=0;i<CIS_CPU_CAP;i++) c->perf_fds[i]=-1;
 	if(setrlimit(RLIMIT_MEMLOCK,&limit)) goto fail;
@@ -160,7 +217,7 @@ int cis_capture_start(struct cis_context *ctx,const char *path)
 	if(c->possible_cpus<1 || c->possible_cpus>CIS_CPU_CAP) goto fail;
 	c->cpu_stats=calloc(c->possible_cpus,sizeof(*c->cpu_stats));
 	if(!c->cpu_stats) goto fail;
-	c->ring=ring_buffer__new(mapfd(c,"events"),event,c,NULL);
+	c->ring=perf_buffer__new(mapfd(c,"events"),CIS_BUFFER_PAGES,event,lost,c,NULL);
 	if(libbpf_get_error(c->ring)) { c->ring=NULL; goto fail; }
 	p=bpf_object__find_program_by_name(c->object,"sample_ip");
 	if(!p) goto fail;
@@ -170,10 +227,11 @@ int cis_capture_start(struct cis_context *ctx,const char *path)
 	for(i=0;i<c->ncpu;i++) {
 		struct perf_event_attr attr={.size=sizeof(attr),.type=PERF_TYPE_HARDWARE,.config=PERF_COUNT_HW_CPU_CYCLES,
 			.read_format=PERF_FORMAT_TOTAL_TIME_ENABLED|PERF_FORMAT_TOTAL_TIME_RUNNING,
-			.freq=1,.sample_freq=ctx->ip_hz/c->ncpu,.exclude_user=1,.exclude_hv=1,.disabled=1};
+			.sample_period=4000000000ULL/(ctx->ip_hz/c->ncpu),.exclude_user=1,.exclude_hv=1,.disabled=1};
 		int fd=syscall(__NR_perf_event_open,&attr,-1,i,-1,PERF_FLAG_FD_CLOEXEC);
 		if(fd<0 && (errno==ENOENT || errno==EOPNOTSUPP || errno==EINVAL)) {
 			attr.type=PERF_TYPE_SOFTWARE; attr.config=PERF_COUNT_SW_CPU_CLOCK;
+			attr.sample_period=1000000000ULL/(ctx->ip_hz/c->ncpu);
 			fd=syscall(__NR_perf_event_open,&attr,-1,i,-1,PERF_FLAG_FD_CLOEXEC);
 			cis_report(ctx,"pmu_fallback",NULL,"hardware kernel cycles unavailable: software kernel CPU-clock IP sampling, not cycles");
 		}
@@ -185,8 +243,8 @@ int cis_capture_start(struct cis_context *ctx,const char *path)
 		if(c->perf_pages[i]==MAP_FAILED) { c->perf_pages[i]=NULL; goto fail; }
 		if(ioctl(fd,PERF_EVENT_IOC_SET_BPF,prog_fd) || ioctl(fd,PERF_EVENT_IOC_ENABLE,0)) goto fail;
 	}
-	snprintf(detail,sizeof(detail),"configured_cpus=%d per_cpu_hz=%u nominal_total_hz=%u ring_bytes=%u inflight_limit=%u",
-		c->ncpu,ctx->ip_hz/c->ncpu,(ctx->ip_hz/c->ncpu)*c->ncpu,CIS_RING_BYTES,CIS_INFLIGHT);
+	snprintf(detail,sizeof(detail),"configured_cpus=%d per_cpu_budget_hz=%u nominal_total_budget_hz=%u per_cpu_buffer_pages=%u inflight_limit=%u fixed_period_at_4GHz_bound=1 no_idle_period_shrinking=1",
+		c->ncpu,ctx->ip_hz/c->ncpu,(ctx->ip_hz/c->ncpu)*c->ncpu,CIS_BUFFER_PAGES,CIS_INFLIGHT);
 	cis_report(ctx,"capture_ready",NULL,detail);
 	return 0;
 fail:
@@ -228,7 +286,7 @@ int cis_capture_poll(struct cis_context *ctx)
 	int i,ret;
 	char detail[512];
 	if(!c) return 0;
-	ret=ring_buffer__poll(c->ring,0);
+	ret=perf_buffer__poll(c->ring,0);
 	if(ret<0 && ret!=-EINTR) return ret;
 	if(now-c->last_stats_ns<1000000000) return 0;
 	{
@@ -250,12 +308,14 @@ int cis_capture_poll(struct cis_context *ctx)
 		total.received+=s->received; total.emitted+=s->emitted; total.lost+=s->lost;
 		total.unknown+=s->unknown; total.overdepth+=s->overdepth; total.unmatched+=s->unmatched;
 		total.nested+=s->nested; total.rejected+=s->rejected; total.expired+=s->expired;
+		total.phase_changes+=s->phase_changes;
+		total.irq_context+=s->irq_context;
 	}
 	received=total.received;
-	snprintf(detail,sizeof(detail),"received=%llu emitted=%llu lost=%llu unknown=%llu overdepth=%llu unmatched=%llu nested=%llu rejected=%llu expired=%llu",
+	snprintf(detail,sizeof(detail),"received=%llu emitted=%llu lost=%llu unknown=%llu overdepth=%llu unmatched=%llu nested=%llu rejected=%llu expired=%llu phase_changes=%llu irq_context=%llu",
 		(unsigned long long)total.received,(unsigned long long)total.emitted,(unsigned long long)total.lost,
 		(unsigned long long)total.unknown,(unsigned long long)total.overdepth,(unsigned long long)total.unmatched,
-		(unsigned long long)total.nested,(unsigned long long)total.rejected,(unsigned long long)total.expired);
+		(unsigned long long)total.nested,(unsigned long long)total.rejected,(unsigned long long)total.expired,(unsigned long long)total.phase_changes,(unsigned long long)total.irq_context);
 	cis_report(ctx,"coverage",NULL,detail);
 	if(c->last_stats_ns && (received-c->last_received)*1000000000.0/(now-c->last_stats_ns)>200000) {
 		cis_report(ctx,"entry_budget_disable",NULL,"entry rate exceeded 200000/s, detaching collectors"); return -E2BIG;
@@ -269,13 +329,13 @@ void cis_capture_stop(struct cis_context *ctx)
 	struct capture *c=ctx->capture;
 	int i;
 	if(!c) return;
-	for(i=0;i<5;i++) bpf_link__destroy(c->diagnostic_links[i]);
+	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) bpf_link__destroy(c->diagnostic_links[i]);
 	for(i=0;i<CIS_CPU_CAP;i++) if(c->perf_fds[i]>=0) {
 		ioctl(c->perf_fds[i],PERF_EVENT_IOC_DISABLE,0);
 		if(c->perf_pages[i]) munmap(c->perf_pages[i],2*c->perf_page_size);
 		close(c->perf_fds[i]);
 	}
-	ring_buffer__free(c->ring); bpf_object__close(c->object); free(c->cpu_stats); free(c);
+	perf_buffer__free(c->ring); bpf_object__close(c->object); free(c->cpu_stats); free(c);
 	ctx->capture=NULL; ctx->diagnostic=0;
 	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used && ctx->roots[i].state==CIS_DIAGNOSING) {
 		ctx->roots[i].state=CIS_COOLDOWN; ctx->roots[i].last_diag_ns=cis_clock_ns();

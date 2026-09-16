@@ -49,12 +49,17 @@ int cis_registry_add(struct cis_context *ctx, int fd, const char *name,
 {
 	struct stat st;
 	struct statfs fs;
+	struct statx mount_id, host_mount_id;
 	struct cis_root *r = NULL;
 	char link[64], path[4096];
 	ssize_t n;
 	unsigned int i;
 	if (fd < 0 || fstat(fd, &st) || fstatfs(fd, &fs)) return -EBADF;
 	if (!S_ISDIR(st.st_mode) || fs.f_type != CGROUP2_SUPER_MAGIC) return -EOPNOTSUPP;
+	if (statx(fd,"",AT_EMPTY_PATH|AT_STATX_DONT_SYNC,STATX_MNT_ID,&mount_id) ||
+	    statx(AT_FDCWD,"/sys/fs/cgroup",AT_STATX_DONT_SYNC,STATX_MNT_ID,&host_mount_id) ||
+	    !(mount_id.stx_mask&STATX_MNT_ID) || !(host_mount_id.stx_mask&STATX_MNT_ID) ||
+	    mount_id.stx_mnt_id!=host_mount_id.stx_mnt_id) return -EXDEV;
 	snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
 	n = readlink(link, path, sizeof(path) - 1);
 	if (n < 0 || n == sizeof(path) - 1) return -EINVAL;
@@ -64,6 +69,7 @@ int cis_registry_add(struct cis_context *ctx, int fd, const char *name,
 	for (i = 0; i < CIS_MAX_ROOTS; i++) {
 		struct cis_root *x = &ctx->roots[i];
 		if (!x->used) { if (!r) r = x; continue; }
+		/* The fixed cgroup-v2 hierarchy prohibits rename, so paths are immutable. */
 		/* One host cgroup2 view is supported; mount aliases cannot bypass overlap. */
 		if (x->dev != st.st_dev) return -EXDEV;
 		if (x->id == st.st_ino || below(path, x->path) || below(x->path, path))
@@ -71,17 +77,18 @@ int cis_registry_add(struct cis_context *ctx, int fd, const char *name,
 	}
 	if (!r) return -ENOSPC;
 	memset(r, 0, sizeof(*r));
-	for (i = 0; i < 5; i++) r->metric_fd[i] = -1;
+	for (i = 0; i < 6; i++) r->metric_fd[i] = -1;
 	r->fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
 	if (r->fd < 0) return -errno;
 	r->id = st.st_ino;
 	r->dev = st.st_dev;
 	r->generation = ctx->boot_generation + ++ctx->serial;
 	r->epoch = ctx->epoch;
+	r->policy_epoch = ctx->epoch;
 	r->state = CIS_WARMUP;
 	snprintf(r->name, sizeof(r->name), "%s", name);
 	snprintf(r->path, sizeof(r->path), "%s", path);
-	r->next_ns = cis_clock_ns() + (ctx->active % 1000) * 1000000ULL;
+	r->next_ns = cis_clock_ns() + ((ctx->serial * 618) % 1000) * 1000000ULL;
 	if (cis_metrics_open(r)) { close(r->fd); return -EIO; }
 	r->used = 1;
 	if (cis_capture_root(ctx, r, 1)) {
@@ -100,10 +107,10 @@ int cis_registry_remove(struct cis_context *ctx, uint64_t id, uint64_t generatio
 	for (i = 0; i < CIS_MAX_ROOTS; i++) {
 		struct cis_root *r = &ctx->roots[i];
 		if (!r->used || r->id != id || r->generation != generation) continue;
-		r->ready = 0;
 		if (r->state == CIS_DIAGNOSING && ctx->diagnostic) ctx->diagnostic--;
-		cis_capture_diagnostic(ctx, r, 0);
 		cis_capture_root(ctx, r, 0);
+		cis_capture_diagnostic(ctx, r, 0);
+		r->ready = 0;
 		cis_report(ctx, "unregister", r, "pending intervals are incomplete, not zero");
 		cis_metrics_close(r);
 		close(r->fd);

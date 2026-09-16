@@ -2,3 +2,5 @@
 /cisctl
 /bpf/*.o
 /bpf/vmlinux.h*
+__pycache__/
+*.pyc

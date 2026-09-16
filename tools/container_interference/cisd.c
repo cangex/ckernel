@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -75,13 +76,15 @@ static void request(struct cis_context *ctx, int fd)
 			 ctx->active, ctx->diagnostic, ctx->mode, !!ctx->capture, ctx->errors, ctx->dropped,
 			 (unsigned long long)ctx->epoch); break;
 	case CIS_DIAGNOSE:
+		if(strcmp(req.name,"sched") && strcmp(req.name,"lock") && strcmp(req.name,"reclaim") && strcmp(req.name,"work")) break;
 		rep.error = -ENOENT;
 		for (i = 0; i < CIS_MAX_ROOTS; i++) {
 			r = &ctx->roots[i];
 			if (r->used && r->id == req.id && r->generation == req.generation) {
 				if (!ctx->capture) { rep.error = -EOPNOTSUPP; break; }
 				if (r->state == CIS_COOLDOWN || r->state == CIS_DIAGNOSING) { rep.error = -EAGAIN; break; }
-				r->diagnostic_kind = !strcmp(req.name,"lock")?2:!strcmp(req.name,"reclaim")?4:1;
+				r->diagnostic_kind = !strcmp(req.name,"lock")?2:!strcmp(req.name,"reclaim")?4:!strcmp(req.name,"work")?8:1;
+				r->manual_diagnostic = 1;
 				r->pending = 1; rep.error = 0; break;
 			}
 		}
@@ -99,7 +102,7 @@ int main(int argc, char **argv)
 	struct cis_context *ctx = calloc(1, sizeof(*ctx));
 	const char *socket_path = CIS_SOCKET, *object = "bpf/cis.bpf.o", *output = NULL;
 	int i, status = 1, ready_fd = -1;
-	uint64_t end = 0;
+	uint64_t end = 0, next_control_ns = 0;
 	if (!ctx || geteuid()) { fprintf(stderr, "root in host namespaces required\n"); return 1; }
 	umask(077);
 	ctx->warmup=5; ctx->max_diagnostics=2; ctx->cooldown_s=30; ctx->window_ms=2000;
@@ -118,6 +121,16 @@ int main(int argc, char **argv)
 		else { fprintf(stderr, "invalid option: %s\n", argv[i]); goto out; }
 	}
 	if (ctx->mode < 0) goto out;
+	{
+		struct rlimit limit;
+		if(getrlimit(RLIMIT_NOFILE,&limit)) goto out;
+		if(limit.rlim_cur<8192) {
+			limit.rlim_cur=limit.rlim_max<8192?limit.rlim_max:8192;
+			if(limit.rlim_cur<4096 || setrlimit(RLIMIT_NOFILE,&limit)) {
+				fprintf(stderr,"CIS requires at least 4096 file descriptors for bounded capacity\n"); goto out;
+			}
+		}
+	}
 	if (output) {
 		ctx->output_fd=open(output,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NONBLOCK,0600);
 		if (ctx->output_fd < 0) { perror("output"); goto out; }
@@ -125,6 +138,7 @@ int main(int argc, char **argv)
 	ctx->socket_fd=server(socket_path);
 	if (ctx->socket_fd < 0) { perror("socket"); goto out; }
 	signal(SIGTERM,stop_signal); signal(SIGINT,stop_signal); signal(SIGPIPE,SIG_IGN);
+	if(ctx->mode==2 && cis_symbols_load(ctx)) cis_report(ctx,"symbols_unavailable",NULL,"numeric IP only; automatic lock selection unavailable");
 	if (ctx->mode == 2 && cis_capture_start(ctx,object)) {
 		cis_report(ctx,"capture_failure",NULL,"requested IP mode did not start; no silent metrics fallback"); goto out;
 	}
@@ -132,8 +146,23 @@ int main(int argc, char **argv)
 	if (ready_fd >= 0) { if (write(ready_fd,"R",1)!=1) goto out; close(ready_fd); }
 	while (!quitting && !ctx->stopping && (!end || cis_clock_ns()<end)) {
 		struct pollfd pfd={ctx->socket_fd,POLLIN,0};
-		uint64_t now;
-		if (poll(&pfd,1,10)>0 && (pfd.revents&POLLIN)) {
+		uint64_t now=cis_clock_ns(),wake=now+(ctx->capture?100000000:1000000000);
+		int timeout;
+		/* Backpressure only administrator requests, never business execution. */
+		if(now<next_control_ns) {
+			pfd.events=0;
+			if(next_control_ns<wake) wake=next_control_ns;
+		}
+		/* Wake for actual deadlines, not a perpetual 100-Hz metrics-only poll. */
+		for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
+			struct cis_root *r=&ctx->roots[i];
+			if(ctx->mode && r->next_ns<wake) wake=r->next_ns;
+			if(r->state==CIS_DIAGNOSING && r->deadline_ns<wake) wake=r->deadline_ns;
+		}
+		if(end && end<wake) wake=end;
+		timeout=wake<=now?0:(int)((wake-now+999999)/1000000);
+		if (poll(&pfd,1,timeout)>0 && (pfd.revents&POLLIN)) {
+			next_control_ns=cis_clock_ns()+31250000;
 			int client=accept4(ctx->socket_fd,NULL,NULL,SOCK_CLOEXEC|SOCK_NONBLOCK);
 			if (client>=0) {
 				struct pollfd cp={client,POLLIN,0};
@@ -148,15 +177,32 @@ int main(int argc, char **argv)
 			if (!r->used || now<r->next_ns) continue;
 			r->next_ns=now+1000000000;
 			ctx->metrics_reads++;
-			if (cis_metrics_read(r,&m)) { ctx->errors++; cis_report(ctx,"metric_error",r,"missing/stale resource field, not zero"); }
-			else cis_baseline_update(ctx,r,&m);
+			if(cis_metrics_read(r,&m)) {
+				char link[64],name[4096];
+				ssize_t n;
+				snprintf(link,sizeof(link),"/proc/self/fd/%d",r->fd);
+				n=readlink(link,name,sizeof(name)-1);
+				if(n>=0) name[n]=0;
+				if(n>=0 && strstr(name," (deleted)")) {
+					cis_report(ctx,"root_deleted",r,"retiring registration; no path-name reassignment");
+					cis_registry_remove(ctx,r->id,r->generation);
+				} else { ctx->errors++; cis_report(ctx,"metric_error",r,"missing/stale resource field, not zero"); }
+			} else {
+				if(cis_config_epoch(ctx,r,now)) { ctx->errors++; cis_report(ctx,"config_error",r,"configuration read failed, not silently frozen"); }
+				cis_baseline_update(ctx,r,&m);
+			}
 		}
 		if (cis_capture_poll(ctx)<0) { cis_report(ctx,"capture_error",NULL,"stopping collectors"); cis_capture_stop(ctx); }
 		cis_diagnostics_tick(ctx,now); cis_budget_tick(ctx,now);
 	}
 	status=0;
 out:
-	cis_registry_destroy(ctx); cis_capture_stop(ctx);
+	cis_registry_destroy(ctx); cis_capture_stop(ctx); cis_symbols_free(ctx);
+	{
+		char quality[192];
+		snprintf(quality,sizeof(quality),"errors=%u drops=%u retired_or_unknown_userspace_samples=%u",ctx->errors,ctx->dropped,ctx->unknown);
+		cis_report(ctx,"final_quality",NULL,quality);
+	}
 	if (ctx->socket_fd>=0) { close(ctx->socket_fd); unlink(socket_path); }
 	if (ctx->output_fd!=STDOUT_FILENO) close(ctx->output_fd);
 	free(ctx); return status;

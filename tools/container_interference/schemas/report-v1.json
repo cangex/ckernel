@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIS host-admin event envelope v1",
+  "type": "object",
+  "required": ["version", "time_ns", "kind", "id", "generation", "name", "state", "detail"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": 1},
+    "time_ns": {"type": "integer", "minimum": 0},
+    "kind": {"type": "string", "maxLength": 64},
+    "id": {"type": "integer", "minimum": 0},
+    "generation": {"type": "integer", "minimum": 0},
+    "name": {"type": "string", "maxLength": 63},
+    "state": {"enum": ["HOST", "WARMUP", "AMBIENT", "SUSPECT", "DIAGNOSING", "COOLDOWN"]},
+    "detail": {"type": "string", "maxLength": 1200}
+  }
+}

@@ -13,10 +13,12 @@ void cis_baseline_update(struct cis_context *ctx, struct cis_root *r, const stru
 	double wait, usage;
 	uint64_t elapsed;
 	char detail[256];
-	if (!r->previous.time_ns || r->epoch != ctx->epoch ||
+	if (!r->previous.time_ns || r->policy_epoch != ctx->epoch ||
 	    m->usage_us < r->previous.usage_us || m->cpu_wait_us < r->previous.cpu_wait_us) {
 		r->previous = *m; r->samples = 0; r->deviations = 0;
-		r->epoch = ctx->epoch; r->state = CIS_WARMUP; return;
+		r->policy_epoch = ctx->epoch;
+		if(r->state != CIS_DIAGNOSING && r->state != CIS_COOLDOWN) r->state = CIS_WARMUP;
+		return;
 	}
 	elapsed = m->time_ns - r->previous.time_ns;
 	if (!elapsed) return;
@@ -28,7 +30,14 @@ void cis_baseline_update(struct cis_context *ctx, struct cis_root *r, const stru
 		 (unsigned long long)m->memory_current);
 	cis_report(ctx, "metric", r, detail);
 	if (r->state == CIS_DIAGNOSING || r->state == CIS_COOLDOWN) {
+		if(r->state==CIS_DIAGNOSING && (!m->populated ||
+		   (!r->manual_diagnostic && wait<.01 && m->memory_wait_us-r->previous.memory_wait_us<10000))) {
+			cis_capture_diagnostic(ctx,r,0); r->state=CIS_COOLDOWN;
+			r->last_diag_ns=cis_clock_ns(); if(ctx->diagnostic) ctx->diagnostic--;
+			cis_report(ctx,"diagnostic_stop",r,m->populated?"anomaly receded":"container has no remaining tasks");
+		}
 		r->previous = *m;
+		r->ip_samples=r->lock_samples=r->reclaim_samples=0;
 		return;
 	}
 	if (r->samples++ < ctx->warmup) {
@@ -36,12 +45,16 @@ void cis_baseline_update(struct cis_context *ctx, struct cis_root *r, const stru
 		r->baseline_usage += (usage-r->baseline_usage)/r->samples;
 		if (r->samples == ctx->warmup) r->state = CIS_AMBIENT;
 	} else if (r->state == CIS_AMBIENT || r->state == CIS_SUSPECT) {
-		int anomaly = wait > 0.02 && wait > r->baseline_wait * 2 + 0.01;
+		int anomaly = wait > 0.02 && (wait > r->baseline_wait * 2 + 0.01 || wait>.2);
 		int pressure = m->memory_wait_us > r->previous.memory_wait_us + 20000;
 		if (anomaly || pressure) {
 			r->deviations++;
 			r->state = CIS_SUSPECT;
-			if (r->deviations >= 3) { r->pending = 1; r->diagnostic_kind = pressure ? 4 : 1; }
+			if (r->deviations >= 3) {
+				r->pending = 1;
+				r->manual_diagnostic = 0;
+				r->diagnostic_kind = pressure ? 4 : r->lock_samples>=4 && r->ip_samples>=8 ? 2 : 1;
+			}
 			cis_report(ctx, "E0", r, "sustained deviation; demand/phase/external cause unresolved");
 		} else {
 			r->deviations = 0; r->pending = 0; r->state = CIS_AMBIENT;
@@ -51,6 +64,7 @@ void cis_baseline_update(struct cis_context *ctx, struct cis_root *r, const stru
 		}
 	}
 	r->previous = *m;
+	r->ip_samples=r->lock_samples=r->reclaim_samples=0;
 }
 
 void cis_diagnostics_tick(struct cis_context *ctx, uint64_t now)

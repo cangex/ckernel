@@ -20,11 +20,14 @@ struct cis_reply { int32_t error; uint32_t size; uint64_t id, generation; char t
 struct cis_metric {
 	uint64_t time_ns, usage_us, throttle_us, cpu_wait_us, memory_wait_us;
 	uint64_t memory_current, memory_high, memory_oom;
+	uint64_t populated;
 };
 struct cis_root {
-	int used, fd, metric_fd[5], ready, pending;
+	int used, fd, metric_fd[6], ready, pending, manual_diagnostic;
 	unsigned int diagnostic_kind;
+	unsigned int ip_samples, lock_samples, reclaim_samples;
 	uint64_t id, generation, epoch, next_ns, deadline_ns, last_diag_ns;
+	uint64_t config_hash, config_due_ns, policy_epoch;
 	dev_t dev;
 	char name[64], path[4096];
 	enum cis_state state;
@@ -42,6 +45,7 @@ struct cis_context {
 	uint64_t memory_limit, user_cpu_limit_ns, last_process_ns, last_budget_ns;
 	int mode, stopping, output_fd, socket_fd;
 	void *capture;
+	void *symbols;
 };
 uint64_t cis_clock_ns(void);
 int cis_registry_add(struct cis_context *, int, const char *, struct cis_root **);
@@ -51,6 +55,7 @@ struct cis_root *cis_registry_lookup(struct cis_context *, uint64_t, uint64_t);
 int cis_metrics_open(struct cis_root *);
 int cis_metrics_read(struct cis_root *, struct cis_metric *);
 void cis_metrics_close(struct cis_root *);
+int cis_config_epoch(struct cis_context *, struct cis_root *, uint64_t);
 void cis_baseline_update(struct cis_context *, struct cis_root *, const struct cis_metric *);
 void cis_diagnostics_tick(struct cis_context *, uint64_t);
 void cis_report(struct cis_context *, const char *, const struct cis_root *, const char *);
@@ -61,4 +66,7 @@ int cis_capture_diagnostic(struct cis_context *, struct cis_root *, int);
 int cis_capture_poll(struct cis_context *);
 void cis_capture_stop(struct cis_context *);
 void cis_budget_tick(struct cis_context *, uint64_t);
+int cis_symbols_load(struct cis_context *);
+const char *cis_symbol(struct cis_context *, uint64_t);
+void cis_symbols_free(struct cis_context *);
 #endif

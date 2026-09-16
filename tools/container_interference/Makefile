@@ -5,7 +5,7 @@ BPFTOOL ?= bpftool
 CFLAGS ?= -O2 -g
 CFLAGS += -Wall -Wextra -Werror
 LDLIBS += -lbpf -lelf -lz
-CORE = registry.c counters.c baseline.c budget.c report.c capture.c
+CORE = registry.c counters.c baseline.c budget.c report.c capture.c symbols.c
 all: cisd cisctl bpf/cis.bpf.o
 cisd: cisd.c $(CORE) include/cis.h include/cis_event.h
 	$(CC) $(CFLAGS) $(LDFLAGS) cisd.c $(CORE) -o $@ $(LDLIBS)
