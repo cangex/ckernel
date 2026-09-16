@@ -8,6 +8,7 @@
  * Copyright 2009-2017 Canonical Ltd.
  */
 
+#include <linux/ckernel_m_net.h>
 #include "include/apparmor.h"
 #include "include/audit.h"
 #include "include/cred.h"
@@ -176,6 +177,9 @@ int aa_sk_perm(const char *op, u32 request, struct sock *sk)
 
 	AA_BUG(!sk);
 	AA_BUG(in_interrupt());
+
+	if (aa_ckm_net_allowed(sk, request))
+		return 0;
 
 	/* TODO: switch to begin_current_label ???? */
 	label = begin_current_label_crit_section();

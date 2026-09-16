@@ -15,6 +15,9 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 	struct ckm_instance *i = file->private_data;
 	struct ckm_query q;
 	struct ckm_diagnostics d;
+#ifdef CONFIG_CKERNEL_M_NET
+	struct ckm_net_query net;
+#endif
 #ifdef CONFIG_CKERNEL_M_FD
 	struct ckm_fd_query fdq;
 #endif
@@ -32,6 +35,17 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	switch (cmd) {
+#ifdef CONFIG_CKERNEL_M_NET
+	case CKM_IOC_NET_QUERY:
+		if (copy_from_user(&net, (void __user *)arg, sizeof(net)))
+			return -EFAULT;
+		if (net.version != CKM_ABI_VERSION || net.size != sizeof(net) ||
+		    net.reserved[0] || net.reserved[1] || net.reserved[2] || net.reserved[3])
+			return -EINVAL;
+		memset(&net, 0, sizeof(net));
+		ckm_net_query(i, &net);
+		return copy_to_user((void __user *)arg, &net, sizeof(net)) ? -EFAULT : 0;
+#endif
 #ifdef CONFIG_CKERNEL_M_FD
 	case CKM_IOC_FD_QUERY:
 		if (copy_from_user(&fdq, (void __user *)arg, sizeof(fdq)))
@@ -150,7 +164,7 @@ static long ckm_control_ioctl(struct file *file, unsigned int cmd, unsigned long
 		return -EFAULT;
 	if (r.version != CKM_ABI_VERSION || r.size != sizeof(r) ||
 	    r.features & ~(CKM_FEATURE_MAPLE | CKM_FEATURE_VFS | CKM_FEATURE_VFS_OPEN |
-			   CKM_FEATURE_SECURITY | CKM_FEATURE_FD) || r.max_nodes > 4096 ||
+			   CKM_FEATURE_SECURITY | CKM_FEATURE_FD | CKM_FEATURE_NET) || r.max_nodes > 4096 ||
 	    r.reserved[0] || r.reserved[1] || r.reserved[2] || r.reserved[3])
 		return -EINVAL;
 	if ((r.features & CKM_FEATURE_MAPLE) &&
@@ -161,6 +175,8 @@ static long ckm_control_ioctl(struct file *file, unsigned int cmd, unsigned long
 	if ((r.features & CKM_FEATURE_SECURITY) && !IS_ENABLED(CONFIG_CKERNEL_M_SECURITY))
 		return -EOPNOTSUPP;
 	if ((r.features & CKM_FEATURE_FD) && !IS_ENABLED(CONFIG_CKERNEL_M_FD))
+		return -EOPNOTSUPP;
+	if ((r.features & CKM_FEATURE_NET) && !IS_ENABLED(CONFIG_CKERNEL_M_NET))
 		return -EOPNOTSUPP;
 	if ((r.features & CKM_FEATURE_VFS_OPEN) &&
 	    (!IS_ENABLED(CONFIG_CKERNEL_M_VFS_OPEN) || !(r.features & CKM_FEATURE_VFS)))

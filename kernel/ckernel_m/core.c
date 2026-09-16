@@ -18,6 +18,7 @@ static void ckm_release_work(struct work_struct *work)
 	ckm_vfs_destroy(i);
 	ckm_security_destroy(i);
 	ckm_fd_destroy(i);
+	ckm_net_destroy(i);
 	atomic_set(&i->state, CKM_DEAD);
 	trace_ckm_lifecycle(i->cookie, CKM_DEAD);
 	if (i->objcg)
@@ -50,6 +51,7 @@ static void ckm_revoke_work(struct work_struct *work)
 	ckm_vfs_drain(i);
 	ckm_security_drain(i);
 	ckm_fd_drain(i);
+	ckm_net_drain(i);
 	ckm_put(i);
 }
 
@@ -99,7 +101,11 @@ struct ckm_instance *ckm_create_instance(const struct ckm_create *r)
 		ret = ckm_security_init(i);
 	if (!ret)
 		ret = ckm_fd_init(i);
+	if (!ret)
+		ret = ckm_net_init(i);
 	if (ret) {
+		ckm_fd_drain(i);
+		ckm_fd_destroy(i);
 		ckm_security_drain(i);
 		ckm_security_destroy(i);
 		ckm_vfs_destroy(i);

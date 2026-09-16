@@ -60,6 +60,17 @@ config CKERNEL_M_FD
 	  This prototype may increase control-path latency and is not accepted
 	  as an isolation guarantee. Unlimited groups are still accounted.
 
+config CKERNEL_M_NET
+	bool "CKernel-M bounded AppArmor socket ownership records"
+	depends on CKERNEL_M && SECURITY_APPARMOR && INET
+	default n
+	help
+	  Record at most 64 native INET sockets per opted-in instance without
+	  enlarging struct sock or its AppArmor blob. Reuse only native-equivalent
+	  unmediated send/receive qualification. All mediated decisions stay
+	  native. Ownerless clone/free uses an RCU registry search, and retirement
+	  still uses native RCU; this prototype is not an isolation guarantee.
+
 config CKERNEL_M_KUNIT_TEST
 	bool "CKernel-M core tests" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CKERNEL_M=y

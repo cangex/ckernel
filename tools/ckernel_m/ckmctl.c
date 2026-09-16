@@ -21,6 +21,7 @@ int main(int argc, char **argv)
 	struct timespec start, finish;
 	pid_t child;
 	int fd_budget = argc > 1 && !strcmp(argv[1], "--fd");
+	int net = argc > 1 && !strcmp(argv[1], "--net");
 	int security = argc > 1 && (!strcmp(argv[1], "--security") ||
 		!strcmp(argv[1], "--vfs-open-security"));
 	int open_vfs = argc > 1 && (!strcmp(argv[1], "--vfs-open") ||
@@ -31,19 +32,21 @@ int main(int argc, char **argv)
 	struct ckm_vfs_open_query oq = {};
 	struct ckm_security_query sq = {};
 	struct ckm_fd_query fq = {};
+	struct ckm_net_query nq = {};
 
 	if (argc <= program) {
 		fprintf(stderr, "usage: %s MAX_NODES PROGRAM [ARGS...] (0 = Core only)\n", argv[0]);
 		fprintf(stderr, "       %s --vfs READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
 		fprintf(stderr, "       %s --vfs-open READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
 		fprintf(stderr, "       %s --security PROGRAM [ARGS...]\n", argv[0]);
+		fprintf(stderr, "       %s --net PROGRAM [ARGS...]\n", argv[0]);
 		fprintf(stderr, "       %s --fd PROGRAM [ARGS...] (non-root legacy files cgroup)\n", argv[0]);
 		fprintf(stderr, "       %s --vfs-open-security READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
 		return 2;
 	}
 	errno = 0;
 	n = 0;
-	if ((!security && !fd_budget) || vfs) {
+	if ((!security && !fd_budget && !net) || vfs) {
 		n = strtoul(argv[vfs ? 3 : 1], &end, 10);
 		if (errno || end == argv[vfs ? 3 : 1] || *end ||
 		    n > (vfs ? CKM_VFS_MAX_ENTRIES : 4096) || (vfs && !n))
@@ -57,6 +60,8 @@ int main(int argc, char **argv)
 		r.features |= CKM_FEATURE_SECURITY;
 	if (fd_budget)
 		r.features |= CKM_FEATURE_FD;
+	if (net)
+		r.features |= CKM_FEATURE_NET;
 	control = open("/dev/ckernel-m", O_RDWR | O_CLOEXEC);
 	if (control < 0) {
 		perror("open control");
@@ -136,6 +141,15 @@ int main(int argc, char **argv)
 		       sq.label_released, sq.open_borrowed, sq.label_learned, sq.full,
 		       sq.contended, sq.stale, sq.management_bytes);
 	}
+	if (net) {
+		nq = (struct ckm_net_query){ .version = CKM_ABI_VERSION, .size = sizeof(nq) };
+		if (ioctl(instance, CKM_IOC_NET_QUERY, &nq)) {
+			perror("network query"); close(instance); return 1;
+		}
+		printf("net_live=%u retiring=%u created=%llu cloned=%llu released=%llu send_hits=%llu recv_hits=%llu native=%llu management_bytes=%llu\n",
+		       nq.live, nq.retiring, nq.created, nq.cloned, nq.released,
+		       nq.send_hits, nq.recv_hits, nq.native, nq.management_bytes);
+	}
 	if (ioctl(instance, CKM_IOC_REVOKE, 0UL)) {
 		perror("revoke");
 		close(instance);
@@ -181,7 +195,14 @@ int main(int argc, char **argv)
 				perror("FD drain query"); close(instance); return 1;
 			}
 		}
+		if (net) {
+			nq = (struct ckm_net_query){ .version = CKM_ABI_VERSION, .size = sizeof(nq) };
+			if (ioctl(instance, CKM_IOC_NET_QUERY, &nq)) {
+				perror("network drain query"); close(instance); return 1;
+			}
+		}
 		if (!q.tasks && !q.mms && !q.nodes && (!vfs || (vq.stopped && !vq.cached)) &&
+		    (!net || (nq.stopped && !nq.live && !nq.retiring)) &&
 		    (!fd_budget || (fq.stopped && !fq.idle)) &&
 		    (!open_vfs || oq.hits == oq.released) &&
 		    (!security || (q.state >= CKM_DRAINING && sq.label_hits == sq.label_released)))

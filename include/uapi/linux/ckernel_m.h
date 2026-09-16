@@ -10,6 +10,8 @@
 #define CKM_FEATURE_VFS_OPEN 4U
 #define CKM_FEATURE_SECURITY 8U
 #define CKM_FEATURE_FD 16U
+#define CKM_FEATURE_NET 32U
+#define CKM_NET_MAX_SOCKETS 64U
 #define CKM_FD_MAX_IDLE 64U
 #define CKM_SECURITY_MAX_LABELS 8U
 #define CKM_VFS_MAX_ENTRIES 16U
@@ -84,6 +86,16 @@ struct ckm_fd_query {
 	__aligned_u64 reserved[4];
 };
 #define CKM_IOC_FD_QUERY _IOWR('M', 0x49, struct ckm_fd_query)
+
+struct ckm_net_query {
+	__u32 version, size;
+	__u32 capacity, live, retiring, stopped;
+	__aligned_u64 created, cloned, released, send_hits, recv_hits;
+	__aligned_u64 native, missing, subject, stale, mediated, full, contended;
+	__aligned_u64 owner_search_steps, management_bytes;
+	__aligned_u64 reserved[4];
+};
+#define CKM_IOC_NET_QUERY _IOWR('M', 0x4a, struct ckm_net_query)
 
 struct ckm_query {
 	__u32 version;

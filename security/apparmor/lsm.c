@@ -22,6 +22,7 @@
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv6.h>
 #include <linux/zstd.h>
+#include <linux/ckernel_m_net.h>
 #include <net/sock.h>
 #include <uapi/linux/mount.h>
 
@@ -892,6 +893,7 @@ static void apparmor_sk_free_security(struct sock *sk)
 {
 	struct aa_sk_ctx *ctx = SK_CTX(sk);
 
+	aa_ckm_net_free(sk);
 	SK_CTX(sk) = NULL;
 	aa_put_label(ctx->label);
 	aa_put_label(ctx->peer);
@@ -914,6 +916,7 @@ static void apparmor_sk_clone_security(const struct sock *sk,
 	if (new->peer)
 		aa_put_label(new->peer);
 	new->peer = aa_get_label(ctx->peer);
+	aa_ckm_net_clone(sk, newsk);
 }
 
 /**
@@ -963,6 +966,8 @@ static int apparmor_socket_post_create(struct socket *sock, int family,
 
 		aa_put_label(ctx->label);
 		ctx->label = aa_get_label(label);
+		if (!kern)
+			aa_ckm_net_created(sock->sk);
 	}
 	aa_put_label(label);
 
