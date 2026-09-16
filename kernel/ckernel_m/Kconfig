@@ -49,6 +49,17 @@ config CKERNEL_M_SECURITY_KUNIT_TEST
 	depends on KUNIT && CKERNEL_M_SECURITY
 	default n
 
+config CKERNEL_M_FD
+	bool "CKernel-M bounded legacy FD quota delegation"
+	depends on CKERNEL_M && CGROUP_FILES
+	default n
+	help
+	  Delegate at most 64 precharged idle FD credits to one enrolled instance
+	  per non-root legacy files cgroup. Preserve native usage and ancestor
+	  limits through explicit drain coordination. Misc mode is unsupported.
+	  This prototype may increase control-path latency and is not accepted
+	  as an isolation guarantee. Unlimited groups are still accounted.
+
 config CKERNEL_M_KUNIT_TEST
 	bool "CKernel-M core tests" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CKERNEL_M=y

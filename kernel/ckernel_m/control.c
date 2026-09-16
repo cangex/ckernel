@@ -15,6 +15,9 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 	struct ckm_instance *i = file->private_data;
 	struct ckm_query q;
 	struct ckm_diagnostics d;
+#ifdef CONFIG_CKERNEL_M_FD
+	struct ckm_fd_query fdq;
+#endif
 #ifdef CONFIG_CKERNEL_M_SECURITY
 	struct ckm_security_query security;
 #endif
@@ -29,6 +32,17 @@ static long ckm_instance_ioctl(struct file *file, unsigned int cmd, unsigned lon
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	switch (cmd) {
+#ifdef CONFIG_CKERNEL_M_FD
+	case CKM_IOC_FD_QUERY:
+		if (copy_from_user(&fdq, (void __user *)arg, sizeof(fdq)))
+			return -EFAULT;
+		if (fdq.version != CKM_ABI_VERSION || fdq.size != sizeof(fdq) || fdq.pad ||
+		    fdq.reserved[0] || fdq.reserved[1] || fdq.reserved[2] || fdq.reserved[3])
+			return -EINVAL;
+		memset(&fdq, 0, sizeof(fdq));
+		ckm_fd_query(i, &fdq);
+		return copy_to_user((void __user *)arg, &fdq, sizeof(fdq)) ? -EFAULT : 0;
+#endif
 #ifdef CONFIG_CKERNEL_M_SECURITY
 	case CKM_IOC_SECURITY_QUERY:
 		if (copy_from_user(&security, (void __user *)arg, sizeof(security)))
@@ -136,7 +150,7 @@ static long ckm_control_ioctl(struct file *file, unsigned int cmd, unsigned long
 		return -EFAULT;
 	if (r.version != CKM_ABI_VERSION || r.size != sizeof(r) ||
 	    r.features & ~(CKM_FEATURE_MAPLE | CKM_FEATURE_VFS | CKM_FEATURE_VFS_OPEN |
-			   CKM_FEATURE_SECURITY) || r.max_nodes > 4096 ||
+			   CKM_FEATURE_SECURITY | CKM_FEATURE_FD) || r.max_nodes > 4096 ||
 	    r.reserved[0] || r.reserved[1] || r.reserved[2] || r.reserved[3])
 		return -EINVAL;
 	if ((r.features & CKM_FEATURE_MAPLE) &&
@@ -145,6 +159,8 @@ static long ckm_control_ioctl(struct file *file, unsigned int cmd, unsigned long
 	if ((r.features & CKM_FEATURE_VFS) && !IS_ENABLED(CONFIG_CKERNEL_M_VFS))
 		return -EOPNOTSUPP;
 	if ((r.features & CKM_FEATURE_SECURITY) && !IS_ENABLED(CONFIG_CKERNEL_M_SECURITY))
+		return -EOPNOTSUPP;
+	if ((r.features & CKM_FEATURE_FD) && !IS_ENABLED(CONFIG_CKERNEL_M_FD))
 		return -EOPNOTSUPP;
 	if ((r.features & CKM_FEATURE_VFS_OPEN) &&
 	    (!IS_ENABLED(CONFIG_CKERNEL_M_VFS_OPEN) || !(r.features & CKM_FEATURE_VFS)))
@@ -160,6 +176,8 @@ static long ckm_control_ioctl(struct file *file, unsigned int cmd, unsigned long
 	handle = anon_inode_getfile("ckernel-m-instance", &ckm_instance_fops, i, O_RDWR);
 	if (IS_ERR(handle)) {
 		put_unused_fd(fd);
+		/* No handle/task was published: undo enrollment before reporting failure. */
+		ckm_fd_drain(i);
 		ckm_revoke(i);
 		ckm_put(i);
 		return PTR_ERR(handle);

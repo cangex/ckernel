@@ -7,6 +7,7 @@
 #include <linux/ckernel_m.h>
 #include <linux/ckernel_m_vfs.h>
 #include <linux/ckernel_m_security.h>
+#include <linux/ckernel_m_fd.h>
 #include <linux/list.h>
 #include <linux/memcontrol.h>
 #include <linux/nodemask.h>
@@ -43,6 +44,9 @@ struct ckm_instance {
 #endif
 #ifdef CONFIG_CKERNEL_M_SECURITY
 	struct ckm_security_state *security;
+#endif
+#ifdef CONFIG_CKERNEL_M_FD
+	struct ckm_fd_pool *fd_pool;
 #endif
 };
 

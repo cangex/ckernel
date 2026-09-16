@@ -9,6 +9,8 @@
 #define CKM_FEATURE_VFS 2U
 #define CKM_FEATURE_VFS_OPEN 4U
 #define CKM_FEATURE_SECURITY 8U
+#define CKM_FEATURE_FD 16U
+#define CKM_FD_MAX_IDLE 64U
 #define CKM_SECURITY_MAX_LABELS 8U
 #define CKM_VFS_MAX_ENTRIES 16U
 #define CKM_ACTIVE 0U
@@ -73,6 +75,15 @@ struct ckm_security_query {
 };
 
 #define CKM_IOC_SECURITY_QUERY _IOWR('M', 0x48, struct ckm_security_query)
+
+struct ckm_fd_query {
+	__u32 version, size;
+	__u32 capacity, idle, stopped, pad;
+	__aligned_u64 local_alloc, local_free, native_alloc, refill, rescue, drained, contended;
+	__aligned_u64 management_bytes;
+	__aligned_u64 reserved[4];
+};
+#define CKM_IOC_FD_QUERY _IOWR('M', 0x49, struct ckm_fd_query)
 
 struct ckm_query {
 	__u32 version;

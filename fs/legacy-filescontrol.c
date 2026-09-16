@@ -27,6 +27,7 @@
 #include <linux/fdtable.h>
 #include <linux/sched/signal.h>
 #include <linux/module.h>
+#include <linux/ckernel_m_fd.h>
 
 #define FILES_MAX D_COUNT_MAX
 #define FILES_MAX_STR "max"
@@ -62,6 +63,25 @@ files_cgroup_from_files(struct files_struct *files)
 {
 	return files->files_cgroup;
 }
+
+#ifdef CONFIG_CKERNEL_M_FD
+int files_cgroup_ckm_prepare(struct ckm_instance *i)
+{
+	struct cgroup_subsys_state *css;
+	int ret;
+
+	if (!files_cgroup_enabled() || no_acct || !files_cg_ckm_legacy())
+		return -EOPNOTSUPP;
+	css = task_get_css(current, files_cgrp_id);
+	if (!css->parent) {
+		css_put(css);
+		return -EOPNOTSUPP;
+	}
+	ret = ckm_fd_register(i, css, css_res_open_handles(css));
+	css_put(css);
+	return ret;
+}
+#endif
 
 
 static struct cgroup_subsys_state *
@@ -103,6 +123,7 @@ static int files_cgroup_can_attach(struct cgroup_taskset *tset)
 {
 	u64 num_files;
 	bool can_attach;
+	unsigned long ckm_flags;
 	struct cgroup_subsys_state *to_css;
 	struct cgroup_subsys_state *from_css;
 	struct page_counter *from_res;
@@ -124,6 +145,7 @@ static int files_cgroup_can_attach(struct cgroup_taskset *tset)
 	from_res = css_res_open_handles(from_css);
 
 	spin_lock(&files->file_lock);
+	ckm_flags = ckm_fd_quiesce_begin();
 	num_files = file_cg_count_fds(files);
 	page_counter_uncharge(from_res, num_files);
 
@@ -137,6 +159,7 @@ static int files_cgroup_can_attach(struct cgroup_taskset *tset)
 		task->files->files_cgroup = css_fcg(to_css);
 		can_attach = true;
 	}
+	ckm_fd_quiesce_end(ckm_flags);
 	spin_unlock(&files->file_lock);
 	task_unlock(task);
 	return can_attach ? 0 : -ENOSPC;
@@ -157,11 +180,16 @@ int files_cgroup_alloc_fd(struct files_struct *files, u64 n)
 	 *  won't be accurate in root files cgroup.
 	 */
 	if (!no_acct && files != &init_files) {
+#ifndef CONFIG_CKERNEL_M_FD
 		struct page_counter *fail_res;
+#endif
 		struct files_cgroup *files_cgroup =
 			files_cgroup_from_files(files);
-		if (!page_counter_try_charge(&files_cgroup->open_handles,
-				       n, &fail_res))
+#ifdef CONFIG_CKERNEL_M_FD
+		if (!ckm_fd_alloc(&files_cgroup->open_handles, n))
+#else
+		if (!page_counter_try_charge(&files_cgroup->open_handles, n, &fail_res))
+#endif
 			return -ENOMEM;
 	}
 	return 0;
@@ -178,6 +206,10 @@ void files_cgroup_unalloc_fd(struct files_struct *files, u64 n)
 	if (!no_acct && files != &init_files) {
 		struct files_cgroup *files_cgroup =
 		       files_cgroup_from_files(files);
+#ifdef CONFIG_CKERNEL_M_FD
+		if (ckm_fd_free(&files_cgroup->open_handles, n))
+			return;
+#endif
 		page_counter_uncharge(&files_cgroup->open_handles, n);
 	}
 }
@@ -214,9 +246,14 @@ static u64 files_disabled_read(struct cgroup_subsys_state *css,
 static int files_disabled_write(struct cgroup_subsys_state *css,
 				    struct cftype *cft, u64 val)
 {
+	unsigned long flags;
+
 	if (!val)
 		return -EINVAL;
+	flags = ckm_fd_quiesce_begin();
+	ckm_fd_disable_locked();
 	no_acct = true;
+	ckm_fd_quiesce_end(flags);
 
 	return 0;
 }
@@ -257,7 +294,11 @@ set_limit:
 	 * Limit updates don't need to be mutex'd, since it isn't
 	 * critical that any racing fork()s follow the new limit.
 	 */
+#ifdef CONFIG_CKERNEL_M_FD
+	ckm_fd_set_max(&fcg->open_handles, limit);
+#else
 	page_counter_set_max(&fcg->open_handles, limit);
+#endif
 	return nbytes;
 }
 
@@ -266,8 +307,13 @@ static u64 files_usage_read(struct cgroup_subsys_state *css,
 			struct cftype *cft)
 {
 	struct files_cgroup *fcg = css_fcg(css);
+	unsigned long flags;
+	u64 usage;
 
-	return page_counter_read(&fcg->open_handles);
+	flags = ckm_fd_quiesce_begin();
+	usage = page_counter_read(&fcg->open_handles);
+	ckm_fd_quiesce_end(flags);
+	return usage;
 }
 
 static struct cftype files[] = {

@@ -9,6 +9,7 @@
 #include <linux/filescontrol.h>
 #include <linux/legacy-filescontrol.h>
 #include <linux/misc-filescontrol.h>
+#include <linux/ckernel_m_fd.h>
 
 static struct static_key_false misc_fd_enable_key;
 
@@ -16,6 +17,13 @@ static inline bool file_cg_misc_enabled(void)
 {
 	return static_branch_likely(&misc_fd_enable_key);
 }
+
+#ifdef CONFIG_CKERNEL_M_FD
+bool files_cg_ckm_legacy(void)
+{
+	return !file_cg_misc_enabled();
+}
+#endif
 
 u64 file_cg_count_fds(struct files_struct *files)
 {
