@@ -13,6 +13,7 @@
 #include <linux/completion.h>
 #include <linux/workqueue.h>
 #include <linux/rwsem.h>
+#include <linux/spinlock.h>
 #include "uapi.h"
 static bool isolated_vm;
 module_param(isolated_vm,bool,0400);
@@ -20,6 +21,8 @@ static DEFINE_MUTEX(lock_a);
 static DEFINE_MUTEX(lock_b);
 static DECLARE_RWSEM(fixture_lifetime);
 static u64 object_generation=1;
+static DEFINE_SPINLOCK(storm_lock);
+static u64 storm_counter;
 struct async_context {
 	struct work_struct work;
 	struct completion done;
@@ -95,6 +98,17 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 	struct mutex *lock;
 	(void)file;
 	if(!capable(CAP_SYS_ADMIN)) return -EPERM;
+	if(cmd==CIS_FIXTURE_STORM) {
+		struct cis_fixture_storm storm;
+		u32 i;
+		if(copy_from_user(&storm,(void __user*)arg,sizeof(storm))) return -EFAULT;
+		if(!storm.iterations || storm.iterations>4096 || storm.reserved) return -EINVAL;
+		for(i=0;i<storm.iterations;i++) {
+			spin_lock(&storm_lock); storm_counter++; spin_unlock(&storm_lock);
+			if(!(i&63)) cond_resched();
+		}
+		return 0;
+	}
 	if(cmd==CIS_FIXTURE_QUEUE || cmd==CIS_FIXTURE_WAIT || cmd==CIS_FIXTURE_CANCEL) return async_ioctl(file,cmd,arg);
 	if(cmd!=CIS_FIXTURE_LOCK && cmd!=CIS_FIXTURE_RESET) return -ENOTTY;
 	if(copy_from_user(&q,(void __user *)arg,sizeof(q))) return -EFAULT;

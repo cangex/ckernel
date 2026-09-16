@@ -5,5 +5,7 @@
 /fleet
 /logic_test
 /budget_test
+/entry_workload
+/entry_storm
 __pycache__/
 *.pyc

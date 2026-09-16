@@ -41,6 +41,13 @@ checking in addition to a successful cgroup.procs write. The isolated module
 provides two mutexes and per-open async ownership truth. Userspace futex tests
 are never presented as evidence for kernel spinlocks.
 
+entry_storm uses seven non-target containers contending on a bounded test-only
+kernel spinlock and one sleeping diagnostic target. The unchanged production
+entry-rate cutoff is exercised, including actual collector detachment and
+continued workload execution. A lower injected cutoff only tests the control
+path; it does not substitute for the production-rate stress. Neither test
+establishes low diagnostic overhead while the entry storm is active.
+
 CPU quota, same-CPU competitor and memory.high scenarios are separate from
 fixture tests. A configured pressure source is not sufficient: the relevant
 event and its cgroup/window must be present. Address reuse unit tests and live

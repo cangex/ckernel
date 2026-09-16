@@ -16,4 +16,6 @@ struct cis_fixture_async {
 #define CIS_FIXTURE_WAIT _IOWR('C',3,struct cis_fixture_async)
 #define CIS_FIXTURE_CANCEL _IOWR('C',4,struct cis_fixture_async)
 #define CIS_FIXTURE_RESET _IOWR('C',5,struct cis_fixture_request)
+struct cis_fixture_storm { __u32 iterations, reserved; };
+#define CIS_FIXTURE_STORM _IOW('C',6,struct cis_fixture_storm)
 #endif

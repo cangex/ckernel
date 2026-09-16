@@ -3,7 +3,7 @@ CC ?= cc
 CFLAGS ?= -O2 -g
 CFLAGS += -Wall -Wextra -Werror
 LDLIBS += -pthread
-TEST_GEN_PROGS := workload baseline identity fleet
+TEST_GEN_PROGS := workload baseline identity fleet entry_workload entry_storm
 TEST_GEN_PROGS_EXTENDED := logic_test budget_test
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
