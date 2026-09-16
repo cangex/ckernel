@@ -86,6 +86,10 @@ int main(int argc,char **argv)
 			close(ready[0]); snprintf(num,sizeof(num),"%d",getpid());
 			if(cis_write_text("/sys/fs/cgroup/cis-monitor/cgroup.procs",num)) _exit(119);
 			snprintf(num,sizeof(num),"%d",ready[1]); snprintf(out,sizeof(out),"/tmp/observer-%d.jsonl",getpid());
+			if(getenv("CIS_TEST_PROFILE_LOOP")) {
+				execl("/cisd","cisd","--mode",!strcmp(mode,"diag")?"ip":mode,"--socket","/run/cis-fleet.sock","--output",out,"--bpf","/cis.bpf.o","--ready-fd",num,"--profile-loop",NULL);
+				_exit(127);
+			}
 			execl("/cisd","cisd","--mode",!strcmp(mode,"diag")?"ip":mode,"--socket","/run/cis-fleet.sock","--output",out,"--bpf","/cis.bpf.o","--ready-fd",num,NULL); _exit(127);
 		}
 		close(ready[1]);

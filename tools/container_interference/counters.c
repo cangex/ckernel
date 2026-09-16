@@ -73,16 +73,20 @@ int cis_metrics_read(struct cis_root *r, struct cis_metric *m)
 	char b[4096];
 	memset(m, 0, sizeof(*m));
 	m->time_ns = cis_clock_ns();
+	if(read_value(r->metric_fd[5],b,sizeof(b)) || field(b,"populated",&m->populated)) return -EIO;
+	if (read_value(r->metric_fd[3], b, sizeof(b))) return -EIO;
+	errno = 0; m->memory_current = strtoull(b, NULL, 10); if (errno) return -EIO;
+	if (read_value(r->metric_fd[4], b, sizeof(b)) ||
+	    field(b, "high", &m->memory_high) || field(b, "oom", &m->memory_oom)) return -EIO;
+	/* Empty roots retain charged memory; only CPU/PSI freshness is deferred. */
+	if (!m->populated && r->full_metrics_ns &&
+	    m->time_ns-r->full_metrics_ns<5000000000ULL) return 1;
 	if (read_value(r->metric_fd[0], b, sizeof(b)) ||
 	    field(b, "usage_usec", &m->usage_us) ||
 	    field(b, "throttled_usec", &m->throttle_us)) return -EIO;
 	if (read_value(r->metric_fd[1], b, sizeof(b)) || psi(b, &m->cpu_wait_us)) return -EIO;
 	if (read_value(r->metric_fd[2], b, sizeof(b)) || psi(b, &m->memory_wait_us)) return -EIO;
-	if (read_value(r->metric_fd[3], b, sizeof(b))) return -EIO;
-	errno = 0; m->memory_current = strtoull(b, NULL, 10); if (errno) return -EIO;
-	if (read_value(r->metric_fd[4], b, sizeof(b)) ||
-	    field(b, "high", &m->memory_high) || field(b, "oom", &m->memory_oom)) return -EIO;
-	if(read_value(r->metric_fd[5],b,sizeof(b)) || field(b,"populated",&m->populated)) return -EIO;
+	r->full_metrics_ns=m->time_ns;
 	return 0;
 }
 

@@ -13,10 +13,18 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t quitting;
 static void stop_signal(int sig) { (void)sig; quitting = 1; }
+
+static uint64_t profile_cpu(void)
+{
+	struct timespec t;
+	if(clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&t)) return 0;
+	return (uint64_t)t.tv_sec*1000000000ULL+t.tv_nsec;
+}
 
 static int server(const char *path)
 {
@@ -109,6 +117,7 @@ int main(int argc, char **argv)
 	const char *socket_path = CIS_SOCKET, *object = "bpf/cis.bpf.o", *output = NULL;
 	int i, status = 1, ready_fd = -1;
 	uint64_t end = 0, next_control_ns = 0;
+	uint64_t profile_totals[4]={0}, profile_loops=0, profile_requests=0, profile_due=0;
 	if (!ctx || geteuid()) { fprintf(stderr, "root in host namespaces required\n"); return 1; }
 	umask(077);
 	ctx->warmup=5; ctx->max_diagnostics=2; ctx->cooldown_s=30; ctx->window_ms=2000;
@@ -124,6 +133,7 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[i], "--mode") && i+1 < argc) {
 			const char *m=argv[++i]; ctx->mode=!strcmp(m,"off")?0:!strcmp(m,"metrics")?1:!strcmp(m,"ip")?2:-1;
 		} else if (!strcmp(argv[i], "--seconds") && i+1 < argc) end=cis_clock_ns()+strtoul(argv[++i],NULL,10)*1000000000ULL;
+		else if (!strcmp(argv[i], "--profile-loop")) ctx->profile_loop=1;
 		else if (!strcmp(argv[i], "--ready-fd") && i+1 < argc) ready_fd=atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--entry-rate-limit") && i+1 < argc) {
 			char *endp;
@@ -160,12 +170,14 @@ int main(int argc, char **argv)
 		char budget[96];
 		snprintf(budget,sizeof(budget),"entry_rate_limit=%u ip_hz=%u",ctx->entry_rate_limit,ctx->ip_hz);
 		cis_report(ctx,"capture_policy",NULL,budget);
+		cis_report(ctx,"metric_policy",NULL,"populated_full_interval_ms=1000 empty_presence_memory_interval_ms=1000 empty_cpu_psi_interval_ms=5000 empty_samples_never_train_business_baseline=1");
 	}
 	if (ready_fd >= 0) { if (write(ready_fd,"R",1)!=1) goto out; close(ready_fd); }
 	while (!quitting && !ctx->stopping && (!end || cis_clock_ns()<end)) {
 		struct pollfd pfd={ctx->socket_fd,POLLIN,0};
 		uint64_t now=cis_clock_ns(),wake=now+(ctx->capture?100000000:1000000000);
 		int timeout;
+		uint64_t segment=0;
 		/* Backpressure only administrator requests, never business execution. */
 		if(now<next_control_ns) {
 			pfd.events=0;
@@ -180,6 +192,7 @@ int main(int argc, char **argv)
 		if(end && end<wake) wake=end;
 		timeout=wake<=now?0:(int)((wake-now+999999)/1000000);
 		if (poll(&pfd,1,timeout)>0 && (pfd.revents&POLLIN)) {
+			if(ctx->profile_loop) { segment=profile_cpu(); profile_requests++; }
 			next_control_ns=cis_clock_ns()+31250000;
 			int client=accept4(ctx->socket_fd,NULL,NULL,SOCK_CLOEXEC|SOCK_NONBLOCK);
 			if (client>=0) {
@@ -187,15 +200,19 @@ int main(int argc, char **argv)
 				if (poll(&cp,1,10)>0) request(ctx,client);
 				close(client);
 			}
+			if(ctx->profile_loop) profile_totals[0]+=profile_cpu()-segment;
 		}
 		now=cis_clock_ns();
+		if(ctx->profile_loop) { segment=profile_cpu(); profile_loops++; }
 		if (ctx->mode) for (i=0;i<CIS_MAX_ROOTS;i++) {
 			struct cis_root *r=&ctx->roots[i];
 			struct cis_metric m;
+			int metric_result;
 			if (!r->used || now<r->next_ns) continue;
 			r->next_ns=now+1000000000;
 			ctx->metrics_reads++;
-			if(cis_metrics_read(r,&m)) {
+			metric_result=cis_metrics_read(r,&m);
+			if(metric_result<0) {
 				char link[64],name[4096];
 				ssize_t n;
 				snprintf(link,sizeof(link),"/proc/self/fd/%d",r->fd);
@@ -207,11 +224,27 @@ int main(int argc, char **argv)
 				} else { ctx->errors++; cis_report(ctx,"metric_error",r,"missing/stale resource field, not zero"); }
 			} else {
 				if(cis_config_epoch(ctx,r,now)) { ctx->errors++; cis_report(ctx,"config_error",r,"configuration read failed, not silently frozen"); }
-				cis_baseline_update(ctx,r,&m);
+				if(!m.populated) cis_baseline_idle(ctx,r,&m,metric_result);
+				else cis_baseline_update(ctx,r,&m);
 			}
 		}
+		if(ctx->profile_loop) { uint64_t stamp=profile_cpu(); profile_totals[1]+=stamp-segment; segment=stamp; }
 		if (cis_capture_poll(ctx)<0) { cis_report(ctx,"capture_error",NULL,"stopping collectors"); cis_capture_stop(ctx); }
+		if(ctx->profile_loop) { uint64_t stamp=profile_cpu(); profile_totals[2]+=stamp-segment; segment=stamp; }
 		cis_diagnostics_tick(ctx,now); cis_budget_tick(ctx,now);
+		if(ctx->profile_loop) {
+			profile_totals[3]+=profile_cpu()-segment;
+			if(now>=profile_due) {
+				char detail[384];
+				snprintf(detail,sizeof(detail),"loops=%llu requests=%llu control_cpu_ns=%llu metrics_cpu_ns=%llu capture_cpu_ns=%llu state_budget_cpu_ns=%llu instrumentation_included=1 not_performance_acceptance=1",
+					(unsigned long long)profile_loops,(unsigned long long)profile_requests,
+					(unsigned long long)profile_totals[0],(unsigned long long)profile_totals[1],
+					(unsigned long long)profile_totals[2],(unsigned long long)profile_totals[3]);
+				cis_report(ctx,"cpu_profile",NULL,detail);
+				memset(profile_totals,0,sizeof(profile_totals)); profile_loops=profile_requests=0;
+				profile_due=now+1000000000ULL;
+			}
+		}
 	}
 	status=0;
 out:

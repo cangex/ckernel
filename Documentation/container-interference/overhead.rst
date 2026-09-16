@@ -5,7 +5,8 @@ Observer cost protocol
 Initial engineering limits
 ==========================
 
-* Approximately one resource update per second/root, staggered.
+* Populated roots: one full resource update per second, staggered. Empty roots:
+  presence and memory counters each second, full CPU/PSI every five seconds.
 * Nominal machine-wide 1000 kernel IP samples/second, split across CPUs, not
   multiplied by the number of containers. Fixed cycle period uses a 4 GHz
   engineering frequency bound; achieved rates must be measured, not assumed.
@@ -26,6 +27,16 @@ Tracepoint entry/filtering costs on non-target tasks count even if no records
 are emitted. Map/kernel-memory reserves are engineering estimates; validate
 with the observer cgroup charge, process RSS and system memory, especially for
 different page sizes. Output page cache and background work are not free.
+
+An unpopulated cgroup can retain charged memory and asynchronous work. Empty
+roots therefore retain memory.current/events polling and IP registration;
+they are not declared cost-free. Deferred CPU/PSI fields are omitted and their
+age is explicit in metric_idle. They do not train a business baseline. On the
+first one-second presence check that sees a task, full counters resume and a
+new warmup starts. A short-lived unsampled task wholly between presence checks
+may only appear in the next five-second cumulative refresh. This limitation
+is explicit, not a claim of continuous short-task coverage. No active-root
+sampling cadence or global IP budget is reduced by the idle policy.
 
 Modes and statistical gate
 ==========================

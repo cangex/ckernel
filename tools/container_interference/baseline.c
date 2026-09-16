@@ -8,6 +8,29 @@ const char *cis_state_name(enum cis_state s)
 	return (unsigned int)s < 5 ? names[s] : "INVALID";
 }
 
+void cis_baseline_idle(struct cis_context *ctx,struct cis_root *r,const struct cis_metric *m,int deferred)
+{
+	char detail[384];
+	int n;
+	if(r->state==CIS_DIAGNOSING) {
+		cis_capture_diagnostic(ctx,r,0); r->state=CIS_COOLDOWN;
+		r->last_diag_ns=cis_clock_ns(); if(ctx->diagnostic) ctx->diagnostic--;
+		cis_report(ctx,"diagnostic_stop",r,"container has no remaining tasks");
+	}
+	if(r->state!=CIS_COOLDOWN) r->state=CIS_WARMUP;
+	r->pending=0; r->samples=r->deviations=0; r->previous.time_ns=0;
+	r->ip_samples=r->lock_samples=r->reclaim_samples=0;
+	n=snprintf(detail,sizeof(detail),"populated=0 memory_bytes=%llu memory_high=%llu memory_oom=%llu cpu_psi_fresh=%d cpu_psi_age_ns=%llu empty_full_interval_ms=5000 no_business_baseline_update=1",
+		(unsigned long long)m->memory_current,(unsigned long long)m->memory_high,
+		(unsigned long long)m->memory_oom,!deferred,
+		(unsigned long long)(m->time_ns-r->full_metrics_ns));
+	if(!deferred && n>0 && (size_t)n<sizeof(detail))
+		snprintf(detail+n,sizeof(detail)-n," usage_us=%llu throttle_us=%llu cpu_wait_us=%llu memory_wait_us=%llu",
+			(unsigned long long)m->usage_us,(unsigned long long)m->throttle_us,
+			(unsigned long long)m->cpu_wait_us,(unsigned long long)m->memory_wait_us);
+	cis_report(ctx,"metric_idle",r,detail);
+}
+
 void cis_baseline_update(struct cis_context *ctx, struct cis_root *r, const struct cis_metric *m)
 {
 	double wait, usage;

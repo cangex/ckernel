@@ -30,6 +30,7 @@ struct cis_root {
 	uint64_t id, generation, epoch, next_ns, deadline_ns, last_diag_ns;
 	uint64_t requested_start_ns, diagnostic_start_ns;
 	uint64_t config_hash, config_due_ns, policy_epoch;
+	uint64_t full_metrics_ns;
 	dev_t dev;
 	char name[64], path[4096];
 	enum cis_state state;
@@ -47,6 +48,7 @@ struct cis_context {
 	unsigned int metrics_reads, errors, dropped, unknown;
 	uint64_t memory_limit, user_cpu_limit_ns, last_process_ns, last_budget_ns;
 	int mode, stopping, output_fd, socket_fd;
+	int profile_loop;
 	void *capture;
 	void *symbols;
 };
@@ -56,10 +58,12 @@ int cis_registry_remove(struct cis_context *, uint64_t, uint64_t);
 void cis_registry_destroy(struct cis_context *);
 struct cis_root *cis_registry_lookup(struct cis_context *, uint64_t, uint64_t);
 int cis_metrics_open(struct cis_root *);
+/* 0: full snapshot, 1: empty-root CPU/PSI deferred, negative: invalid sample. */
 int cis_metrics_read(struct cis_root *, struct cis_metric *);
 void cis_metrics_close(struct cis_root *);
 int cis_config_epoch(struct cis_context *, struct cis_root *, uint64_t);
 void cis_baseline_update(struct cis_context *, struct cis_root *, const struct cis_metric *);
+void cis_baseline_idle(struct cis_context *, struct cis_root *, const struct cis_metric *, int);
 void cis_diagnostics_tick(struct cis_context *, uint64_t);
 void cis_report(struct cis_context *, const char *, const struct cis_root *, const char *);
 const char *cis_state_name(enum cis_state);

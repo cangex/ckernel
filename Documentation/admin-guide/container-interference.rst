@@ -56,7 +56,9 @@ process name. Cgroup v1 is unsupported. The selftest runtime uses real Linux
 namespaces, cgroups and readonly rootfs, but is not a production OCI runtime.
 
 Modes are off, metrics and ip. Off retains only the control plane. Metrics reads
-PSI/resource files approximately once per second per root. IP adds fixed-period
+full PSI/resource files each second for populated roots. Empty roots retain
+one-second presence/memory checks and a five-second CPU/PSI refresh, with explicit
+freshness and no business-baseline training. IP adds fixed-period
 kernel-IP sampling, without permanent full stacks or syscall tracing. A bounded
 two-second diagnostic can select sched, lock, reclaim or work. Automatic windows
 are triggered by sustained anomalies; explicit windows use the same budget and
@@ -74,6 +76,11 @@ The optional --entry-rate-limit argument may lower, never raise, the default
 200000 entries/second budget. The chosen value is always reported. Tests using
 an injected low limit validate detachment, not performance under a real
 200000-entry/second storm. Production acceptance retains the default.
+
+--profile-loop is a development-only observer profiler, disabled by default.
+It reports control, metric, capture-management and state/budget CPU segments.
+The measurement includes its own instrumentation and is not performance
+acceptance. Fixed-rate business workload testing must leave it disabled.
 
 Stopping and failures
 ====================

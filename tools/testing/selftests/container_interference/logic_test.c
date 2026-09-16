@@ -50,6 +50,12 @@ int main(void)
 	now+=1000000000; m.time_ns=now; m.populated=0;
 	cis_baseline_update(c,r,&m);
 	CHECK("empty_root_detaches",r->state==CIS_COOLDOWN && c->diagnostic==0);
+	r->state=CIS_SUSPECT; r->pending=1; r->samples=9;
+	cis_baseline_idle(c,r,&m,1);
+	CHECK("idle_partial_does_not_train_or_trigger",r->state==CIS_WARMUP && !r->pending && !r->samples && !r->previous.time_ns);
+	r->state=CIS_DIAGNOSING; c->diagnostic=1;
+	cis_baseline_idle(c,r,&m,1);
+	CHECK("idle_partial_detaches_diagnostic",r->state==CIS_COOLDOWN && !c->diagnostic);
 	memset(c->roots,0,sizeof(c->roots)); c->queue_cursor=0;
 	for(i=0;i<256;i++) { c->roots[i].used=1; c->roots[i].pending=1; }
 	cis_diagnostics_tick(c,now); cis_diagnostics_tick(c,now); cis_diagnostics_tick(c,now);
