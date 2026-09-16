@@ -18,6 +18,7 @@
 #include "include/audit.h"
 #include "include/cred.h"
 #include "include/file.h"
+#include "include/ckernel_m.h"
 #include "include/match.h"
 #include "include/net.h"
 #include "include/path.h"
@@ -473,7 +474,11 @@ static void update_file_ctx(struct aa_file_ctx *fctx, struct aa_label *label,
 	if (l) {
 		if (l != old) {
 			rcu_assign_pointer(fctx->label, l);
+#ifdef CONFIG_CKERNEL_M_SECURITY
+			aa_ckm_file_drop(fctx, old);
+#else
 			aa_put_label(old);
+#endif
 		} else
 			aa_put_label(l);
 		fctx->allow |= request;

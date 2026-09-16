@@ -8,6 +8,8 @@ apparmor-y := apparmorfs.o audit.o capability.o task.o ipc.o lib.o match.o \
               resource.o secid.o file.o policy_ns.o label.o mount.o net.o \
               policy_compat.o
 apparmor-$(CONFIG_SECURITY_APPARMOR_HASH) += crypto.o
+apparmor-$(CONFIG_CKERNEL_M_SECURITY) += ckernel_m.o
+apparmor-$(CONFIG_CKERNEL_M_SECURITY_KUNIT_TEST) += ckernel_m_test.o
 
 obj-$(CONFIG_SECURITY_APPARMOR_KUNIT_TEST) += apparmor_policy_unpack_test.o
 apparmor_policy_unpack_test-objs += policy_unpack_test.o

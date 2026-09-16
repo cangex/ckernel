@@ -35,6 +35,20 @@ config CKERNEL_M_VFS_OPEN
 	  files on the registered tmpfs mount. All permission checks and file
 	  state remain native. Adds an ownership pointer to struct file.
 
+config CKERNEL_M_SECURITY
+	bool "CKernel-M bounded AppArmor label reference loans"
+	depends on CKERNEL_M && SECURITY_APPARMOR
+	default n
+	help
+	  Instance-local label references and native-equivalent unmediated self
+	  signal qualification. Native file decisions, audits and other LSMs
+	  remain active. Full caches and unsupported conditions use native paths.
+
+config CKERNEL_M_SECURITY_KUNIT_TEST
+	bool "CKernel-M AppArmor subject equivalence tests"
+	depends on KUNIT && CKERNEL_M_SECURITY
+	default n
+
 config CKERNEL_M_KUNIT_TEST
 	bool "CKernel-M core tests" if !KUNIT_ALL_TESTS
 	depends on KUNIT && CKERNEL_M=y

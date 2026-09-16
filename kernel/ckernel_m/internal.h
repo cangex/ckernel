@@ -6,6 +6,7 @@
 #include <linux/cpumask.h>
 #include <linux/ckernel_m.h>
 #include <linux/ckernel_m_vfs.h>
+#include <linux/ckernel_m_security.h>
 #include <linux/list.h>
 #include <linux/memcontrol.h>
 #include <linux/nodemask.h>
@@ -39,6 +40,9 @@ struct ckm_instance {
 	struct list_head records;
 #ifdef CONFIG_CKERNEL_M_VFS
 	struct ckm_vfs_state *vfs;
+#endif
+#ifdef CONFIG_CKERNEL_M_SECURITY
+	struct ckm_security_state *security;
 #endif
 };
 

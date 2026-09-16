@@ -26,6 +26,8 @@ static int create(void)
 		.features = CKM_FEATURE_VFS | CKM_FEATURE_VFS_OPEN };
 	int ctl = open("/dev/ckernel-m", O_RDWR | O_CLOEXEC), inst;
 
+	if (getenv("CKM_OPEN_SECURITY"))
+		r.features |= CKM_FEATURE_SECURITY;
 	if (ctl < 0)
 		return -1;
 	inst = ioctl(ctl, CKM_IOC_CREATE, &r);
@@ -270,6 +272,15 @@ static int one(const char *kind)
 	CHECK(umount(root) == -1 && errno == EBUSY);
 	CHECK(!close(fd));
 	CHECK(!query(inst, &q) && q.hits == q.released);
+	if (getenv("CKM_OPEN_SECURITY")) {
+		struct ckm_security_query security = { .version = CKM_ABI_VERSION,
+			.size = sizeof(security) };
+
+		CHECK(!ioctl(inst, CKM_IOC_SECURITY_QUERY, &security));
+		CHECK(security.label_hits > 0 && security.label_hits == security.label_released);
+		printf("CKM_OPEN_SECURITY case=%s hits=%llu released=%llu\n",
+		       kind, security.label_hits, security.label_released);
+	}
 	printf("CKM_OPEN_COUNTS case=%s hits=%llu released=%llu native=%llu\n", kind, q.hits, q.released, q.native);
 	CHECK(!close(inst) && !umount(root) && !rmdir(root));
 	return 0;

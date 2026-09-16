@@ -14,6 +14,7 @@
 #include <linux/spinlock.h>
 
 #include "domain.h"
+#include "ckernel_m.h"
 #include "match.h"
 #include "perms.h"
 
@@ -43,7 +44,17 @@ struct aa_file_ctx {
 	spinlock_t lock;
 	struct aa_label __rcu *label;
 	u32 allow;
+#ifdef CONFIG_CKERNEL_M_SECURITY
+	u32 ckm_token;
+#endif
 };
+
+#ifdef CONFIG_CKERNEL_M_SECURITY
+/* The ownership token must use existing tail padding, not grow every blob. */
+static_assert(sizeof(struct aa_file_ctx) ==
+	      ALIGN(offsetof(struct aa_file_ctx, allow) + sizeof(u32),
+		    __alignof__(struct aa_file_ctx)));
+#endif
 
 /**
  * aa_alloc_file_ctx - allocate file_ctx
@@ -72,7 +83,11 @@ static inline struct aa_file_ctx *aa_alloc_file_ctx(struct aa_label *label,
 static inline void aa_free_file_ctx(struct aa_file_ctx *ctx)
 {
 	if (ctx) {
+#ifdef CONFIG_CKERNEL_M_SECURITY
+		aa_ckm_file_drop(ctx, rcu_access_pointer(ctx->label));
+#else
 		aa_put_label(rcu_access_pointer(ctx->label));
+#endif
 		kfree_sensitive(ctx);
 	}
 }

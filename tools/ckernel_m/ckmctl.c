@@ -20,27 +20,38 @@ int main(int argc, char **argv)
 	int control, instance, status, attempt;
 	struct timespec start, finish;
 	pid_t child;
-	int open_vfs = argc > 1 && !strcmp(argv[1], "--vfs-open");
+	int security = argc > 1 && (!strcmp(argv[1], "--security") ||
+		!strcmp(argv[1], "--vfs-open-security"));
+	int open_vfs = argc > 1 && (!strcmp(argv[1], "--vfs-open") ||
+		!strcmp(argv[1], "--vfs-open-security"));
 	int vfs = open_vfs || (argc > 1 && !strcmp(argv[1], "--vfs"));
 	int program = vfs ? 4 : 2;
 	struct ckm_vfs_query vq;
 	struct ckm_vfs_open_query oq = {};
+	struct ckm_security_query sq = {};
 
 	if (argc <= program) {
 		fprintf(stderr, "usage: %s MAX_NODES PROGRAM [ARGS...] (0 = Core only)\n", argv[0]);
 		fprintf(stderr, "       %s --vfs READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
 		fprintf(stderr, "       %s --vfs-open READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
+		fprintf(stderr, "       %s --security PROGRAM [ARGS...]\n", argv[0]);
+		fprintf(stderr, "       %s --vfs-open-security READONLY_ROOT MAX_ENTRIES PROGRAM [ARGS...]\n", argv[0]);
 		return 2;
 	}
 	errno = 0;
-	n = strtoul(argv[vfs ? 3 : 1], &end, 10);
-	if (errno || end == argv[vfs ? 3 : 1] || *end ||
-	    n > (vfs ? CKM_VFS_MAX_ENTRIES : 4096) || (vfs && !n))
-		return 2;
+	n = 0;
+	if (!security || vfs) {
+		n = strtoul(argv[vfs ? 3 : 1], &end, 10);
+		if (errno || end == argv[vfs ? 3 : 1] || *end ||
+		    n > (vfs ? CKM_VFS_MAX_ENTRIES : 4096) || (vfs && !n))
+			return 2;
+	}
 	r.max_nodes = vfs ? 0 : n;
 	r.features = vfs ? CKM_FEATURE_VFS : n ? CKM_FEATURE_MAPLE : 0;
 	if (open_vfs)
 		r.features |= CKM_FEATURE_VFS_OPEN;
+	if (security)
+		r.features |= CKM_FEATURE_SECURITY;
 	control = open("/dev/ckernel-m", O_RDWR | O_CLOEXEC);
 	if (control < 0) {
 		perror("open control");
@@ -110,6 +121,16 @@ int main(int argc, char **argv)
 		}
 		printf("vfs_open_hits=%llu native=%llu released=%llu\n", oq.hits, oq.native, oq.released);
 	}
+	if (security) {
+		sq = (struct ckm_security_query){ .version = CKM_ABI_VERSION, .size = sizeof(sq) };
+		if (ioctl(instance, CKM_IOC_SECURITY_QUERY, &sq)) {
+			perror("security query"); close(instance); return 1;
+		}
+		printf("signal_hits=%llu signal_native=%llu label_loans=%llu label_native=%llu label_released=%llu open_borrowed=%llu learned=%llu full=%llu contended=%llu stale=%llu management_payload_bytes=%llu\n",
+		       sq.signal_hits, sq.signal_native, sq.label_hits, sq.label_native,
+		       sq.label_released, sq.open_borrowed, sq.label_learned, sq.full,
+		       sq.contended, sq.stale, sq.management_bytes);
+	}
 	if (ioctl(instance, CKM_IOC_REVOKE, 0UL)) {
 		perror("revoke");
 		close(instance);
@@ -134,8 +155,15 @@ int main(int argc, char **argv)
 				perror("VFS open drain query"); close(instance); return 1;
 			}
 		}
+		if (security) {
+			sq = (struct ckm_security_query){ .version = CKM_ABI_VERSION, .size = sizeof(sq) };
+			if (ioctl(instance, CKM_IOC_SECURITY_QUERY, &sq)) {
+				perror("security drain query"); close(instance); return 1;
+			}
+		}
 		if (!q.tasks && !q.mms && !q.nodes && (!vfs || (vq.stopped && !vq.cached)) &&
-		    (!open_vfs || oq.hits == oq.released))
+		    (!open_vfs || oq.hits == oq.released) &&
+		    (!security || (q.state >= CKM_DRAINING && sq.label_hits == sq.label_released)))
 			break;
 		usleep(10000);
 	}

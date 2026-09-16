@@ -8,6 +8,8 @@
 #define CKM_FEATURE_MAPLE 1U
 #define CKM_FEATURE_VFS 2U
 #define CKM_FEATURE_VFS_OPEN 4U
+#define CKM_FEATURE_SECURITY 8U
+#define CKM_SECURITY_MAX_LABELS 8U
 #define CKM_VFS_MAX_ENTRIES 16U
 #define CKM_ACTIVE 0U
 #define CKM_REVOKING 1U
@@ -59,6 +61,18 @@ struct ckm_create {
 	__u32 max_nodes;
 	__u32 reserved[4];
 };
+
+/* Capacity is fixed and independent of Maple's max_nodes. */
+struct ckm_security_query {
+	__u32 version, size;
+	__aligned_u64 signal_hits, signal_native;
+	__aligned_u64 label_hits, label_native, label_released, open_borrowed, label_learned;
+	__aligned_u64 full, contended, stale;
+	__aligned_u64 management_bytes;
+	__aligned_u64 reserved[4];
+};
+
+#define CKM_IOC_SECURITY_QUERY _IOWR('M', 0x48, struct ckm_security_query)
 
 struct ckm_query {
 	__u32 version;

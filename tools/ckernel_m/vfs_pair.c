@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -28,6 +29,8 @@
 static const char *mode, *scenario, *layout;
 static int round_no;
 static int open_workload;
+static int security_workload, signal_workload;
+static pid_t signal_pid, signal_tid;
 static char line_prefix[256];
 static int log_fd;
 static unsigned int log_region;
@@ -93,7 +96,7 @@ static void prefix(const char *type, const char *role)
 {
 	snprintf(line_prefix, sizeof(line_prefix), "CKM_VFS_PAIR type=%s round=%d mode=%s scenario=%s layout=%s role=%s operation=%s ",
 	       type, round_no, mode, scenario, layout, role,
-	       open_workload ? "open-fstat-close" : "statx");
+	       signal_workload ? "self-tgkill" : open_workload ? "open-fstat-close" : "statx");
 }
 
 static int cmp(const void *a, const void *b)
@@ -131,7 +134,9 @@ static void make_objects(const char *root)
 
 static void operation(const char *path)
 {
-	if (open_workload) {
+	if (signal_workload) {
+		CHECK(!syscall(SYS_tgkill, signal_pid, signal_tid, SIGUSR1));
+	} else if (open_workload) {
 		struct stat st;
 		int fd = open(path, O_RDONLY | O_CLOEXEC);
 
@@ -143,7 +148,17 @@ static void operation(const char *path)
 	}
 }
 
-static void worker(const char *role, int cpu, int ready, int go)
+static void profile_slot(unsigned int slot)
+{
+	char command[80];
+	int fd = open("/proc/self/attr/current", O_WRONLY), n;
+
+	CHECK(fd >= 0);
+	n = snprintf(command, sizeof(command), "changeprofile ckm_perf_slot%u", slot);
+	CHECK(write(fd, command, n) == n && !close(fd));
+}
+
+static void worker(const char *role, int cpu, int ready, int go, int inst)
 {
 	static uint64_t samples[MAX_SAMPLES];
 	static uint64_t response[MAX_SAMPLES];
@@ -155,6 +170,11 @@ static void worker(const char *role, int cpu, int ready, int go)
 	int target = !strcmp(role, "target");
 
 	affinity(cpu, -1);
+	if (signal_workload) {
+		signal(SIGUSR1, SIG_IGN);
+		signal_pid = getpid();
+		signal_tid = syscall(SYS_gettid);
+	}
 	memset(samples, 0, sizeof(samples));
 	memset(response, 0, sizeof(response));
 	for (count = 0; count < 32; count++)
@@ -162,8 +182,11 @@ static void worker(const char *role, int cpu, int ready, int go)
 	first = now();
 	operation(names[0]);
 	first = now() - first;
-	for (count = 0; count < 64; count++)
+	for (count = 0; count < 64; count++) {
+		if (security_workload && !strcmp(scenario, "exhaust"))
+			profile_slot(count % 12);
 		operation(names[count % files]);
+	}
 	CHECK(write(ready, "R", 1) == 1 && read(go, &ch, 1) == 1 && ch == 'G');
 	CHECK(!getrusage(RUSAGE_SELF, &before));
 	CHECK(!clock_gettime(CLOCK_MONOTONIC, &pace));
@@ -188,9 +211,15 @@ static void worker(const char *role, int cpu, int ready, int go)
 		if (target && !strcmp(scenario, "migration") && !(count % 128))
 			affinity(cpu + ((count / 128) & 1), -1);
 		if (target && !strcmp(scenario, "invalidate") && count == operations / 2) {
-			CHECK(!mount(NULL, object_root, NULL, MS_REMOUNT | MS_NOSUID | MS_NODEV, NULL));
-			CHECK(!mount(NULL, object_root, NULL, MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL));
+			if (security_workload) {
+				CHECK(inst >= 0 && !ioctl(inst, CKM_IOC_REVOKE, 0));
+			} else {
+				CHECK(!mount(NULL, object_root, NULL, MS_REMOUNT | MS_NOSUID | MS_NODEV, NULL));
+				CHECK(!mount(NULL, object_root, NULL, MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL));
+			}
 		}
+		if (security_workload && !strcmp(scenario, "exhaust"))
+			profile_slot(count % 12);
 		operation(names[count % files]);
 		end = now();
 		samples[count] = end - begin;
@@ -224,6 +253,22 @@ static void worker(const char *role, int cpu, int ready, int go)
 static void query(int fd, const char *role)
 {
 	struct ckm_vfs_query q = { .version = CKM_ABI_VERSION, .size = sizeof(q) };
+
+	if (security_workload) {
+		struct ckm_security_query s = { .version = CKM_ABI_VERSION, .size = sizeof(s) };
+
+		CHECK(!ioctl(fd, CKM_IOC_SECURITY_QUERY, &s));
+		CHECK(s.label_hits == s.label_released);
+		if (!strcmp(mode, "security")) {
+			CHECK(signal_workload ? s.signal_hits > 0 : s.label_hits > 0);
+			if (!strcmp(scenario, "exhaust")) CHECK(s.full > 0);
+		} else CHECK(!s.signal_hits && !s.label_hits);
+		prefix("security_inventory", role);
+		emit("signal_hits=%llu signal_native=%llu label_hits=%llu label_native=%llu label_released=%llu open_borrowed=%llu full=%llu contended=%llu stale=%llu management_bytes=%llu\n",
+		     s.signal_hits, s.signal_native, s.label_hits, s.label_native,
+		     s.label_released, s.open_borrowed, s.full, s.contended, s.stale, s.management_bytes);
+		return;
+	}
 	CHECK(!ioctl(fd, CKM_IOC_VFS_QUERY, &q));
 	if (!strcmp(mode, "vfs") && !open_workload)
 		CHECK(q.hits > 0);
@@ -257,14 +302,15 @@ static void supervise(const char *self, const char *role, const char *group,
 		snprintf(object_root, sizeof(object_root), "/tmp/ckm-vfs-private-%d", getpid());
 		make_objects(object_root);
 	}
-	if (!strcmp(mode, "core") || !strcmp(mode, "vfs")) {
+	if (!strcmp(mode, "core") || !strcmp(mode, "vfs") || !strcmp(mode, "security")) {
 		if (!strcmp(mode, "vfs"))
 			c.features = CKM_FEATURE_VFS | (open_workload ? CKM_FEATURE_VFS_OPEN : 0);
+		if (!strcmp(mode, "security")) c.features = CKM_FEATURE_SECURITY;
 		control = open("/dev/ckernel-m", O_RDWR);
 		CHECK(control >= 0);
 		fd = ioctl(control, CKM_IOC_CREATE, &c);
 		CHECK(fd >= 0 && !close(control));
-		if (c.features) {
+		if (c.features & CKM_FEATURE_VFS) {
 			struct ckm_vfs_root reg = { .version = CKM_ABI_VERSION,
 				.size = sizeof(reg), .capacity = 16 };
 			reg.fd = open(object_root, O_PATH);
@@ -278,7 +324,7 @@ static void supervise(const char *self, const char *role, const char *group,
 			CHECK(!ioctl(fd, CKM_IOC_BIND, 0UL));
 		log_region = !strcmp(role, "target") ? 2 : 4;
 		log_used = 0;
-		worker(role, cpu, ready, go);
+		worker(role, cpu, ready, go, fd);
 		_exit(0);
 	}
 	wait_ok(child);
@@ -441,10 +487,19 @@ int main(int argc, char **argv)
 	setvbuf(stdout, NULL, _IONBF, 0);
 	CHECK(getenv("CKM_ISOLATED_GUEST"));
 	open_workload = getenv("CKM_PAIR_OPEN") != NULL;
+	security_workload = getenv("CKM_PAIR_SECURITY") != NULL;
+	if (security_workload) {
+		CHECK(!strcmp(getenv("CKM_PAIR_SECURITY"), "file") ||
+		      !strcmp(getenv("CKM_PAIR_SECURITY"), "signal"));
+		signal_workload = !strcmp(getenv("CKM_PAIR_SECURITY"), "signal");
+		open_workload = !signal_workload;
+	}
 	mode = getenv("CKM_PAIR_MODE"); scenario = getenv("CKM_PAIR_SCENARIO");
 	layout = getenv("CKM_PAIR_LAYOUT");
 	CHECK(mode && scenario && layout && getenv("CKM_PAIR_ROUND"));
-	CHECK(!strcmp(mode, "native") || !strcmp(mode, "core") || !strcmp(mode, "private") || !strcmp(mode, "vfs"));
+	CHECK(!strcmp(mode, "native") || !strcmp(mode, "core") || !strcmp(mode, "private") ||
+	      !strcmp(mode, "vfs") || (security_workload && !strcmp(mode, "security")));
+	if (security_workload) CHECK(!strcmp(mode, "core") || !strcmp(mode, "security"));
 	CHECK(!strcmp(scenario, "steady") || !strcmp(scenario, "exhaust") ||
 	      !strcmp(scenario, "migration") || !strcmp(scenario, "invalidate"));
 	CHECK(!strcmp(layout, "target-only") || !strcmp(layout, "bystander-only") || !strcmp(layout, "pair"));

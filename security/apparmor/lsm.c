@@ -30,6 +30,7 @@
 #include "include/audit.h"
 #include "include/capability.h"
 #include "include/cred.h"
+#include "include/ckernel_m.h"
 #include "include/file.h"
 #include "include/ipc.h"
 #include "include/net.h"
@@ -453,6 +454,7 @@ static int apparmor_file_open(struct file *file)
 	struct aa_file_ctx *fctx = file_ctx(file);
 	struct aa_label *label;
 	int error = 0;
+	bool borrowed;
 
 	if (!path_mediated_fs(file->f_path.dentry))
 		return 0;
@@ -469,7 +471,9 @@ static int apparmor_file_open(struct file *file)
 		return 0;
 	}
 
-	label = aa_get_newest_cred_label(file->f_cred);
+	borrowed = aa_ckm_file_open_label(file, &label);
+	if (!borrowed)
+		label = aa_get_newest_cred_label(file->f_cred);
 	if (!unconfined(label)) {
 		struct mnt_idmap *idmap = file_mnt_idmap(file);
 		struct inode *inode = file_inode(file);
@@ -486,7 +490,8 @@ static int apparmor_file_open(struct file *file)
 		/* todo cache full allowed permissions set and state */
 		fctx->allow = aa_map_file_to_perms(file);
 	}
-	aa_put_label(label);
+	if (!borrowed)
+		aa_put_label(label);
 
 	return error;
 }
@@ -497,7 +502,11 @@ static int apparmor_file_alloc_security(struct file *file)
 	struct aa_label *label = begin_current_label_crit_section();
 
 	spin_lock_init(&ctx->lock);
+#ifdef CONFIG_CKERNEL_M_SECURITY
+	aa_ckm_file_init(ctx, label);
+#else
 	rcu_assign_pointer(ctx->label, aa_get_label(label));
+#endif
 	end_current_label_crit_section(label);
 	return 0;
 }
@@ -506,8 +515,13 @@ static void apparmor_file_free_security(struct file *file)
 {
 	struct aa_file_ctx *ctx = file_ctx(file);
 
-	if (ctx)
+	if (ctx) {
+#ifdef CONFIG_CKERNEL_M_SECURITY
+		aa_ckm_file_drop(ctx, rcu_access_pointer(ctx->label));
+#else
 		aa_put_label(rcu_access_pointer(ctx->label));
+#endif
+	}
 }
 
 static int common_file_perm(const char *op, struct file *file, u32 mask,
@@ -831,6 +845,9 @@ static int apparmor_task_kill(struct task_struct *target, struct kernel_siginfo 
 	const struct cred *tc;
 	struct aa_label *cl, *tl;
 	int error;
+
+	if (aa_ckm_self_signal(target, cred))
+		return 0;
 
 	tc = get_task_cred(target);
 	tl = aa_get_newest_cred_label(tc);
