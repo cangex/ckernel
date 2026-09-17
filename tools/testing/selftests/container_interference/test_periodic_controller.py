@@ -18,6 +18,18 @@ import session
 
 
 class ControllerTests(unittest.TestCase):
+    def test_identity_universe_is_not_target_set(self):
+        roots = {str(i): dict(fd=i+10, id=i+1, generation=9) for i in range(256)}
+        owner = session.worker_roots(roots, ['0'], 'owner')
+        self.assertEqual(len(owner), 256)
+        self.assertEqual(sum(r['session_target'] for r in owner.values()), 1)
+        self.assertFalse(owner['1']['session_target'])
+        self.assertNotIn('session_target', roots['1'])
+        self.assertEqual(list(session.worker_roots(roots, ['0'], 'ip')), ['0'])
+        for targets in ([], ['0']*2, ['0','1','2'], ['missing']):
+            with self.assertRaises(ValueError): session.worker_roots(roots, targets, 'owner')
+        self.assertNotIn('owner_identities', session.compact_record(dict(owner_identities=owner)))
+
     def test_schedule_validation(self):
         session.validate(dict(version=1, op='schedule_configure', plan={}))
         for offset in (-1, True, 257):

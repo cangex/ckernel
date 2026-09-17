@@ -25,6 +25,7 @@ struct cis_metric {
 };
 struct cis_root {
 	int used, fd, metric_fd[6], config_fd[4], ready, pending, manual_diagnostic;
+	int session_target;
 	int psi_fd[2];
 	uint64_t fast_alert_ns;
 	uint64_t fast_lock_start_ns;

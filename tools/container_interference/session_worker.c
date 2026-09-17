@@ -38,8 +38,8 @@ int main(int argc,char **argv)
 	const char *reason="COMPLETE";
 	uint64_t begin=cis_clock_ns(),prepared=0,start=0,end=0,stopped=0,cpu_begin=cpu_ns(),budget_cpu=0,budget_time=0;
 	uint64_t prepared_cpu=0,capture_cpu=0,stop_cpu=0;
-	int i,err=0,stop_error=0,capture_error=0,channel,window,parent=getppid();
-	if(!ctx || argc<9 || argc>10) return 2;
+	int i,targets=0,err=0,stop_error=0,capture_error=0,channel,window,parent=getppid();
+	if(!ctx || argc<9 || argc>8+CIS_MAX_ROOTS) return 2;
 	channel=atoi(argv[1]); ctx->output_fd=atoi(argv[2]);
 	ctx->session_id=strtoull(argv[3],NULL,10); window=atoi(argv[5]);
 	ctx->session_collector=!strcmp(argv[4],"ip")?1:!strcmp(argv[4],"owner")?2:0;
@@ -60,11 +60,16 @@ int main(int argc,char **argv)
 		}
 	}
 	for(i=8;i<argc;i++) {
-		unsigned long long id,gen; int fd,n=0; struct cis_root *r;
-		if(sscanf(argv[i],"%d:%llu:%llu%n",&fd,&id,&gen,&n)!=3 || argv[i][n] ||
-		   cis_registry_add(ctx,fd,"target",&r) || r->id!=id) { err=1; reason="IDENTITY"; goto drain; }
-		r->generation=gen; close(fd);
+		unsigned long long id,gen; int fd,n=0; char role; struct cis_root *r;
+		if(sscanf(argv[i],"%c:%d:%llu:%llu%n",&role,&fd,&id,&gen,&n)!=4 || argv[i][n] ||
+		   !id || !gen || (role!='t' && role!='i') ||
+		   (role=='i' && ctx->session_collector!=2) ||
+		   cis_registry_add(ctx,fd,role=='t'?"target":"identity-only",&r) || r->id!=id) {
+			err=1; reason="IDENTITY"; goto drain;
+		}
+		r->generation=gen; r->session_target=role=='t'; targets+=r->session_target; close(fd);
 	}
+	if(targets<1 || targets>2) { err=1; reason="TARGETS"; goto drain; }
 	if(cis_symbols_load(ctx)) { err=1; reason="SYMBOLS"; goto drain; }
 	if(cis_capture_prepare(ctx,argv[6])) { err=1; reason="PREPARE"; goto drain; }
 	if(cis_capture_inventory(ctx,inventory,sizeof(inventory))) { err=1; reason="INVENTORY"; goto drain; }
@@ -77,10 +82,15 @@ int main(int argc,char **argv)
 		reason="CANCELLED"; goto drain;
 	}
 	if(!strcmp(argv[7],"after_prepare")) { err=1; reason="INJECTED_PREPARE"; goto drain; }
-	start=cis_clock_ns()+100000000ULL; end=start+window*1000000ULL;
+	/* Load the bounded identity universe before the timed arm interval. The
+	 * controller pins these roots and disallows registration changes meanwhile. */
 	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
 		struct cis_root *r=&ctx->roots[i];
 		if(cis_capture_root(ctx,r,1)) { err=1; reason="ROOT_MAP"; goto drain; }
+	}
+	start=cis_clock_ns()+100000000ULL; end=start+window*1000000ULL;
+	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used && ctx->roots[i].session_target) {
+		struct cis_root *r=&ctx->roots[i];
 		if(ctx->session_collector==2) {
 			r->diagnostic_kind=16; r->requested_start_ns=start;
 			if(cis_capture_diagnostic(ctx,r,1)) { err=1; reason="OWNER_ATTACH"; goto drain; }

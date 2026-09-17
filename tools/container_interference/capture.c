@@ -607,6 +607,7 @@ void cis_capture_stop(struct cis_context *ctx)
 	/* Keep immutable identities and watches until buffered records are interpreted. */
 	if(ctx->session_id && ctx->session_collector!=1 && c->object) for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
 		struct cis_root *r=&ctx->roots[i];
+		if(!r->session_target) continue;
 		if(ctx->session_collector!=2) { unfinished(c,r); unfinished_work(c,r); }
 		export_stacks(c,r); clear_watches(c,r);
 		bpf_map_delete_elem(c->targets,&r->id);

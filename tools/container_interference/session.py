@@ -55,7 +55,19 @@ def encoded(value):
 
 def compact_record(record):
     return {key: value for key, value in record.items()
-            if key not in ('boundary_before', 'boundary_after', 'survey', 'source_identity')}
+            if key not in ('boundary_before', 'boundary_after', 'survey', 'source_identity', 'owner_identities')}
+
+
+def worker_roots(registry, targets, collector):
+    """Identity-only roots never acquire a target deadline or active probes."""
+    if collector not in ('owner', 'ip') or not 1 <= len(targets) <= 2 or len(set(targets)) != len(targets):
+        raise ValueError('invalid collector or target set')
+    if len(registry) > MAX_ROOTS or any(key not in registry for key in targets):
+        raise ValueError('invalid identity registry')
+    keys = list(targets)
+    if collector == 'owner':
+        keys += sorted(set(registry) - set(targets))
+    return {key: dict(registry[key], session_target=key in targets) for key in keys}
 
 
 def host_admin(pid=None):
@@ -386,7 +398,8 @@ class Controller:
         self.storage_admit()
         if len(self.history) >= MAX_HISTORY:
             raise OSError(errno.ENOSPC, 'controller history full; restart when safely IDLE')
-        roots = [self.roots[key] for key in request['targets']]
+        identities = worker_roots(self.roots, request['targets'], request['collector'])
+        roots = list(identities.values())
         for root in roots:
             if os.readlink('/proc/self/fd/%d' % root['fd']) != root['path']:
                 raise ValueError('target deleted or renamed')
@@ -407,10 +420,14 @@ class Controller:
                       survey_epoch=self.survey_epoch, scheduled=planned,
                       root_identities={key: {field: self.roots[key][field] for field in ('id', 'generation')}
                                        for key in request['targets']},
+                      owner_identities={key: {field: root[field] for field in ('id', 'generation', 'session_target')}
+                                        for key, root in identities.items()} if request['collector'] == 'owner' else {},
+                      identity_count=len(identities), identity_protocol=2,
                       source_identity={key: self.manifest[key] for key in ('controller_sha256', 'worker_sha256',
                                        'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256')},
                       transitions=[{'state': 'ADMIT', 'time_ns': now()}, {'state': 'PREPARE', 'time_ns': now()}])
-        record['config_hash'] = hashlib.sha256(encoded({'request': request, 'manifest': self.manifest})).hexdigest()
+        record['config_hash'] = hashlib.sha256(encoded({'request': request, 'manifest': self.manifest,
+                                                       'identities': record['owner_identities']})).hexdigest()
         self.history[sid] = record
         # No worker exists during file I/O. Retain the host admission slot so a
         # cancellation or slow disk cannot race a second start or target removal.
@@ -466,7 +483,8 @@ class Controller:
                        str(record['window_ms']), self.args.bpf,
                        request.get('inject', 'none') if request.get('inject', '').startswith(('fd_limit_', 'fail_')) or
                        request.get('inject') == 'after_prepare' else 'none']
-            command += ['%d:%d:%d' % (root['fd'], root['id'], root['generation']) for root in roots]
+            command += ['%s:%d:%d:%d' % ('t' if root['session_target'] else 'i', root['fd'],
+                                       root['id'], root['generation']) for root in roots]
             child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots]),
                                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors)
         except BaseException:
