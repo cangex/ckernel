@@ -9,6 +9,7 @@ import signal
 import socket
 import subprocess
 import time
+from session_quality import assess
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--stress', type=int, default=100)
@@ -18,6 +19,7 @@ parser.add_argument('--resource-faults', action='store_true')
 parser.add_argument('--stage-faults', action='store_true')
 parser.add_argument('--fixture-rounds', type=int, default=1)
 parser.add_argument('--diagnose-recursion', action='store_true')
+parser.add_argument('--timeline-probe', action='store_true')
 args = parser.parse_args()
 if not 1 <= args.fixture_rounds <= 20:
     raise SystemExit('fixture-rounds must be frozen in [1,20]')
@@ -81,11 +83,14 @@ time.sleep(2)
 after_ticks=Path('/proc/%d/stat' % daemon.pid).read_text().rsplit(')',1)[1].split()[11:13]
 print('CIS_PROFILE_IDLE_CPU '+json.dumps({'before':before_ticks,'after':after_ticks,'seconds':2}),flush=True)
 
-def launch(label, mode, start, seconds=2, scenario=None):
+def launch(label, mode, start, seconds=2, scenario=None, timeline=False):
     children=[]
     for i in range(2):
         log=(OUT/('%s-%d.log' % (label,i))).open('w')
         command=['/session_launch',str(ROOT/('root%d'%i)),str(i*2),'/workload',mode,str(seconds),str(start)]
+        if timeline:
+            assert mode=='open-loop' and scenario is None
+            command += ['2000','timeline']
         if scenario is not None:
             command=['/session_launch',str(ROOT/('root%d'%i)),str(0 if scenario=='preempt' else i*2),
                      '/workload','fixture',str(i if scenario=='private' else 0),str(start),scenario]
@@ -105,9 +110,10 @@ def begin(collector, nonce, target_count=2, **extra):
 
 def require_complete(record):
     # A cleaned-up partial capture may not stop independent tests or become PASS.
-    if record.get('result') != 'COMPLETE':
+    quality = assess(record)
+    if quality['status'] != 'PASS':
         quality_failures.append(dict(nonce=record.get('nonce'), result=record.get('result'),
-                                     receipt=record.get('receipt')))
+                                     receipt=record.get('receipt'), quality=quality))
     if args.diagnose_recursion:
         # Read only at session boundaries, never in the performance workload.
         snapshot = Path('/sys/kernel/debug/cis_recursion').read_text()
@@ -219,6 +225,28 @@ for kind in ('ip','owner'):
         assert record['inventory']['ip_perf_cpus']==0 if kind=='owner' else record['inventory']['ip_perf_cpus']>0
         if i%10==0: print('CIS_PROFILE_STRESS '+json.dumps({'collector':kind,'iteration':i,'result':record['result']}),flush=True)
 assert len(list(Path('/proc/%d/fd' % daemon.pid).iterdir()))==before_fds
+
+if args.timeline_probe:
+    # A fixed diagnostic pilot, not an extra round selected to improve a CI.
+    for mode in ('off','idle','ip','owner'):
+        label='timeline-'+mode
+        if mode=='off':
+            request('stop');assert daemon.wait(timeout=10)==0
+        sid=None
+        if mode in ('ip','owner'):
+            sid=begin(mode,label.replace('-',''),target_count=1)['session_id'];start=window(sid)
+        else:
+            start=time.monotonic_ns()+100_000_000
+        children=launch(label,'open-loop',start,timeline=True)
+        join(children)
+        if sid: require_complete(finished(sid))
+        if mode=='off':
+            daemon=subprocess.Popen(DAEMON,stdout=daemon_log,stderr=daemon_log)
+            for _ in range(500):
+                if Path(SOCK).exists():break
+                time.sleep(.01)
+            targets=[request('register',path=str(ROOT/('root%d'%i)))['target'] for i in range(2)]
+        print('CIS_PROFILE_TIMELINE '+label+' diagnostic_only=1',flush=True)
 
 if args.cost:
     # Predeclared five pairs, opposite orders. Separate closed/open loop workloads.
