@@ -11,11 +11,51 @@
 #include <linux/moduleparam.h>
 #include <linux/seq_file.h>
 #include <linux/user_namespace.h>
+#include <linux/bitmap.h>
+#include <linux/hash.h>
 #define CREATE_TRACE_POINTS
 #include <linux/cis_observe.h>
 
 static DEFINE_PER_CPU(bool, cis_in_trace);
 static DEFINE_PER_CPU(unsigned long, cis_skipped);
+static DEFINE_PER_CPU(unsigned long, cis_gate_filtered);
+
+/* Monotone one-bit membership: collisions only admit extra events. No deletes
+ * while any probe is registered; another container's holder is never filtered
+ * by its identity. BPF owner watches are created only by WAIT events. */
+#define CIS_GATE_BITS 16
+static DECLARE_BITMAP(cis_waited, 1U << CIS_GATE_BITS);
+static bool wait_gate;
+module_param(wait_gate, bool, 0400);
+MODULE_PARM_DESC(wait_gate, "Admit WAIT and all subsequent events for possibly waited objects");
+
+int cis_observe_register(void)
+{
+	/* tracepoints_mutex serializes first-probe registration before enable.
+	 * An old in-flight callback may only add false positives after this clear;
+	 * tracepoint core synchronizes that generation before publishing new probes. */
+	bitmap_zero(cis_waited, 1U << CIS_GATE_BITS);
+	return 0;
+}
+
+void cis_observe_unregister(void)
+{
+	/* Do not clear while last-generation readers may still be returning. */
+}
+
+static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
+{
+	unsigned int bit = hash_long(((unsigned long)object >> 3) ^ kind, CIS_GATE_BITS);
+
+	if (phase == CIS_WAIT) {
+		if (!test_bit(bit, cis_waited)) {
+			set_bit(bit, cis_waited);
+			smp_mb__after_atomic();
+		}
+		return true;
+	}
+	return test_bit(bit, cis_waited);
+}
 
 #define CIS_DIAG_SAMPLES 8
 #define CIS_DIAG_PHASES 13
@@ -64,12 +104,14 @@ static int cis_diag_show(struct seq_file *m, void *unused)
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-	seq_printf(m, "version=1 enabled=%u trace_active=%u bytes_per_possible_cpu=%zu snapshot=non_atomic\n",
-		   diag, trace_cis_lock_state_enabled(), sizeof(struct cis_recursion_diag));
+	seq_printf(m, "version=2 enabled=%u trace_active=%u bytes_per_possible_cpu=%zu snapshot=non_atomic wait_gate=%u gate_bytes=%zu\n",
+		   diag, trace_cis_lock_state_enabled(), sizeof(struct cis_recursion_diag),
+		   wait_gate, sizeof(cis_waited));
 	for_each_possible_cpu(cpu) {
 		struct cis_recursion_diag *d = per_cpu_ptr(&cis_recursion_diag, cpu);
-		seq_printf(m, "cpu=%d skipped=%lu sync=%lu irq=%lu\n", cpu,
-			   per_cpu(cis_skipped, cpu), READ_ONCE(d->sync_skipped), READ_ONCE(d->irq_skipped));
+		seq_printf(m, "cpu=%d skipped=%lu sync=%lu irq=%lu filtered=%lu\n", cpu,
+			   per_cpu(cis_skipped, cpu), READ_ONCE(d->sync_skipped), READ_ONCE(d->irq_skipped),
+			   per_cpu(cis_gate_filtered, cpu));
 		for (kind = 0; kind < 3; kind++)
 			for (phase = 0; phase < CIS_DIAG_PHASES; phase++)
 				if (READ_ONCE(d->by_phase[kind][phase]))
@@ -98,6 +140,11 @@ void __cis_lock_event(void *object, unsigned int kind, unsigned int phase,
 		struct task_struct *owner, unsigned long flags)
 {
 	preempt_disable();
+	if (wait_gate && !cis_gate_allows(object, kind, phase)) {
+		this_cpu_inc(cis_gate_filtered);
+		preempt_enable();
+		return;
+	}
 	if (this_cpu_read(cis_in_trace)) {
 		this_cpu_inc(cis_skipped);
 		if (diag)

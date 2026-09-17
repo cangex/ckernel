@@ -17,7 +17,7 @@ def snapshot(text):
     if not lines:
         raise ValueError('empty snapshot')
     header = fields(lines[0])
-    if any(header.get(k) != v for k, v in dict(version='1', enabled='1', trace_active='0', snapshot='non_atomic').items()):
+    if header.get('version') not in ('1','2') or any(header.get(k) != v for k, v in dict(enabled='1', trace_active='0', snapshot='non_atomic').items()):
         raise ValueError('diagnosis must be enabled and producers quiescent')
     cpus, phases, samples = {}, [], []
     for line in lines[1:]:
@@ -26,6 +26,8 @@ def snapshot(text):
         value = fields(line)
         if line.startswith('cpu='):
             row = {key: int(value[key]) for key in ('cpu', 'skipped', 'sync', 'irq')}
+            if header['version']=='2':
+                row['filtered'] = int(value['filtered'])
             if min(row.values()) < 0 or row['cpu'] in cpus or row['skipped'] != row['sync'] + row['irq']:
                 raise ValueError('invalid CPU counters')
             cpus[row['cpu']] = row
@@ -54,6 +56,8 @@ def snapshot(text):
                 skipped=sum(r['skipped'] for r in cpus.values()),
                 synchronous=sum(r['sync'] for r in cpus.values()),
                 interrupt=sum(r['irq'] for r in cpus.values()),
+                gate_enabled=header.get('wait_gate')=='1',
+                gate_filtered=sum(r.get('filtered',0) for r in cpus.values()),
                 bytes_per_possible_cpu=int(header['bytes_per_possible_cpu']))
 
 

@@ -10,6 +10,7 @@ import socket
 import subprocess
 import time
 from session_quality import assess
+import owner_report
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--stress', type=int, default=100)
@@ -199,6 +200,21 @@ for kind in ('ip','owner'):
     duplicate=begin(kind,'functional'+kind)
     assert duplicate['session_id']==sid
     request('cancel',session=sid)
+
+# Only the waiter root is a target. Registered non-target holders must remain
+# visible after the waiter has created a watch, including with a kernel gate.
+sid=begin('owner','nonTargetHolder',target_count=1)['session_id']
+children=launch('non-target-holder','fixture',window(sid),scenario='shared')
+join(children)
+record=finished(sid)
+require_complete(record)
+events=[json.loads(line) for line in (OUT/'records'/(sid+'.jsonl')).read_text().splitlines() if line.startswith('{')]
+relations=owner_report.analyze(events)
+waiter=tuple(map(int,targets[0].split(':')))
+holder=tuple(map(int,targets[1].split(':')))
+matched=[e for e in relations['edges'] if tuple(e['waiter'][:2])==waiter and tuple(e['holder'][:2])==holder]
+assert matched, 'registered non-target holder relation was lost'
+print('CIS_PROFILE_NON_TARGET_HOLDER '+json.dumps(dict(edges=len(matched),scope='E2 association, not E3 cause')),flush=True)
 
 for repetition in range(args.fixture_rounds):
     for scenario in ('private','reuse','preempt'):

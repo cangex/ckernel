@@ -19,6 +19,14 @@ class RecursionReport(unittest.TestCase):
         self.assertEqual(value['skipped'], 2)
         self.assertEqual(value['samples'][0]['caller'], 0xdef0)
 
+    def test_gate_counts_do_not_replace_skipped_counts(self):
+        value = snapshot(self.raw().replace('version=1', 'version=2').replace(
+            'snapshot=non_atomic', 'snapshot=non_atomic wait_gate=1 gate_bytes=8192').replace(
+            'sync=1 irq=1', 'sync=1 irq=1 filtered=10000'))
+        self.assertTrue(value['gate_enabled'])
+        self.assertEqual(value['skipped'], 2)
+        self.assertEqual(value['gate_filtered'], 10000)
+
     def test_running_and_disabled_rejected(self):
         for old, new in [('trace_active=0', 'trace_active=1'), ('enabled=1', 'enabled=0')]:
             with self.assertRaises(ValueError):

@@ -5,7 +5,9 @@
 #define _TRACE_CIS_H
 #include <linux/tracepoint.h>
 struct task_struct;
-TRACE_EVENT(cis_lock_state,
+int cis_observe_register(void);
+void cis_observe_unregister(void);
+TRACE_EVENT_FN(cis_lock_state,
 	TP_PROTO(void *object, unsigned int kind, unsigned int phase,
 		 struct task_struct *owner, unsigned long flags, unsigned long skipped),
 	TP_ARGS(object, kind, phase, owner, flags, skipped),
@@ -23,7 +25,8 @@ TRACE_EVENT(cis_lock_state,
 	),
 	TP_printk("object=%p kind=%u phase=%u owner=%p flags=%lu skipped=%lu",
 		__entry->object, __entry->kind, __entry->phase, __entry->owner,
-		__entry->flags, __entry->skipped)
+		__entry->flags, __entry->skipped),
+	cis_observe_register, cis_observe_unregister
 );
 #endif
 #include <trace/define_trace.h>
