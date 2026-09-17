@@ -56,6 +56,9 @@ struct cis_context {
 	int fast_alert, psi_epoll;
 	int identity_only, session_collector, output_error;
 	uint64_t session_id, output_bytes, output_limit;
+	uint64_t terminal_received, terminal_emitted, terminal_rejected;
+	uint64_t terminal_lost, terminal_owner_skipped;
+	int terminal_valid;
 	void *capture;
 	void *symbols;
 };

@@ -605,6 +605,10 @@ void cis_capture_stop(struct cis_context *ctx)
 			for(i=0;i<c->possible_cpus;i++) {received+=c->cpu_stats[i].received;emitted+=c->cpu_stats[i].emitted;rejected+=c->cpu_stats[i].rejected;}
 			snprintf(detail,sizeof(detail),"received=%llu emitted=%llu rejected=%llu",(unsigned long long)received,(unsigned long long)emitted,(unsigned long long)rejected);
 			cis_report(ctx,"terminal_counters",NULL,detail);
+			ctx->terminal_valid=1;
+			ctx->terminal_received=received; ctx->terminal_emitted=emitted;
+			ctx->terminal_rejected=rejected; ctx->terminal_lost=lost_count;
+			ctx->terminal_owner_skipped=skipped;
 			if(ctx->session_id && (lost_count || skipped || rejected)) ctx->errors++;
 		}
 		else if(ctx->session_id) ctx->errors++;

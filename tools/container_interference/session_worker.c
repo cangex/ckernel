@@ -118,13 +118,16 @@ drain:
 	if(err && !strcmp(reason,"COMPLETE")) reason="QUALITY";
 	if(close(ctx->output_fd)) { err=1; reason="OUTPUT_CLOSE"; }
 	getrusage(RUSAGE_SELF,&usage);
-	snprintf(packet,sizeof(packet),"{\"state\":\"VERIFY\",\"result\":\"%s\",\"reason\":\"%s\",\"begin_ns\":%llu,\"prepared_ns\":%llu,\"start_ns\":%llu,\"end_ns\":%llu,\"producers_stopped_ns\":%llu,\"destroyed_ns\":%llu,\"cpu_ns\":%llu,\"maxrss_kib\":%ld,\"errors\":%u,\"dropped\":%u,\"output_error\":%d,\"bytes\":%llu,\"stop_error\":%d,\"capture_error\":%d,\"prepare_cpu_ns\":%llu,\"armed_capture_cpu_ns\":%llu,\"drain_cpu_ns\":%llu}",
+	snprintf(packet,sizeof(packet),"{\"state\":\"VERIFY\",\"result\":\"%s\",\"reason\":\"%s\",\"begin_ns\":%llu,\"prepared_ns\":%llu,\"start_ns\":%llu,\"end_ns\":%llu,\"producers_stopped_ns\":%llu,\"destroyed_ns\":%llu,\"cpu_ns\":%llu,\"maxrss_kib\":%ld,\"errors\":%u,\"dropped\":%u,\"output_error\":%d,\"bytes\":%llu,\"stop_error\":%d,\"capture_error\":%d,\"prepare_cpu_ns\":%llu,\"armed_capture_cpu_ns\":%llu,\"drain_cpu_ns\":%llu,\"terminal\":{\"valid\":%s,\"received\":%llu,\"emitted\":%llu,\"rejected\":%llu,\"lost\":%llu,\"owner_skipped\":%llu}}",
 		!strcmp(reason,"CANCELLED")?"CANCELLED":err?"PARTIAL":"COMPLETE",reason,
 		(unsigned long long)begin,(unsigned long long)prepared,(unsigned long long)start,(unsigned long long)end,
 		(unsigned long long)stopped,(unsigned long long)cis_clock_ns(),(unsigned long long)(cpu_ns()-cpu_begin),
 		usage.ru_maxrss,ctx->errors,ctx->dropped,ctx->output_error,(unsigned long long)ctx->output_bytes,stop_error,capture_error,
 		(unsigned long long)(prepared_cpu?prepared_cpu-cpu_begin:0),
-		(unsigned long long)(capture_cpu?stop_cpu-capture_cpu:0),(unsigned long long)(cpu_ns()-stop_cpu));
+		(unsigned long long)(capture_cpu?stop_cpu-capture_cpu:0),(unsigned long long)(cpu_ns()-stop_cpu),
+		ctx->terminal_valid?"true":"false",(unsigned long long)ctx->terminal_received,
+		(unsigned long long)ctx->terminal_emitted,(unsigned long long)ctx->terminal_rejected,
+		(unsigned long long)ctx->terminal_lost,(unsigned long long)ctx->terminal_owner_skipped);
 	notify(channel,packet); close(channel); free(ctx);
 	return stop_error?4:err?1:0;
 }

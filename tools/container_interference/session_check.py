@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import statistics
 import owner_report
+from session_quality import assess
 
 
 def extract(text):
@@ -37,12 +38,11 @@ def capture_quality(records, workload, mode):
         if len(matches) != 1:
             return dict(status='BLOCKED', reason='missing or duplicate capture record', nonce=nonce)
         record = matches[0]
-        receipt = record.get('receipt') or {}
-        complete = (record.get('result') == 'COMPLETE' and record.get('objects_absent') is True
-                    and receipt.get('result') == 'COMPLETE' and not record.get('budget_reason')
-                    and all(receipt.get(key) == 0 for key in ('stop_error', 'dropped', 'errors', 'output_error')))
-        result.append(dict(nonce=nonce, complete=complete, reason=receipt.get('reason')))
-    return dict(status='PASS' if all(item['complete'] for item in result) else 'FAIL', windows=result)
+        quality = assess(record)
+        result.append(dict(nonce=nonce, complete=quality['status']=='PASS', quality=quality))
+    status = ('FAIL' if any(item['quality']['status']=='FAIL' for item in result) else
+              'BLOCKED' if any(item['quality']['status']=='BLOCKED' for item in result) else 'PASS')
+    return dict(status=status, windows=result)
 
 
 def analyze(text):
@@ -57,9 +57,9 @@ def analyze(text):
     repeat={kind:[r for r in records.values() if r['nonce'].startswith('repeat'+kind)] for kind in ('ip','owner')}
     summary={'version':1,'sessions':len(records),'repeat':{},'owner':{},'cost':[],
              'stage_status':'BLOCKED','phase_complete':False}
+    summary['session_quality'] = {sid: assess(record) for sid, record in records.items()}
     for kind,values in repeat.items():
-        passed=len(values)==100 and all(r.get('objects_absent') and r['state']=='IDLE' and r.get('result')=='COMPLETE' and
-            r.get('receipt',{}).get('stop_error')==0 for r in values)
+        passed=len(values)==100 and all(r['state']=='IDLE' and assess(r)['status']=='PASS' for r in values)
         summary['repeat'][kind]={'count':len(values),'status':'PASS' if passed else 'BLOCKED',
             'independent_collector':all((r['inventory']['ip_perf_cpus']==0)==(kind=='owner') for r in values)}
     for nonce in ('functionalowner','fixtureprivate','fixturereuse','fixturepreempt'):

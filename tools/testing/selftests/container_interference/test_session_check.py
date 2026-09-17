@@ -36,7 +36,8 @@ class EvidenceChecks(unittest.TestCase):
 
     def test_incomplete_cost_windows_do_not_receive_performance_pass(self):
         records = {str(i):dict(nonce='costthroughput%downer'%i, result='COMPLETE', objects_absent=True,
-                       receipt=dict(result='COMPLETE', stop_error=0, dropped=0, errors=0, output_error=0)) for i in range(5)}
+                       receipt=dict(result='COMPLETE', stop_error=0, capture_error=0, dropped=0, errors=0, output_error=0,
+                                    terminal=dict(valid=True, received=3, emitted=2, rejected=0, lost=0, owner_skipped=0))) for i in range(5)}
         self.assertEqual(session_check.capture_quality(records, 'throughput', 'owner')['status'], 'PASS')
         records['2']['result'] = 'PARTIAL'
         records['2']['receipt']['reason'] = 'ENTRY_RATE_LIMIT'

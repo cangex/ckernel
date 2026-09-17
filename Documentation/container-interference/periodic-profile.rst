@@ -129,13 +129,19 @@ Enable is a separate request::
   {"version":1,"op":"survey_epoch"}
 
 Enabling requires ``--p1-acceptance FILE``. The private root-owned receipt uses
-schema ``cis-p1-admission-v1``, has ``phase_complete=true``, matches the running
+schema ``cis-p1-admission-v2``, has ``phase_complete=true``, matches the running
 controller/worker/BPF/support-module hashes and kernel notes/release, and has
 PASS for every key in ``periodic_plan.P1_CHECKS``. It must reference the raw
 evidence index SHA256. This is a trusted administrator admission assertion,
 not a replacement for auditing the actual evidence. Never create an all-PASS
 receipt to get around failed or absent measurements. Old P1 blocked reports do
 not qualify. There is no test flag to bypass this runtime gate.
+
+Version 2 adds explicit IP/owner capture-quality, owner truth, window-throughput
+and predeclared window-latency-contract checks. Version 1 receipts are not
+upgraded automatically. Terminal counters are now in each worker receipt;
+missing old counters mean unverified evidence, not zero losses. The quality
+checker reports budget stops separately from safe cleanup and complete capture.
 
 At each due slot the least-recently-attempted root gets priority. Every fourth
 slot may revisit a candidate using the second position. Missed slots are skipped,

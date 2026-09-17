@@ -11,6 +11,8 @@ P1_CHECKS = (
     'identity_runtime', 'lifecycle_runtime', 'resource_failure_runtime',
     'storage_backpressure_runtime', 'combined_cpu_enforcement_runtime',
     'kernel_background_cost', 'total_memory_cost', 'idle_throughput', 'idle_p99',
+    'ip_capture_quality', 'owner_capture_quality', 'owner_truth_runtime',
+    'ip_window_throughput', 'owner_window_throughput', 'window_latency_contract',
 )
 DEFAULTS = dict(interval_s=60, window_ms=2000, targets_per_session=2,
                 jitter_ms=1000, seed=1, min_samples=32,
@@ -59,7 +61,7 @@ def capacity(plan, count):
 
 
 def require_acceptance(evidence, manifest):
-    if not isinstance(evidence, dict) or evidence.get('schema') != 'cis-p1-admission-v1':
+    if not isinstance(evidence, dict) or evidence.get('schema') != 'cis-p1-admission-v2':
         raise ValueError('P1 acceptance receipt required')
     if evidence.get('phase_complete') is not True:
         raise ValueError('P1 has not passed')

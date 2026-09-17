@@ -43,7 +43,7 @@ class PlanTests(unittest.TestCase):
     def test_admission_does_not_accept_implementation(self):
         manifest = dict(controller_sha256='a', worker_sha256='b', bpf_sha256='c',
                         support_sha256='d', kernel_release='e', kernel_notes_sha256='f', residue_sha256='g')
-        value = dict(schema='cis-p1-admission-v1', source=manifest, phase_complete=True,
+        value = dict(schema='cis-p1-admission-v2', source=manifest, phase_complete=True,
                      checks={key: 'PASS' for key in P1_CHECKS}, evidence_index_sha256='0'*64)
         self.assertEqual(len(require_acceptance(value, manifest)), 64)
         for field, change in (('phase_complete', False), ('checks', {'idle_p99': 'PASS'}),
