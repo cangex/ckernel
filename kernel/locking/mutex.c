@@ -30,6 +30,7 @@
 #include <linux/interrupt.h>
 #include <linux/debug_locks.h>
 #include <linux/osq_lock.h>
+#include <linux/cis_observe.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/lock.h>
@@ -54,6 +55,7 @@ __mutex_init(struct mutex *lock, const char *name, struct lock_class_key *key)
 #endif
 
 	debug_mutex_init(lock, name, key);
+	cis_lock_event(lock, CIS_MUTEX, CIS_RESET, NULL, 0);
 }
 EXPORT_SYMBOL(__mutex_init);
 
@@ -128,8 +130,10 @@ static inline struct task_struct *__mutex_trylock_common(struct mutex *lock, boo
 		}
 
 		if (atomic_long_try_cmpxchg_acquire(&lock->owner, &owner, task | flags)) {
-			if (task == curr)
+			if (task == curr) {
+				cis_lock_event(lock, CIS_MUTEX, CIS_ACQUIRE, current, 0);
 				return NULL;
+			}
 			break;
 		}
 	}
@@ -169,8 +173,10 @@ static __always_inline bool __mutex_trylock_fast(struct mutex *lock)
 	unsigned long curr = (unsigned long)current;
 	unsigned long zero = 0UL;
 
-	if (atomic_long_try_cmpxchg_acquire(&lock->owner, &zero, curr))
+	if (atomic_long_try_cmpxchg_acquire(&lock->owner, &zero, curr)) {
+		cis_lock_event(lock, CIS_MUTEX, CIS_ACQUIRE, current, 0);
 		return true;
+	}
 
 	return false;
 }
@@ -537,11 +543,15 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
  */
 void __sched mutex_unlock(struct mutex *lock)
 {
+	cis_lock_event(lock, CIS_MUTEX, CIS_RELEASE_BEGIN, current, 0);
 #ifndef CONFIG_DEBUG_LOCK_ALLOC
-	if (__mutex_unlock_fast(lock))
+	if (__mutex_unlock_fast(lock)) {
+		cis_lock_event(lock, CIS_MUTEX, CIS_RELEASE_END, current, 0);
 		return;
+	}
 #endif
 	__mutex_unlock_slowpath(lock, _RET_IP_);
+	cis_lock_event(lock, CIS_MUTEX, CIS_RELEASE_END, current, 0);
 }
 EXPORT_SYMBOL(mutex_unlock);
 
@@ -605,6 +615,7 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 	mutex_acquire_nest(&lock->dep_map, subclass, 0, nest_lock, ip);
 
 	trace_contention_begin(lock, LCB_F_MUTEX | LCB_F_SPIN);
+	cis_mutex_wait(lock);
 	if (__mutex_trylock(lock) ||
 	    mutex_optimistic_spin(lock, ww_ctx, NULL)) {
 		/* got the lock, yay! */

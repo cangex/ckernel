@@ -1,6 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/export.h>
 #include <linux/lockref.h>
+#include <linux/cis_observe.h>
+#include <linux/sched.h>
+
+static inline void cis_lockref_lock(struct lockref *lockref)
+{
+	cis_lock_event(lockref, CIS_LOCKREF, CIS_WAIT, NULL, 0);
+	spin_lock(&lockref->lock);
+	cis_lock_event(lockref, CIS_LOCKREF, CIS_ACQUIRE, current, 0);
+}
+
+static inline void cis_lockref_unlock(struct lockref *lockref)
+{
+	cis_lock_event(lockref, CIS_LOCKREF, CIS_RELEASE_BEGIN, current, 0);
+	spin_unlock(&lockref->lock);
+	/* The caller may free the object after unlock: never dereference it here. */
+	cis_lock_event(lockref, CIS_LOCKREF, CIS_RELEASE_END, current, 0);
+}
 
 #if USE_CMPXCHG_LOCKREF
 
@@ -47,9 +64,9 @@ void lockref_get(struct lockref *lockref)
 		return;
 	);
 
-	spin_lock(&lockref->lock);
+	cis_lockref_lock(lockref);
 	lockref->count++;
-	spin_unlock(&lockref->lock);
+	cis_lockref_unlock(lockref);
 }
 EXPORT_SYMBOL(lockref_get);
 
@@ -70,13 +87,13 @@ int lockref_get_not_zero(struct lockref *lockref)
 		return 1;
 	);
 
-	spin_lock(&lockref->lock);
+	cis_lockref_lock(lockref);
 	retval = 0;
 	if (lockref->count > 0) {
 		lockref->count++;
 		retval = 1;
 	}
-	spin_unlock(&lockref->lock);
+	cis_lockref_unlock(lockref);
 	return retval;
 }
 EXPORT_SYMBOL(lockref_get_not_zero);
@@ -98,13 +115,13 @@ int lockref_put_not_zero(struct lockref *lockref)
 		return 1;
 	);
 
-	spin_lock(&lockref->lock);
+	cis_lockref_lock(lockref);
 	retval = 0;
 	if (lockref->count > 1) {
 		lockref->count--;
 		retval = 1;
 	}
-	spin_unlock(&lockref->lock);
+	cis_lockref_unlock(lockref);
 	return retval;
 }
 EXPORT_SYMBOL(lockref_put_not_zero);
@@ -144,11 +161,13 @@ int lockref_put_or_lock(struct lockref *lockref)
 		return 1;
 	);
 
-	spin_lock(&lockref->lock);
-	if (lockref->count <= 1)
+	cis_lockref_lock(lockref);
+	if (lockref->count <= 1) {
+		cis_lock_event(lockref, CIS_LOCKREF, CIS_ESCAPE, current, 0);
 		return 0;
+	}
 	lockref->count--;
-	spin_unlock(&lockref->lock);
+	cis_lockref_unlock(lockref);
 	return 1;
 }
 EXPORT_SYMBOL(lockref_put_or_lock);
@@ -181,13 +200,13 @@ int lockref_get_not_dead(struct lockref *lockref)
 		return 1;
 	);
 
-	spin_lock(&lockref->lock);
+	cis_lockref_lock(lockref);
 	retval = 0;
 	if (lockref->count >= 0) {
 		lockref->count++;
 		retval = 1;
 	}
-	spin_unlock(&lockref->lock);
+	cis_lockref_unlock(lockref);
 	return retval;
 }
 EXPORT_SYMBOL(lockref_get_not_dead);

@@ -33,3 +33,4 @@ obj-$(CONFIG_LOCK_TORTURE_TEST) += locktorture.o
 obj-$(CONFIG_WW_MUTEX_SELFTEST) += test-ww_mutex.o
 obj-$(CONFIG_LOCK_EVENT_COUNTS) += lock_events.o
 PGO_PROFILE := n
+obj-$(CONFIG_CIS_OBSERVE) += cis_observe.o

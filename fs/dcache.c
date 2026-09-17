@@ -22,6 +22,7 @@
 #include <linux/fscrypt.h>
 #include <linux/fsnotify.h>
 #include <linux/slab.h>
+#include <linux/cis_observe.h>
 #include <linux/init.h>
 #include <linux/hash.h>
 #include <linux/cache.h>
@@ -295,12 +296,14 @@ static void __d_free(struct rcu_head *head)
 {
 	struct dentry *dentry = container_of(head, struct dentry, d_u.d_rcu);
 
+	cis_lock_event(&dentry->d_lockref, CIS_LOCKREF, CIS_RETIRE, NULL, 0);
 	kmem_cache_free(dentry_cache, dentry); 
 }
 
 static void __d_free_external(struct rcu_head *head)
 {
 	struct dentry *dentry = container_of(head, struct dentry, d_u.d_rcu);
+	cis_lock_event(&dentry->d_lockref, CIS_LOCKREF, CIS_RETIRE, NULL, 0);
 	kfree(external_name(dentry));
 	kmem_cache_free(dentry_cache, dentry);
 }
@@ -1879,6 +1882,7 @@ static struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 	dentry->d_lockref.count = 1;
 	dentry->d_flags = 0;
 	spin_lock_init(&dentry->d_lock);
+	cis_lock_event(&dentry->d_lockref, CIS_LOCKREF, CIS_RESET, NULL, 0);
 	seqcount_spinlock_init(&dentry->d_seq, &dentry->d_lock);
 	dentry->d_inode = NULL;
 	dentry->d_parent = dentry;

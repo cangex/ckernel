@@ -3047,3 +3047,12 @@ config RUST_KERNEL_DOCTESTS
 endmenu # "Rust"
 
 endmenu # Kernel hacking
+config CIS_OBSERVE
+	bool "Bounded container interference ownership observation hooks"
+	depends on TRACEPOINTS && !PREEMPT_RT
+	default n
+	help
+	  Add disabled-by-default tracepoints to mutex and lockref fallback
+	  ownership boundaries. An administrator may enable short diagnostic
+	  windows. This does not change locking semantics or provide arbitrary
+	  spinlock ownership. Tracing entry cost must be measured separately.
