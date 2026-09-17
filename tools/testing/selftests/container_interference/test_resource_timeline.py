@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]/'container_interference'))
-from resource_timeline import analyze, counter_delta
+from resource_timeline import analyze, counter_delta, cpu_bounds
 
 
 class ResourceTimeline(unittest.TestCase):
@@ -36,6 +36,13 @@ class ResourceTimeline(unittest.TestCase):
     def test_reset_and_changed_counter_set(self):
         for first,last in [({'x':2},{'x':1}),({'x':1},{'y':2}),({'x':-1},{'x':1})]:
             with self.assertRaises(ValueError): counter_delta(first,last)
+
+    def test_stage_cpu_is_bracketed_not_interpolated(self):
+        rows=[dict(time_ns=t,end_ns=t+1,observer={'cpu_stat':{'usage_usec':v}})
+              for t,v in [(0,0),(10,100),(20,140),(30,200)]]
+        bounds=cpu_bounds(rows,5,25)
+        self.assertEqual((bounds['lower_usec'],bounds['upper_usec']),(40,200))
+        self.assertEqual(cpu_bounds(rows,0,25)['status'],'UNKNOWN')
 
 
 if __name__=='__main__': unittest.main()
