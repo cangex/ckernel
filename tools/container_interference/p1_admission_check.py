@@ -78,6 +78,13 @@ def evaluate(source, artifacts):
                      vm_exit_zero=summary['vm_exit_zero'])
         index.append(entry)
         rows.append((entry, summary))
+        # Report what raw lifecycle evidence proves, but do not turn a bounded
+        # subset into the broad P1 lifecycle/resource acceptance checks.
+        from runtime_evidence import analyze as runtime_analyze
+        runtime = runtime_analyze(text, source)
+        for check in ('lifecycle_runtime', 'resource_failure_runtime'):
+            details[check].setdefault('bounded_runtime_evidence', []).append(
+                dict(artifact_sha256=sha, **runtime))
     for mode in ('ip', 'owner'):
         candidates = [(entry, summary) for entry, summary in rows
                       if any(x['mode'] == mode and x['interval']['n'] == 5 for x in summary['cost'])]
