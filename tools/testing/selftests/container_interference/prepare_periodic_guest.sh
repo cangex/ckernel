@@ -13,7 +13,8 @@ btf=$(realpath "$2")
 base=$(realpath "$3")
 parent=$(realpath "$4")
 test -f "$base/usr/bin/python3"
-test -f "$base/workload"
+# session_launch enters this rootfs before executing /workload.
+test -f "$base/container-root/workload"
 test ! -e "$base/profile/p1-admission.json"
 test "$(df -PB1 / | awk 'NR==2 {print $4}')" -gt 4294967296
 test "$(df -PB1 "$parent" | awk 'NR==2 {print $4}')" -gt 4294967296
