@@ -247,6 +247,9 @@ int main(int argc, char **argv)
         unsigned int rate=argc>4?strtoul(argv[4],NULL,10):2000;
         uint64_t count=(uint64_t)rate*seconds,timeouts=0,max=0;
         if(!rate || count>1000000) return 8;
+        int timeline=argc>5 && !strcmp(argv[5],"timeline");
+        /* Bound diagnostic output before allocating buffers or starting work. */
+        if(timeline && count>20000) return 8;
         uint64_t *latency=calloc(count,sizeof(*latency));
         uint64_t *waiting=calloc(count,sizeof(*waiting)), *service=calloc(count,sizeof(*service));
         uint64_t *sorted=calloc(count,sizeof(*sorted));
@@ -270,6 +273,16 @@ int main(int argc, char **argv)
         uint64_t p99=sorted[(count*99+99)/100-1],tail_count=0,tail_wait=0,tail_service=0;
         for(uint64_t i=0;i<count;i++) if(latency[i]>=p99) {
             tail_count++; tail_wait+=waiting[i]; tail_service+=service[i];
+        }
+        /* Optional diagnosis exports existing timestamps only after measurement.
+         * It is not enabled in the frozen performance acceptance batches. */
+        if(timeline) {
+            printf("CIS_LATENCY_TIMELINE count=%" PRIu64 " post_window_export=1 clock=guest_monotonic\n",count);
+            for(uint64_t i=0;i<count;i++) {
+                uint64_t due=start+i*1000000000ULL/rate;
+                printf("CIS_LATENCY_SAMPLE index=%" PRIu64 " due_ns=%" PRIu64 " begin_ns=%" PRIu64 " finish_ns=%" PRIu64 "\n",
+                       i,due,due+waiting[i],due+latency[i]);
+            }
         }
         printf("CIS_LATENCY cgroup=%.*s count=%" PRIu64 " p99_ns=%" PRIu64 " max_ns=%" PRIu64 " timeouts=%" PRIu64 " rate=%u start_ns=%" PRIu64 " end_ns=%" PRIu64 "\n",
                (int)strcspn(cg,"\n"),cg,count,p99,max,timeouts,rate,start,finish);
