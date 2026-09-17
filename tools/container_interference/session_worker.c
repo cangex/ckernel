@@ -50,6 +50,14 @@ int main(int argc,char **argv)
 	signal(SIGTERM,stop_signal); signal(SIGINT,stop_signal);
 	if(prctl(PR_SET_PDEATHSIG,SIGTERM) || getppid()!=parent) return 3;
 	control=(struct pollfd){.fd=channel,.events=POLLIN};
+	if(!strncmp(argv[7],"fd_limit_",9)) {
+		char *tail;
+		unsigned long value=strtoul(argv[7]+9,&tail,10);
+		struct rlimit nofile={value,value};
+		if(*tail || value<4 || value>24 || setrlimit(RLIMIT_NOFILE,&nofile)) {
+			err=1; reason="FD_LIMIT_INJECTION"; goto drain;
+		}
+	}
 	for(i=8;i<argc;i++) {
 		unsigned long long id,gen; int fd,n=0; struct cis_root *r;
 		if(sscanf(argv[i],"%d:%llu:%llu%n",&fd,&id,&gen,&n)!=3 || argv[i][n] ||

@@ -14,6 +14,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--stress', type=int, default=100)
 parser.add_argument('--cost', action='store_true')
 parser.add_argument('--faults', action='store_true')
+parser.add_argument('--resource-faults', action='store_true')
 args = parser.parse_args()
 if not Path('/cis-disposable-vm').exists():
     raise SystemExit('dedicated VM marker missing')
@@ -103,6 +104,27 @@ def window(sid):
         if state['state'] in ('IDLE','FAULTED'): raise AssertionError(state)
         time.sleep(.005)
     raise TimeoutError('arming')
+
+
+if args.resource_faults:
+    def inventory():
+        return json.loads(subprocess.check_output(['/profile/session-residue','--snapshot'],text=True))
+    original=inventory()
+    observations=[]
+    for limit in range(4,25):
+        sid=begin('ip','fdLimit%d'%limit,inject='fd_limit_%d'%limit)['session_id']
+        record=finished(sid)
+        assert record.get('receipt'), record
+        assert record['result'] in ('COMPLETE','PARTIAL'), record
+        for _ in range(100):
+            remaining=inventory()
+            if remaining==original: break
+            time.sleep(.02)
+        assert remaining==original, (original,remaining)
+        observations.append(dict(limit=limit,result=record['result'],reason=record['receipt']['reason'],
+                                 inventory_restored=True))
+    assert any(value['result']=='PARTIAL' for value in observations)
+    print('CIS_PROFILE_RESOURCE_FAILURES '+json.dumps(observations),flush=True)
 
 
 # Real sampled IP and bounded owner fixtures are separate from empty-root lifecycle stress.

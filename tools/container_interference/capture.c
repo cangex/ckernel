@@ -331,6 +331,7 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	int i,prog_fd,pages=CIS_BUFFER_PAGES;
 	struct rlimit limit={RLIM_INFINITY,RLIM_INFINITY};
 	char detail[256];
+	const char *stage="memlock_limit";
 	if(!c) return -ENOMEM;
 	/* The audited kernel-memory reserve assumes 4 KiB perf pages. */
 	if(sysconf(_SC_PAGESIZE)!=4096) {
@@ -340,6 +341,7 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	c->ctx=ctx; ctx->capture=c;
 	for(i=0;i<CIS_CPU_CAP;i++) c->perf_fds[i]=-1;
 	if(setrlimit(RLIMIT_MEMLOCK,&limit)) goto fail;
+	stage="object_open";
 	c->object=bpf_object__open_file(path,NULL);
 	if(libbpf_get_error(c->object)) { c->object=NULL; goto fail; }
 	/* Exclude unused collectors before verification/map allocation, not merely
@@ -348,15 +350,18 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		if(bpf_program__set_autoload(p,cis_profile_program(ctx->session_collector,bpf_program__name(p)))) goto fail;
 	bpf_object__for_each_map(map,c->object)
 		if(bpf_map__set_autocreate(map,cis_profile_map(ctx->session_collector,bpf_map__name(map)))) goto fail;
+	stage="object_load";
 	if(bpf_object__load(c->object)) goto fail;
 	c->roots=mapfd(c,"roots"); c->targets=mapfd(c,"targets"); c->pending=mapfd(c,"pending");
 	c->stacks=mapfd(c,"stacks"); c->stats=mapfd(c,"stats");
 	c->possible_cpus=libbpf_num_possible_cpus();
 	if(c->possible_cpus<1 || c->possible_cpus>CIS_CPU_CAP) goto fail;
+	stage="cpu_stats";
 	c->cpu_stats=calloc(c->possible_cpus,sizeof(*c->cpu_stats));
 	if(!c->cpu_stats) goto fail;
 	/* More burst room on small systems, still <=4 MiB of payload globally. */
 	while(pages<16 && (unsigned long long)(pages*2)*4096*c->possible_cpus<=(4ULL<<20)) pages*=2;
+	stage="output_perf_buffer";
 	c->ring=perf_buffer__new(mapfd(c,"events"),pages,event,lost,c,NULL);
 	if(libbpf_get_error(c->ring)) { c->ring=NULL; goto fail; }
 	snprintf(detail,sizeof(detail),"pages_per_cpu=%d possible_cpus=%d payload_bytes=%llu cap_bytes=4194304",pages,c->possible_cpus,(unsigned long long)pages*4096*c->possible_cpus);
@@ -371,7 +376,9 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		struct perf_event_attr attr={.size=sizeof(attr),.type=PERF_TYPE_HARDWARE,.config=PERF_COUNT_HW_CPU_CYCLES,
 			.read_format=PERF_FORMAT_TOTAL_TIME_ENABLED|PERF_FORMAT_TOTAL_TIME_RUNNING,
 			.sample_period=4000000000ULL/(ctx->ip_hz/c->ncpu),.exclude_user=1,.exclude_hv=1,.disabled=1};
-		int fd=syscall(__NR_perf_event_open,&attr,-1,i,-1,PERF_FLAG_FD_CLOEXEC);
+		int fd;
+		stage="ip_perf_fd";
+		fd=syscall(__NR_perf_event_open,&attr,-1,i,-1,PERF_FLAG_FD_CLOEXEC);
 		if(fd<0 && (errno==ENOENT || errno==EOPNOTSUPP || errno==EINVAL)) {
 			attr.type=PERF_TYPE_SOFTWARE; attr.config=PERF_COUNT_SW_CPU_CLOCK;
 			attr.sample_period=1000000000ULL/(ctx->ip_hz/c->ncpu);
@@ -386,8 +393,10 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 			(unsigned long long)attr.sample_period);
 		cis_report(ctx,"ip_event",NULL,detail);
 		c->perf_page_size=sysconf(_SC_PAGESIZE);
+		stage="ip_perf_mmap";
 		c->perf_pages[i]=mmap(NULL,2*c->perf_page_size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
 		if(c->perf_pages[i]==MAP_FAILED) { c->perf_pages[i]=NULL; goto fail; }
+		stage="ip_perf_attach";
 		if(ioctl(fd,PERF_EVENT_IOC_SET_BPF,prog_fd)) goto fail;
 	}
 	snprintf(detail,sizeof(detail),"configured_cpus=%d per_cpu_budget_hz=%u nominal_total_budget_hz=%u per_cpu_buffer_pages=%u inflight_limit=%u fixed_period_at_4GHz_bound=1 no_idle_period_shrinking=1",
@@ -397,6 +406,8 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	memory_inventory(c,pages);
 	return 0;
 fail:
+	snprintf(detail,sizeof(detail),"stage=%s cleanup_required=1",stage);
+	cis_report(ctx,"prepare_failure",NULL,detail);
 	cis_capture_stop(ctx); return -EIO;
 }
 
