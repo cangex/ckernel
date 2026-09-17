@@ -9,6 +9,8 @@
 #define CIS_DIAG_LOCK 2
 #define CIS_DIAG_RECLAIM 4
 #define CIS_DIAG_WORK 8
+#define CIS_DIAG_OWNER 16
+#define CIS_OWNER_EVENT 12
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -22,5 +24,16 @@ struct cis_event {
 };
 struct cis_work_state { struct cis_event queued, active; __u32 queued_valid, active_valid; };
 struct cis_pending_key { __u64 tid, object, task_start_ns; __u32 type, reserved; };
-struct cis_bpf_stats { __u64 received, emitted, lost, unknown, overdepth, unmatched, nested, rejected, expired, phase_changes, irq_context; };
+struct cis_bpf_stats { __u64 received, emitted, lost, unknown, overdepth, unmatched, nested, rejected, expired, phase_changes, irq_context, owner_seen, owner_skip_base, owner_skipped; };
+struct cis_owner_event {
+	struct cis_event base;
+	__u64 actor_id, actor_generation, actor_start;
+	__u64 holder_id, holder_generation, holder_tid, holder_start;
+	__u32 phase, resource;
+	__u64 skipped;
+};
+struct cis_object_key { __u64 object; __u32 kind, reserved; };
+struct cis_watch { __u64 id, generation, start_ns, deadline_ns, epoch, events; };
+struct cis_owner_record { __u64 id, generation, tid, task_start, acquired_ns; };
+struct cis_owner_task { struct cis_object_key key; __u64 task_start; };
 #endif

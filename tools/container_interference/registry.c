@@ -78,6 +78,7 @@ int cis_registry_add(struct cis_context *ctx, int fd, const char *name,
 	if (!r) return -ENOSPC;
 	memset(r, 0, sizeof(*r));
 	for (i = 0; i < 6; i++) r->metric_fd[i] = -1;
+	r->psi_fd[0]=r->psi_fd[1]=-1;
 	r->fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
 	if (r->fd < 0) return -errno;
 	r->id = st.st_ino;
@@ -90,8 +91,10 @@ int cis_registry_add(struct cis_context *ctx, int fd, const char *name,
 	snprintf(r->path, sizeof(r->path), "%s", path);
 	r->next_ns = cis_clock_ns() + ((ctx->serial * 618) % 1000) * 1000000ULL;
 	if (cis_metrics_open(r)) { close(r->fd); return -EIO; }
+	if(cis_fast_open(ctx,r)) { cis_metrics_close(r); close(r->fd); return -EIO; }
 	r->used = 1;
 	if (cis_capture_root(ctx, r, 1)) {
+		cis_fast_close(ctx,r);
 		cis_metrics_close(r); close(r->fd); r->used = 0; return -EIO;
 	}
 	r->ready = 1;
@@ -113,6 +116,7 @@ int cis_registry_remove(struct cis_context *ctx, uint64_t id, uint64_t generatio
 		r->ready = 0;
 		cis_report(ctx, "unregister", r, "pending intervals are incomplete, not zero");
 		cis_metrics_close(r);
+		cis_fast_close(ctx,r);
 		close(r->fd);
 		r->used = 0;
 		reindex(ctx);

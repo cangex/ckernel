@@ -25,6 +25,10 @@ struct cis_metric {
 };
 struct cis_root {
 	int used, fd, metric_fd[6], ready, pending, manual_diagnostic;
+	int psi_fd[2];
+	uint64_t fast_alert_ns;
+	uint64_t fast_lock_start_ns;
+	unsigned int fast_lock_samples;
 	unsigned int diagnostic_kind;
 	unsigned int ip_samples, lock_samples, reclaim_samples;
 	uint64_t id, generation, epoch, next_ns, deadline_ns, last_diag_ns;
@@ -49,6 +53,7 @@ struct cis_context {
 	uint64_t memory_limit, user_cpu_limit_ns, last_process_ns, last_budget_ns;
 	int mode, stopping, output_fd, socket_fd;
 	int profile_loop;
+	int fast_alert, psi_epoll;
 	void *capture;
 	void *symbols;
 };
@@ -71,9 +76,13 @@ int cis_capture_start(struct cis_context *, const char *);
 int cis_capture_root(struct cis_context *, struct cis_root *, int);
 int cis_capture_diagnostic(struct cis_context *, struct cis_root *, int);
 int cis_capture_poll(struct cis_context *);
+int cis_capture_fd(struct cis_context *);
 void cis_capture_stop(struct cis_context *);
 void cis_budget_tick(struct cis_context *, uint64_t);
 int cis_symbols_load(struct cis_context *);
 const char *cis_symbol(struct cis_context *, uint64_t);
 void cis_symbols_free(struct cis_context *);
+int cis_fast_open(struct cis_context *, struct cis_root *);
+void cis_fast_close(struct cis_context *, struct cis_root *);
+void cis_fast_poll(struct cis_context *);
 #endif

@@ -3,6 +3,14 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+static void stop_fast(struct cis_context *ctx)
+{
+	unsigned int i;
+	if(!ctx->fast_alert) return;
+	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) cis_fast_close(ctx,&ctx->roots[i]);
+	ctx->fast_alert=0;
+	cis_report(ctx,"fast_budget_disable",NULL,"PSI trigger FDs closed; kernel trigger work no longer requested");
+}
 void cis_budget_tick(struct cis_context *ctx,uint64_t now)
 {
 	struct timespec t;
@@ -29,6 +37,7 @@ void cis_budget_tick(struct cis_context *ctx,uint64_t now)
 			cis_report(ctx,"metrics_budget_disable",NULL,"resource polling stopped; control plane remains available, no active coverage");
 		}
 		cis_capture_stop(ctx);
+		stop_fast(ctx);
 	}
 	ctx->last_process_ns=cpu; ctx->last_budget_ns=now;
 	return;
@@ -36,4 +45,5 @@ unavailable:
 	ctx->errors++;
 	cis_report(ctx,"budget_unavailable",NULL,"CPU/RSS unavailable, not zero; all sampling and metrics stopped");
 	cis_capture_stop(ctx); ctx->mode=0; ctx->last_budget_ns=now;
+	stop_fast(ctx);
 }

@@ -54,7 +54,8 @@ void cis_baseline_update(struct cis_context *ctx, struct cis_root *r, const stru
 	cis_report(ctx, "metric", r, detail);
 	if (r->state == CIS_DIAGNOSING || r->state == CIS_COOLDOWN) {
 		if(r->state==CIS_DIAGNOSING && (!m->populated ||
-		   (!r->manual_diagnostic && wait<.01 && m->memory_wait_us-r->previous.memory_wait_us<10000))) {
+		   (!r->manual_diagnostic && ((r->diagnostic_kind&16)?!r->lock_samples:
+		    (wait<.01 && m->memory_wait_us-r->previous.memory_wait_us<10000))))) {
 			cis_capture_diagnostic(ctx,r,0); r->state=CIS_COOLDOWN;
 			r->last_diag_ns=cis_clock_ns(); if(ctx->diagnostic) ctx->diagnostic--;
 			cis_report(ctx,"diagnostic_stop",r,m->populated?"anomaly receded":"container has no remaining tasks");
@@ -77,7 +78,7 @@ void cis_baseline_update(struct cis_context *ctx, struct cis_root *r, const stru
 				r->pending = 1;
 				r->manual_diagnostic = 0;
 				r->requested_start_ns = 0;
-				r->diagnostic_kind = pressure ? 4 : r->lock_samples>=4 && r->ip_samples>=8 ? 2 : 1;
+				r->diagnostic_kind = pressure ? 4 : r->lock_samples>=4 && r->ip_samples>=8 ? (ctx->fast_alert?16:2) : 1;
 			}
 			cis_report(ctx, "E0", r, "sustained deviation; demand/phase/external cause unresolved");
 		} else {

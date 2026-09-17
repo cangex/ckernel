@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #define _GNU_SOURCE
 #include "include/cis.h"
+#include "include/cis_trigger.h"
 #include <linux/types.h>
 #include "include/cis_event.h"
 #include <bpf/bpf.h>
@@ -18,7 +19,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 12
+#define CIS_DIAGNOSTIC_LINKS 14
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -51,6 +52,18 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	char detail[768];
 	const char *symbol;
 	(void)cpu;
+	if(size>=sizeof(struct cis_owner_event) && size<=sizeof(struct cis_owner_event)+7 && e->type==CIS_OWNER_EVENT) {
+		struct cis_owner_event *o=data;
+		char d[1100];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"sample_time_ns=%llu object=0x%llx epoch=%llu phase=%u resource=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu holder_tid=%llu holder_start=%llu holder_id=%llu holder_generation=%llu cpu=%u flags=%u skipped=%llu stack_id=%d",
+			(unsigned long long)e->time_ns,(unsigned long long)e->object,(unsigned long long)e->sequence_ns,o->phase,o->resource,
+			(unsigned long long)e->tid,(unsigned long long)o->actor_start,(unsigned long long)o->actor_id,(unsigned long long)o->actor_generation,
+			(unsigned long long)o->holder_tid,(unsigned long long)o->holder_start,(unsigned long long)o->holder_id,(unsigned long long)o->holder_generation,
+			e->cpu,e->flags,(unsigned long long)o->skipped,e->stack_id);
+		cis_report(ctx,"OWNER",r,d);return;
+	}
 	/* PERF_SAMPLE_RAW includes trailing alignment bytes in its reported size. */
 	if(size<sizeof(*e) || size>sizeof(*e)+7) {
 		if(!ctx->errors) {
@@ -64,7 +77,20 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	symbol=cis_symbol(ctx,e->ip);
 	if(e->type==CIS_IP) {
 		r->ip_samples++;
-		if(strstr(symbol,"mutex") || strstr(symbol,"spin_lock") || strstr(symbol,"rwsem")) r->lock_samples++;
+		if(strstr(symbol,"mutex") || strstr(symbol,"spin_lock") || strstr(symbol,"rwsem")) {
+			r->lock_samples++;
+			if(ctx->fast_alert && cis_fast_lock_candidate_symbol(symbol)) {
+				if(e->time_ns<r->fast_lock_start_ns || e->time_ns-r->fast_lock_start_ns>250000000ULL) {
+					r->fast_lock_start_ns=e->time_ns; r->fast_lock_samples=0;
+				}
+				r->fast_lock_samples++;
+				if(r->fast_lock_samples==3 && r->state!=CIS_DIAGNOSING && r->state!=CIS_COOLDOWN) {
+					cis_report(ctx,"FAST_LOCK_CANDIDATE",r,"three sampled lock slowpath IPs within 250ms; not owner proof; request bounded diagnostic");
+					r->pending=1; r->manual_diagnostic=0; r->requested_start_ns=0;
+					r->diagnostic_kind=CIS_DIAG_OWNER; r->state=CIS_SUSPECT;
+				}
+			}
+		}
 		if(strstr(symbol,"reclaim") || strstr(symbol,"shrink_")) r->reclaim_samples++;
 	}
 	snprintf(detail,sizeof(detail),"sample_time_ns=%llu type=%u tid=%llu cpu=%u object=0x%llx duration_ns=%llu ip=0x%llx weight=%llu stack_id=%d flags=%u executor_tid=%llu sequence_ns=%llu symbol=%s owner=unknown execution_context=task_or_irq_unresolved",
@@ -94,8 +120,8 @@ static int attach(struct capture *c,const char *name,struct bpf_link **slot)
 
 static int configure_links(struct capture *c,unsigned int kinds)
 {
-	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end"};
-	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4};
+	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end","owner_state","owner_switch"};
+	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4,16,16};
 	unsigned int i;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
 		if(!(kinds&masks[i])) { bpf_link__destroy(c->diagnostic_links[i]); c->diagnostic_links[i]=NULL; }
@@ -147,6 +173,16 @@ static void export_stacks(struct capture *c,struct cis_root *r)
 			for(i=0;i<CIS_STACK_DEPTH && ips[i] && n+20<sizeof(detail);i++)
 				n+=snprintf(detail+n,sizeof(detail)-n,"%s%llx",i?",":"",(unsigned long long)ips[i]);
 			cis_report(c->ctx,"stack",r,detail);
+			n=snprintf(detail,sizeof(detail),"stack_id=%u leaf_to_root=",key);
+			for(i=0;i<CIS_STACK_DEPTH && ips[i];i++) {
+				const char *name=cis_symbol(c->ctx,ips[i]);
+				if(n+strlen(name)+20>=sizeof(detail)) {
+					snprintf(detail+n,sizeof(detail)-n,";truncated=1");
+					break;
+				}
+				n+=snprintf(detail+n,sizeof(detail)-n,"%s%s",i?">":"",name);
+			}
+			cis_report(c->ctx,"stack_symbols",r,detail);
 		}
 		err=bpf_map_get_next_key(c->stacks,&key,&next); key=next;
 	}
@@ -177,6 +213,22 @@ static void unfinished_work(struct capture *c,struct cis_root *r)
 	}
 }
 
+static void clear_watches(struct capture *c,struct cis_root *r)
+{
+	struct cis_object_key key,next;
+	struct cis_watch value;
+	int fd=mapfd(c,"watched"),ret=bpf_map_get_next_key(fd,NULL,&key);
+	unsigned int visited=0;
+	while(!ret && visited++<128) {
+		int end=bpf_map_get_next_key(fd,&key,&next);
+		if(!bpf_map_lookup_elem(fd,&key,&value) && value.id==r->id && value.generation==r->generation)
+			bpf_map_delete_elem(fd,&key);
+		if(end) break;
+		key=next;
+	}
+	if(visited>=128) cis_report(c->ctx,"owner_cleanup_limited",r,"bounded watch cleanup; expired entries remain rejected by time/target");
+}
+
 int cis_capture_diagnostic(struct cis_context *ctx,struct cis_root *r,int enable)
 {
 	struct capture *c=ctx->capture;
@@ -200,6 +252,7 @@ int cis_capture_diagnostic(struct cis_context *ctx,struct cis_root *r,int enable
 	} else {
 		bpf_map_delete_elem(c->targets,&r->id);
 		configure_links(c,kinds);
+		clear_watches(c,r);
 		perf_buffer__poll(c->ring,0); unfinished(c,r); unfinished_work(c,r); export_stacks(c,r);
 	}
 	return 0;
@@ -209,7 +262,7 @@ int cis_capture_start(struct cis_context *ctx,const char *path)
 {
 	struct capture *c=calloc(1,sizeof(*c));
 	struct bpf_program *p;
-	int i,prog_fd;
+	int i,prog_fd,pages=CIS_BUFFER_PAGES;
 	struct rlimit limit={RLIM_INFINITY,RLIM_INFINITY};
 	char detail[256];
 	if(!c) return -ENOMEM;
@@ -230,8 +283,12 @@ int cis_capture_start(struct cis_context *ctx,const char *path)
 	if(c->possible_cpus<1 || c->possible_cpus>CIS_CPU_CAP) goto fail;
 	c->cpu_stats=calloc(c->possible_cpus,sizeof(*c->cpu_stats));
 	if(!c->cpu_stats) goto fail;
-	c->ring=perf_buffer__new(mapfd(c,"events"),CIS_BUFFER_PAGES,event,lost,c,NULL);
+	/* More burst room on small systems, still <=4 MiB of payload globally. */
+	while(pages<16 && (unsigned long long)(pages*2)*4096*c->possible_cpus<=(4ULL<<20)) pages*=2;
+	c->ring=perf_buffer__new(mapfd(c,"events"),pages,event,lost,c,NULL);
 	if(libbpf_get_error(c->ring)) { c->ring=NULL; goto fail; }
+	snprintf(detail,sizeof(detail),"pages_per_cpu=%d possible_cpus=%d payload_bytes=%llu cap_bytes=4194304",pages,c->possible_cpus,(unsigned long long)pages*4096*c->possible_cpus);
+	cis_report(ctx,"buffer_budget",NULL,detail);
 	p=bpf_object__find_program_by_name(c->object,"sample_ip");
 	if(!p) goto fail;
 	prog_fd=bpf_program__fd(p);
@@ -257,7 +314,7 @@ int cis_capture_start(struct cis_context *ctx,const char *path)
 		if(ioctl(fd,PERF_EVENT_IOC_SET_BPF,prog_fd) || ioctl(fd,PERF_EVENT_IOC_ENABLE,0)) goto fail;
 	}
 	snprintf(detail,sizeof(detail),"configured_cpus=%d per_cpu_budget_hz=%u nominal_total_budget_hz=%u per_cpu_buffer_pages=%u inflight_limit=%u fixed_period_at_4GHz_bound=1 no_idle_period_shrinking=1",
-		c->ncpu,ctx->ip_hz/c->ncpu,(ctx->ip_hz/c->ncpu)*c->ncpu,CIS_BUFFER_PAGES,CIS_INFLIGHT);
+		c->ncpu,ctx->ip_hz/c->ncpu,(ctx->ip_hz/c->ncpu)*c->ncpu,(unsigned int)pages,CIS_INFLIGHT);
 	cis_report(ctx,"capture_ready",NULL,detail);
 	return 0;
 fail:
@@ -339,6 +396,7 @@ int cis_capture_poll(struct cis_context *ctx)
 		total.nested+=s->nested; total.rejected+=s->rejected; total.expired+=s->expired;
 		total.phase_changes+=s->phase_changes;
 		total.irq_context+=s->irq_context;
+		total.owner_skipped+=s->owner_skipped;
 	}
 	received=total.received;
 	snprintf(detail,sizeof(detail),"received=%llu emitted=%llu lost=%llu unknown=%llu overdepth=%llu unmatched=%llu nested=%llu rejected=%llu expired=%llu phase_changes=%llu irq_context=%llu",
@@ -346,6 +404,10 @@ int cis_capture_poll(struct cis_context *ctx)
 		(unsigned long long)total.unknown,(unsigned long long)total.overdepth,(unsigned long long)total.unmatched,
 		(unsigned long long)total.nested,(unsigned long long)total.rejected,(unsigned long long)total.expired,(unsigned long long)total.phase_changes,(unsigned long long)total.irq_context);
 	cis_report(ctx,"coverage",NULL,detail);
+	if(total.owner_skipped) {
+		snprintf(detail,sizeof(detail),"skipped=%llu scope=collector_lifetime incomplete_owner_evidence=1",(unsigned long long)total.owner_skipped);
+		cis_report(ctx,"owner_gap",NULL,detail);
+	}
 	if(c->last_stats_ns && (received-c->last_received)*1000000000.0/(now-c->last_stats_ns)>ctx->entry_rate_limit) {
 		snprintf(detail,sizeof(detail),"configured_limit=%u delta_entries=%llu interval_ns=%llu detaching_collectors=1",
 			ctx->entry_rate_limit,(unsigned long long)(received-c->last_received),(unsigned long long)(now-c->last_stats_ns));
@@ -355,12 +417,29 @@ int cis_capture_poll(struct cis_context *ctx)
 	return 0;
 }
 
+int cis_capture_fd(struct cis_context *ctx)
+{
+	struct capture *c=ctx->capture;
+	return c && ctx->diagnostic?perf_buffer__epoll_fd(c->ring):-1;
+}
+
 void cis_capture_stop(struct cis_context *ctx)
 {
 	struct capture *c=ctx->capture;
 	int i;
 	if(!c) return;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) bpf_link__destroy(c->diagnostic_links[i]);
+	if(c->ring) perf_buffer__poll(c->ring,0);
+	if(c->cpu_stats) {
+		__u32 zero=0;
+		__u64 lost_count=0,skipped=0;
+		if(!bpf_map_lookup_elem(c->stats,&zero,c->cpu_stats)) {
+			char detail[160];
+			for(i=0;i<c->possible_cpus;i++) {lost_count+=c->cpu_stats[i].lost;skipped+=c->cpu_stats[i].owner_skipped;}
+			snprintf(detail,sizeof(detail),"lost=%llu owner_skipped=%llu",(unsigned long long)lost_count,(unsigned long long)skipped);
+			cis_report(ctx,"terminal_coverage",NULL,detail);
+		}
+	}
 	for(i=0;i<CIS_CPU_CAP;i++) if(c->perf_fds[i]>=0) {
 		ioctl(c->perf_fds[i],PERF_EVENT_IOC_DISABLE,0);
 		if(c->perf_pages[i]) munmap(c->perf_pages[i],2*c->perf_page_size);

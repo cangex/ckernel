@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include <sys/epoll.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -85,7 +86,7 @@ static void request(struct cis_context *ctx, int fd)
 			 ctx->active, ctx->diagnostic, ctx->mode, !!ctx->capture, ctx->errors, ctx->dropped,
 			 (unsigned long long)ctx->epoch); break;
 	case CIS_DIAGNOSE:
-		if(strcmp(req.name,"sched") && strcmp(req.name,"lock") && strcmp(req.name,"reclaim") && strcmp(req.name,"work")) break;
+		if(strcmp(req.name,"sched") && strcmp(req.name,"lock") && strcmp(req.name,"reclaim") && strcmp(req.name,"work") && strcmp(req.name,"owner")) break;
 		{
 			uint64_t now=cis_clock_ns();
 			if(req.start_ns && (req.start_ns<=now || req.start_ns-now>2000000000ULL)) break;
@@ -96,7 +97,7 @@ static void request(struct cis_context *ctx, int fd)
 			if (r->used && r->id == req.id && r->generation == req.generation) {
 				if (!ctx->capture) { rep.error = -EOPNOTSUPP; break; }
 				if (r->state == CIS_COOLDOWN || r->state == CIS_DIAGNOSING) { rep.error = -EAGAIN; break; }
-				r->diagnostic_kind = !strcmp(req.name,"lock")?2:!strcmp(req.name,"reclaim")?4:!strcmp(req.name,"work")?8:1;
+				r->diagnostic_kind = !strcmp(req.name,"owner")?16:!strcmp(req.name,"lock")?2:!strcmp(req.name,"reclaim")?4:!strcmp(req.name,"work")?8:1;
 				r->manual_diagnostic = 1;
 				r->requested_start_ns = req.start_ns;
 				r->pending = 1; rep.error = 0; break;
@@ -124,6 +125,7 @@ int main(int argc, char **argv)
 	ctx->ip_hz=1000; ctx->memory_limit=64ULL<<20; ctx->user_cpu_limit_ns=20000000;
 	ctx->entry_rate_limit=200000;
 	ctx->epoch=1; ctx->mode=1; ctx->socket_fd=-1; ctx->output_fd=STDOUT_FILENO;
+	ctx->psi_epoll=-1;
 	if (getrandom(&ctx->boot_generation, sizeof(ctx->boot_generation), 0) != sizeof(ctx->boot_generation)) goto out;
 	ctx->boot_generation &= 0x7fffffffffff0000ULL;
 	for (i = 1; i < argc; i++) {
@@ -134,6 +136,7 @@ int main(int argc, char **argv)
 			const char *m=argv[++i]; ctx->mode=!strcmp(m,"off")?0:!strcmp(m,"metrics")?1:!strcmp(m,"ip")?2:-1;
 		} else if (!strcmp(argv[i], "--seconds") && i+1 < argc) end=cis_clock_ns()+strtoul(argv[++i],NULL,10)*1000000000ULL;
 		else if (!strcmp(argv[i], "--profile-loop")) ctx->profile_loop=1;
+		else if (!strcmp(argv[i], "--fast-alert")) ctx->fast_alert=1;
 		else if (!strcmp(argv[i], "--ready-fd") && i+1 < argc) ready_fd=atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--entry-rate-limit") && i+1 < argc) {
 			char *endp;
@@ -144,6 +147,9 @@ int main(int argc, char **argv)
 		else { fprintf(stderr, "invalid option: %s\n", argv[i]); goto out; }
 	}
 	if (ctx->mode < 0) goto out;
+	if(ctx->fast_alert) {
+		if(!ctx->mode || (ctx->psi_epoll=epoll_create1(EPOLL_CLOEXEC))<0) goto out;
+	}
 	{
 		struct rlimit limit;
 		if(getrlimit(RLIMIT_NOFILE,&limit)) goto out;
@@ -174,13 +180,13 @@ int main(int argc, char **argv)
 	}
 	if (ready_fd >= 0) { if (write(ready_fd,"R",1)!=1) goto out; close(ready_fd); }
 	while (!quitting && !ctx->stopping && (!end || cis_clock_ns()<end)) {
-		struct pollfd pfd={ctx->socket_fd,POLLIN,0};
+		struct pollfd fds[3]={{ctx->socket_fd,POLLIN,0},{ctx->mode?ctx->psi_epoll:-1,POLLIN,0},{cis_capture_fd(ctx),POLLIN,0}};
 		uint64_t now=cis_clock_ns(),wake=now+(ctx->capture?100000000:1000000000);
 		int timeout;
 		uint64_t segment=0;
 		/* Backpressure only administrator requests, never business execution. */
 		if(now<next_control_ns) {
-			pfd.events=0;
+			fds[0].events=0;
 			if(next_control_ns<wake) wake=next_control_ns;
 		}
 		/* Wake for actual deadlines, not a perpetual 100-Hz metrics-only poll. */
@@ -191,7 +197,7 @@ int main(int argc, char **argv)
 		}
 		if(end && end<wake) wake=end;
 		timeout=wake<=now?0:(int)((wake-now+999999)/1000000);
-		if (poll(&pfd,1,timeout)>0 && (pfd.revents&POLLIN)) {
+		if (poll(fds,3,timeout)>0 && (fds[0].revents&POLLIN)) {
 			if(ctx->profile_loop) { segment=profile_cpu(); profile_requests++; }
 			next_control_ns=cis_clock_ns()+31250000;
 			int client=accept4(ctx->socket_fd,NULL,NULL,SOCK_CLOEXEC|SOCK_NONBLOCK);
@@ -231,6 +237,7 @@ int main(int argc, char **argv)
 		if(ctx->profile_loop) { uint64_t stamp=profile_cpu(); profile_totals[1]+=stamp-segment; segment=stamp; }
 		if (cis_capture_poll(ctx)<0) { cis_report(ctx,"capture_error",NULL,"stopping collectors"); cis_capture_stop(ctx); }
 		if(ctx->profile_loop) { uint64_t stamp=profile_cpu(); profile_totals[2]+=stamp-segment; segment=stamp; }
+		cis_fast_poll(ctx);
 		cis_diagnostics_tick(ctx,now); cis_budget_tick(ctx,now);
 		if(ctx->profile_loop) {
 			profile_totals[3]+=profile_cpu()-segment;
@@ -249,6 +256,7 @@ int main(int argc, char **argv)
 	status=0;
 out:
 	cis_registry_destroy(ctx); cis_capture_stop(ctx); cis_symbols_free(ctx);
+	if(ctx->psi_epoll>=0) close(ctx->psi_epoll);
 	{
 		char quality[192];
 		snprintf(quality,sizeof(quality),"errors=%u drops=%u retired_or_unknown_userspace_samples=%u",ctx->errors,ctx->dropped,ctx->unknown);

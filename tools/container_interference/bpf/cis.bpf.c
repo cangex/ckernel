@@ -13,6 +13,18 @@ struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(k
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,CIS_STACKS); __type(key,__u32); __type(value,__u64[CIS_STACK_DEPTH]); } stacks SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_work_state); } work_items SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,struct cis_object_key); __type(value,struct cis_owner_record); } holders SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_owner_task); } holder_tasks SEC(".maps");
+
+static __always_inline struct cis_bpf_stats *statistics(void);
+static __always_inline void owner_emit(void *ctx,struct cis_owner_event *e)
+{
+	struct cis_bpf_stats *s;
+	s=statistics();
+	if(bpf_perf_event_output(ctx,&events,BPF_F_CURRENT_CPU,e,sizeof(*e))) COUNT(s,lost);
+	else COUNT(s,emitted);
+}
 
 static __always_inline struct cis_bpf_stats *statistics(void)
 {
@@ -272,4 +284,127 @@ int work_cancel_end(struct pt_regs *ctx)
 		if(sequence==e.sequence_ns) bpf_map_delete_elem(&work_items,&e.object);
 	}
 	bpf_map_delete_elem(&pending,&key); return 0;
+}
+
+static __always_inline int live_watch(struct cis_watch *w,__u64 now)
+{
+	struct cis_target *t;
+	if(!w || now<w->start_ns || now>=w->deadline_ns) return 0;
+	t=bpf_map_lookup_elem(&targets,&w->id);
+	return t && t->generation==w->generation && t->start_ns==w->start_ns &&
+	       (t->kind&CIS_DIAG_OWNER);
+}
+
+SEC("raw_tp/cis_lock_state")
+int owner_state(struct bpf_raw_tracepoint_args *ctx)
+{
+	/* Keep this raw-tp argument as a scalar: older verifiers reject a ctx+40 alias. */
+	volatile __u64 raw_skipped=ctx->args[5];
+	struct cis_object_key key={.object=ctx->args[0],.kind=ctx->args[1]};
+	struct cis_owner_event e={0};
+	struct cis_identity actor={0},holder={0};
+	struct cis_owner_record rec={0},*old;
+	struct cis_watch *w,create={0};
+	struct task_struct *task=(void*)bpf_get_current_task(),*owner=(void*)ctx->args[3];
+	struct cis_bpf_stats *s=statistics();
+	__u64 now=bpf_ktime_get_ns(),tid=bpf_get_current_pid_tgid();
+	__u32 phase=ctx->args[2];
+	COUNT(s,received);
+	if(s) {
+		if(!s->owner_seen) {s->owner_seen=1;s->owner_skip_base=raw_skipped;}
+		s->owner_skipped=raw_skipped-s->owner_skip_base;
+	}
+	if(!synchronous_context()) return 0;
+	w=bpf_map_lookup_elem(&watched,&key);
+	if(w && !live_watch(w,now)) { bpf_map_delete_elem(&watched,&key); w=NULL; }
+	if(!w && phase!=2) return 0;
+	if(w && key.kind==2 && w->events>64 && phase!=1 && phase!=8) return 0;
+	identity(task,&actor);
+	if(phase==2 && allowed(&actor,CIS_DIAG_OWNER,now)) {
+		struct cis_target *t=bpf_map_lookup_elem(&targets,&actor.id);
+		if(!t) return 0;
+		if(!w) {
+			create.id=actor.id;create.generation=actor.generation;
+			create.start_ns=t->start_ns;create.deadline_ns=t->deadline_ns;create.epoch=now;
+			if(bpf_map_update_elem(&watched,&key,&create,BPF_NOEXIST)) {COUNT(s,rejected);return 0;}
+			bpf_map_delete_elem(&holders,&key);
+			w=bpf_map_lookup_elem(&watched,&key);
+		}
+	}
+	if(phase==3 && w) {
+		rec.id=actor.id;rec.generation=actor.generation;rec.tid=tid;
+		rec.task_start=BPF_CORE_READ(task,start_boottime);rec.acquired_ns=now;
+		if(bpf_map_update_elem(&holders,&key,&rec,BPF_ANY)) COUNT(s,rejected);
+	}
+	if(w) {
+		if(key.kind==2 && phase!=1 && phase!=8) {
+			__u64 seq;
+			/* A bounded prefix, not dropped records in an allegedly complete window. */
+			if(w->events>64) return 0;
+			seq=__sync_fetch_and_add(&w->events,1);
+			if(seq==64) phase=11;
+			else if(seq>64) return 0;
+		}
+		e.base.id=w->id;e.base.generation=w->generation;e.base.sequence_ns=w->epoch;
+		e.base.time_ns=now;e.base.type=CIS_OWNER_EVENT;e.base.object=key.object;
+		e.base.cpu=bpf_get_smp_processor_id();e.base.tid=tid;e.base.stack_id=-1;
+		e.phase=phase;e.resource=key.kind;e.skipped=s?s->owner_skipped:1;
+		e.actor_id=actor.id;e.actor_generation=actor.generation;
+		e.actor_start=BPF_CORE_READ(task,start_boottime);e.base.flags=ctx->args[4];
+		if(phase==2 && owner) {
+			identity(owner,&holder);
+			e.holder_id=holder.id;e.holder_generation=holder.generation;
+			e.holder_tid=((__u64)BPF_CORE_READ(owner,tgid)<<32)|(__u32)BPF_CORE_READ(owner,pid);
+			e.holder_start=BPF_CORE_READ(owner,start_boottime);
+		}
+		if(phase==2) e.base.stack_id=bpf_get_stackid(ctx,&stacks,0);
+		if(phase!=5) owner_emit(ctx,&e);
+		if(phase==2 || phase==3) {
+			struct cis_owner_record *h=bpf_map_lookup_elem(&holders,&key);
+			if(h) {
+				struct cis_owner_task ht={.key=key,.task_start=h->task_start};
+				bpf_map_update_elem(&holder_tasks,&h->tid,&ht,BPF_ANY);
+			}
+		}
+	}
+	if(phase==1 || phase==4 || phase==7 || phase==8) {
+		old=bpf_map_lookup_elem(&holders,&key);
+		if(old) {
+			struct cis_owner_task *ht=bpf_map_lookup_elem(&holder_tasks,&old->tid);
+			if(ht && ht->key.object==key.object && ht->key.kind==key.kind)
+				bpf_map_delete_elem(&holder_tasks,&old->tid);
+		}
+		bpf_map_delete_elem(&holders,&key);
+	}
+	if(phase==1 || phase==7 || phase==8) bpf_map_delete_elem(&watched,&key);
+	return 0;
+}
+
+static __always_inline void owner_schedule(void *ctx,struct task_struct *task,__u32 phase,__u64 flags)
+{
+	__u64 tid=((__u64)BPF_CORE_READ(task,tgid)<<32)|(__u32)BPF_CORE_READ(task,pid);
+	struct cis_owner_task *ht=bpf_map_lookup_elem(&holder_tasks,&tid);
+	struct cis_owner_record *h;
+	struct cis_watch *w;
+	struct cis_owner_event e={0};
+	__u64 now=bpf_ktime_get_ns();
+	if(!ht || ht->task_start!=BPF_CORE_READ(task,start_boottime)) return;
+	w=bpf_map_lookup_elem(&watched,&ht->key);
+	h=bpf_map_lookup_elem(&holders,&ht->key);
+	if(!live_watch(w,now) || (ht->key.kind==2 && w->events>64) || !h || h->tid!=tid || h->task_start!=ht->task_start) return;
+	e.base.id=w->id;e.base.generation=w->generation;e.base.sequence_ns=w->epoch;
+	e.base.time_ns=now;e.base.type=CIS_OWNER_EVENT;e.base.object=ht->key.object;
+	e.base.tid=tid;e.base.cpu=bpf_get_smp_processor_id();e.base.flags=flags;
+	e.base.stack_id=-1;e.phase=phase;e.resource=ht->key.kind;
+	e.actor_id=h->id;e.actor_generation=h->generation;e.actor_start=h->task_start;
+	owner_emit(ctx,&e);
+}
+
+SEC("raw_tp/sched_switch")
+int owner_switch(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct cis_bpf_stats *s=statistics(); COUNT(s,received);
+	owner_schedule(ctx,(void*)ctx->args[1],9,ctx->args[0]?1:ctx->args[3]?2:4);
+	owner_schedule(ctx,(void*)ctx->args[2],10,0);
+	return 0;
 }
