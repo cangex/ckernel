@@ -211,6 +211,13 @@ completed periodic runtime acceptance. Preserve original failed measurements.
 Admission I/O and failure visibility
 -----------------------------------
 
+Session resource profiles are selected before libbpf load: IP loads one program
+and four maps; owner loads two programs and ten maps. Unused programs are not
+verified/loaded and unused maps are not allocated. Sampling periods, target
+identity handling and owner evidence are unchanged. The explicit legacy tool
+retains its existing collector selection. Inventory and memory reporting skip
+disabled objects rather than treating their absent FDs as missing evidence.
+
 The first session journal and output-file creation use the same single bounded
 I/O slot as the inventory and final journal. No worker exists during this first
 step. Status, cancel, and stop remain available; a cancelled or timed-out

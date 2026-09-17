@@ -124,6 +124,9 @@ for kind in ('ip','owner'):
     record=finished(sid)
     print('CIS_PROFILE_FUNCTION '+json.dumps(record),flush=True)
     assert record['result']=='COMPLETE', record
+    inventory=record['inventory']
+    assert len(inventory['programs']) == (1 if kind=='ip' else 2), inventory
+    assert len(inventory['maps']) == (4 if kind=='ip' else 10), inventory
     duplicate=begin(kind,'functional'+kind)
     assert duplicate['session_id']==sid
     request('cancel',session=sid)

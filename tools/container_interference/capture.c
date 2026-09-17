@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "include/cis.h"
 #include "include/cis_trigger.h"
+#include "include/cis_capture_profile.h"
 #include <linux/types.h>
 #include "include/cis_event.h"
 #include <bpf/bpf.h>
@@ -65,10 +66,12 @@ static void memory_inventory(struct capture *c,int pages)
 	unsigned int missing=0;
 	char detail[600];
 	bpf_object__for_each_map(map,c->object) {
+		if (!bpf_map__autocreate(map)) continue;
 		if(fd_memlock(bpf_map__fd(map),&value)) missing++;
 		else maps+=value;
 	}
 	bpf_object__for_each_program(program,c->object) {
+		if (!bpf_program__autoload(program)) continue;
 		if(fd_memlock(bpf_program__fd(program),&value)) missing++;
 		else programs+=value;
 	}
@@ -324,6 +327,7 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 {
 	struct capture *c=calloc(1,sizeof(*c));
 	struct bpf_program *p;
+	struct bpf_map *map;
 	int i,prog_fd,pages=CIS_BUFFER_PAGES;
 	struct rlimit limit={RLIM_INFINITY,RLIM_INFINITY};
 	char detail[256];
@@ -338,6 +342,12 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	if(setrlimit(RLIMIT_MEMLOCK,&limit)) goto fail;
 	c->object=bpf_object__open_file(path,NULL);
 	if(libbpf_get_error(c->object)) { c->object=NULL; goto fail; }
+	/* Exclude unused collectors before verification/map allocation, not merely
+	 * from attachment. IP sessions cannot silently prepare owner machinery. */
+	bpf_object__for_each_program(p,c->object)
+		if(bpf_program__set_autoload(p,cis_profile_program(ctx->session_collector,bpf_program__name(p)))) goto fail;
+	bpf_object__for_each_map(map,c->object)
+		if(bpf_map__set_autocreate(map,cis_profile_map(ctx->session_collector,bpf_map__name(map)))) goto fail;
 	if(bpf_object__load(c->object)) goto fail;
 	c->roots=mapfd(c,"roots"); c->targets=mapfd(c,"targets"); c->pending=mapfd(c,"pending");
 	c->stacks=mapfd(c,"stacks"); c->stats=mapfd(c,"stats");
@@ -401,12 +411,14 @@ int cis_capture_inventory(struct cis_context *ctx,char *out,size_t cap)
 	n+=snprintf(out+n,cap-n,"{\"maps\":[");
 	bpf_object__for_each_map(m,c->object) {
 		struct bpf_map_info info={0}; __u32 size=sizeof(info);
+		if(!bpf_map__autocreate(m)) continue;
 		if(bpf_obj_get_info_by_fd(bpf_map__fd(m),&info,&size) || cap-n<64) return -EIO;
 		n+=snprintf(out+n,cap-n,"%s%u",count++?",":"",info.id);
 	}
 	n+=snprintf(out+n,cap-n,"],\"programs\":["); count=0;
 	bpf_object__for_each_program(p,c->object) {
 		struct bpf_prog_info info={0}; __u32 size=sizeof(info);
+		if(!bpf_program__autoload(p)) continue;
 		if(bpf_obj_get_info_by_fd(bpf_program__fd(p),&info,&size) || cap-n<64) return -EIO;
 		n+=snprintf(out+n,cap-n,"%s%u",count++?",":"",info.id);
 	}
@@ -564,9 +576,10 @@ void cis_capture_stop(struct cis_context *ctx)
 	}
 	if(c->ring) perf_buffer__consume(c->ring);
 	/* Keep immutable identities and watches until buffered records are interpreted. */
-	if(ctx->session_id && c->object) for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
+	if(ctx->session_id && ctx->session_collector!=1 && c->object) for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
 		struct cis_root *r=&ctx->roots[i];
-		unfinished(c,r); unfinished_work(c,r); export_stacks(c,r); clear_watches(c,r);
+		if(ctx->session_collector!=2) { unfinished(c,r); unfinished_work(c,r); }
+		export_stacks(c,r); clear_watches(c,r);
 		bpf_map_delete_elem(c->targets,&r->id);
 	}
 	if(c->cpu_stats) {
