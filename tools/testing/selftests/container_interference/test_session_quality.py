@@ -18,6 +18,15 @@ class Quality(unittest.TestCase):
     def test_complete(self):
         self.assertEqual(assess(self.record())['status'], 'PASS')
 
+    def test_last_unemitted_recursion_not_lost(self):
+        r = self.record()
+        r['collector'] = 'owner'
+        self.assertEqual(assess(r)['status'], 'BLOCKED')
+        r['receipt']['producer_recursion'] = dict(required=True, valid=True, skipped=0)
+        self.assertEqual(assess(r)['status'], 'PASS')
+        r['receipt']['producer_recursion']['skipped'] = 1
+        self.assertIn('producer_recursion.skipped', assess(r)['defects'])
+
     def test_skipped_not_rescued_by_complete_label(self):
         r = self.record()
         r['receipt']['terminal']['owner_skipped'] = 25

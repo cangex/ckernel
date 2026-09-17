@@ -7,6 +7,7 @@
 /budget_test
 /metrics_test
 /fast_test
+/recursion_snapshot_test
 /entry_workload
 /entry_storm
 /session_launch

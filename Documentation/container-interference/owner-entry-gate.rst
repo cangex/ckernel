@@ -38,3 +38,12 @@ address reuse, owner switches/preemption, WAIT abort and cross-window cases.
 Fixture delays are opt-in: ``enable_dentry_delay=1`` is only for dentry ground
 truth. Ordinary session/latency tests leave that callback unregistered.
 No historical latency PASS may be transferred to this new kernel or fixture.
+
+Session workers also read quiescent producer counters before attachment and
+after synchronous detach. BPF's last observed skip counter cannot detect a
+skip after its final callback. The producer delta is a separate required owner
+receipt field; either positive delta rejects completeness. Missing debugfs,
+an active unrelated consumer, counter regression or changed possible-CPU set
+rejects this audit rather than assuming zero. The diagnostic stack/address
+option remains off in cost runs: base per-CPU counters exist independently.
+Boundary reads cost preparation/drain CPU and are not free or in-window I/O.

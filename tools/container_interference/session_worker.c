@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #define _GNU_SOURCE
 #include "include/cis.h"
+#include "include/cis_recursion_snapshot.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -27,6 +28,16 @@ static uint64_t cpu_ns(void)
 	return ts.tv_sec*1000000000ULL+ts.tv_nsec;
 }
 
+static int recursion_snapshot(struct cis_recursion_snapshot *s)
+{
+	FILE *file=fopen("/sys/kernel/debug/cis_recursion","r");
+	int rc;
+	if(!file) return -1;
+	rc=cis_recursion_read(file,s);
+	fclose(file);
+	return rc;
+}
+
 /* No shell, process-name cleanup, pins, or reused BPF objects. Inherited FDs are
  * supplied only by the administrator controller, with immutable identities. */
 int main(int argc,char **argv)
@@ -34,10 +45,13 @@ int main(int argc,char **argv)
 	struct cis_context *ctx=calloc(1,sizeof(*ctx));
 	struct pollfd control;
 	struct rusage usage;
+	struct cis_recursion_snapshot recursion_before,recursion_after;
 	char packet[4096],inventory[3072];
 	const char *reason="COMPLETE";
 	uint64_t begin=cis_clock_ns(),prepared=0,start=0,end=0,stopped=0,cpu_begin=cpu_ns(),budget_cpu=0,budget_time=0;
 	uint64_t prepared_cpu=0,capture_cpu=0,stop_cpu=0;
+	uint64_t recursion_skipped=0;
+	int recursion_started=0,recursion_valid=0;
 	int i,targets=0,err=0,stop_error=0,capture_error=0,channel,window,parent=getppid();
 	if(!ctx || argc<9 || argc>8+CIS_MAX_ROOTS) return 2;
 	channel=atoi(argv[1]); ctx->output_fd=atoi(argv[2]);
@@ -70,6 +84,10 @@ int main(int argc,char **argv)
 		r->generation=gen; r->session_target=role=='t'; targets+=r->session_target; close(fd);
 	}
 	if(targets<1 || targets>2) { err=1; reason="TARGETS"; goto drain; }
+	if(ctx->session_collector==2) {
+		if(recursion_snapshot(&recursion_before)) { err=1; reason="RECURSION_BASELINE"; goto drain; }
+		recursion_started=1;
+	}
 	if(cis_symbols_load(ctx)) { err=1; reason="SYMBOLS"; goto drain; }
 	if(cis_capture_prepare(ctx,argv[6])) { err=1; reason="PREPARE"; goto drain; }
 	if(cis_capture_inventory(ctx,inventory,sizeof(inventory))) { err=1; reason="INVENTORY"; goto drain; }
@@ -124,6 +142,21 @@ drain:
 	stop_error=cis_capture_quiesce(ctx); stopped=cis_clock_ns();
 	stop_cpu=cpu_ns();
 	cis_capture_stop(ctx);
+	if(ctx->session_collector==2 && recursion_started) {
+		if(!recursion_snapshot(&recursion_after) &&
+		   !cis_recursion_delta(&recursion_before,&recursion_after,&recursion_skipped)) {
+			recursion_valid=1;
+			if(recursion_skipped) { err=1; reason="RECURSION_GAP"; }
+		} else { err=1; reason="RECURSION_TERMINAL"; }
+	}
+	/* A skip after the last emitted event cannot be recovered from BPF's last
+	 * observed source counter. Preserve that counter and audit the producer too. */
+	{
+		char detail[256];
+		snprintf(detail,sizeof(detail),"required=%u valid=%u skipped=%llu scope=quiescent_owner_session",
+			ctx->session_collector==2,recursion_valid,(unsigned long long)recursion_skipped);
+		cis_report(ctx,"producer_recursion",NULL,detail);
+	}
 	cis_registry_destroy(ctx); cis_symbols_free(ctx);
 	if(ctx->errors || ctx->dropped || ctx->output_error) err=1;
 	if(err && !strcmp(reason,"COMPLETE")) reason="QUALITY";
@@ -139,6 +172,14 @@ drain:
 		ctx->terminal_valid?"true":"false",(unsigned long long)ctx->terminal_received,
 		(unsigned long long)ctx->terminal_emitted,(unsigned long long)ctx->terminal_rejected,
 		(unsigned long long)ctx->terminal_lost,(unsigned long long)ctx->terminal_owner_skipped);
+	/* Append without enlarging the hot-path event schema. */
+	{
+		size_t n=strlen(packet);
+		if(n && packet[n-1]=='}')
+			snprintf(packet+n-1,sizeof(packet)-n+1,",\"producer_recursion\":{\"required\":%s,\"valid\":%s,\"skipped\":%llu}}",
+				ctx->session_collector==2?"true":"false",recursion_valid?"true":"false",
+				(unsigned long long)recursion_skipped);
+	}
 	notify(channel,packet); close(channel); free(ctx);
 	return stop_error?4:err?1:0;
 }

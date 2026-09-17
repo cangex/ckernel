@@ -4,7 +4,7 @@ CFLAGS ?= -O2 -g
 CFLAGS += -Wall -Wextra -Werror
 LDLIBS += -pthread
 TEST_GEN_PROGS := workload baseline identity fleet entry_workload entry_storm session_launch
-TEST_GEN_PROGS_EXTENDED := logic_test budget_test metrics_test fast_test
+TEST_GEN_PROGS_EXTENDED := logic_test budget_test metrics_test fast_test recursion_snapshot_test
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
@@ -14,6 +14,7 @@ run_tests: all
 	./budget_test
 	./metrics_test
 	./fast_test
+	./recursion_snapshot_test
 	python3 owner_test.py
 	python3 profile_test.py
 	./baseline
@@ -24,6 +25,8 @@ budget_test: budget_test.c ../../../container_interference/budget.c ../../../con
 metrics_test: metrics_test.c ../../../container_interference/counters.c ../../../container_interference/include/cis.h ../../../container_interference/include/cis_metrics_schedule.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.c,$^) -Wl,--wrap=clock_gettime -o $@
 fast_test: fast_test.c ../../../container_interference/include/cis_trigger.h
+	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@
+recursion_snapshot_test: recursion_snapshot_test.c ../../../container_interference/include/cis_recursion_snapshot.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@
 clean:
 	rm -f $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)

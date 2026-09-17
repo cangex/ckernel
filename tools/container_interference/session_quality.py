@@ -20,6 +20,14 @@ def assess(record):
     for key in ('rejected', 'lost', 'owner_skipped'):
         if type(terminal.get(key)) is int and terminal[key] > 0:
             defects.append('terminal.' + key)
+    if record.get('collector') == 'owner':
+        producer = receipt.get('producer_recursion') or {}
+        if producer.get('required') is not True or producer.get('valid') is not True:
+            missing.append('producer_recursion')
+        if type(producer.get('skipped')) is not int or producer['skipped'] < 0:
+            missing.append('producer_recursion.skipped')
+        elif producer['skipped']:
+            defects.append('producer_recursion.skipped')
     budget = (record.get('budget_reason') or
               (record.get('process_cpu_budget') or {}).get('violation'))
     reason = receipt.get('reason')
