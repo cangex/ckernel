@@ -15,7 +15,7 @@ from periodic_plan import P1_CHECKS, digest
 from session_check import analyze, extract
 
 SOURCE_KEYS = ('controller_sha256', 'worker_sha256', 'residue_sha256',
-               'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256')
+               'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256', 'kernel_cmdline_sha256')
 
 
 def source_identity(value):

@@ -249,7 +249,7 @@ class ControllerTests(unittest.TestCase):
         c.args = Mock(test_faults=False)
         c.survey_epoch = 0
         c.manifest = {key: 'test' for key in ('controller_sha256', 'worker_sha256',
-            'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256')}
+            'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256', 'kernel_cmdline_sha256')}
         c.roots['1:2'] = dict(fd=123, path='/sys/fs/cgroup/target', id=1, generation=2)
         c.retire_history = c.storage_admit = Mock()
         c.persist = Mock()

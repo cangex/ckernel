@@ -42,12 +42,14 @@ class PlanTests(unittest.TestCase):
 
     def test_admission_does_not_accept_implementation(self):
         manifest = dict(controller_sha256='a', worker_sha256='b', bpf_sha256='c',
-                        support_sha256='d', kernel_release='e', kernel_notes_sha256='f', residue_sha256='g')
+                        support_sha256='d', kernel_release='e', kernel_notes_sha256='f', residue_sha256='g',
+                        kernel_cmdline_sha256='h')
         value = dict(schema='cis-p1-admission-v2', source=manifest, phase_complete=True,
                      checks={key: 'PASS' for key in P1_CHECKS}, evidence_index_sha256='0'*64)
         self.assertEqual(len(require_acceptance(value, manifest)), 64)
         for field, change in (('phase_complete', False), ('checks', {'idle_p99': 'PASS'}),
                               ('source', dict(manifest, worker_sha256='different')),
+                              ('source', dict(manifest, kernel_cmdline_sha256='gate_changed')),
                               ('evidence_index_sha256', 'x'*64)):
             with self.assertRaises(ValueError): require_acceptance(dict(value, **{field: change}), manifest)
 

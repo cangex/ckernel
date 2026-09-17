@@ -180,6 +180,7 @@ class Controller:
                             for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py', 'child_usage.py')}),
                          'kernel_release': os.uname().release,
                          'kernel_notes_sha256': hashlib.sha256(Path('/sys/kernel/notes').read_bytes()).hexdigest(),
+                         'kernel_cmdline_sha256': hashlib.sha256(Path('/proc/cmdline').read_bytes()).hexdigest(),
                          'memory_total_complete': False}
         # Unfinished journals are not guessed safe from a recycled PID or path.
         for file in self.directory.glob('*.json'):
@@ -424,7 +425,8 @@ class Controller:
                                         for key, root in identities.items()} if request['collector'] == 'owner' else {},
                       identity_count=len(identities), identity_protocol=2,
                       source_identity={key: self.manifest[key] for key in ('controller_sha256', 'worker_sha256',
-                                       'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256')},
+                                       'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256',
+                                       'kernel_cmdline_sha256')},
                       transitions=[{'state': 'ADMIT', 'time_ns': now()}, {'state': 'PREPARE', 'time_ns': now()}])
         record['config_hash'] = hashlib.sha256(encoded({'request': request, 'manifest': self.manifest,
                                                        'identities': record['owner_identities']})).hexdigest()

@@ -47,3 +47,6 @@ an active unrelated consumer, counter regression or changed possible-CPU set
 rejects this audit rather than assuming zero. The diagnostic stack/address
 option remains off in cost runs: base per-CPU counters exist independently.
 Boundary reads cost preparation/drain CPU and are not free or in-window I/O.
+Admission additionally binds the full boot-command-line hash. Matching Image
+notes alone cannot distinguish gate-on, gate-off and diagnostic-counter modes.
+Changing these boot flags invalidates acceptance even on the same Image.
