@@ -16,12 +16,12 @@ struct cis_recursion_snapshot {
 static int cis_recursion_read(FILE *file, struct cis_recursion_snapshot *s)
 {
 	char line[512];
-	unsigned int version,enabled,active,cpu;
+	unsigned int version,enabled,active,synchronized,cpu;
 	unsigned long long skipped;
 	memset(s,0,sizeof(*s));
 	if(!file || !fgets(line,sizeof(line),file) ||
-	   sscanf(line,"version=%u enabled=%u trace_active=%u",&version,&enabled,&active)!=3 ||
-	   version!=2 || active) return -1;
+	   sscanf(line,"version=%u enabled=%u trace_active=%u synchronized=%u",&version,&enabled,&active,&synchronized)!=4 ||
+	   version!=3 || active || synchronized!=1) return -1;
 	while(fgets(line,sizeof(line),file)) {
 		if(strncmp(line,"cpu=",4)) continue;
 		if(sscanf(line,"cpu=%u skipped=%llu",&cpu,&skipped)!=2 ||

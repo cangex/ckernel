@@ -47,6 +47,12 @@ an active unrelated consumer, counter regression or changed possible-CPU set
 rejects this audit rather than assuming zero. The diagnostic stack/address
 option remains off in cost runs: base per-CPU counters exist independently.
 Boundary reads cost preparation/drain CPU and are not free or in-window I/O.
+Snapshot v3 explicitly calls ``tracepoint_synchronize_unregister()`` after
+links close and before BPF terminal map/ring consumption. In this OLK,
+``bpf_probe_unregister`` merely unregisters; last-link close by itself is not
+a grace-period barrier. Reads fail while another owner consumer is active.
+The worker rejects older snapshot versions. Waiting time is bounded only by
+the existing cooperative controller timeout, not an RCU hard-time guarantee.
 Admission additionally binds the full boot-command-line hash. Matching Image
 notes alone cannot distinguish gate-on, gate-off and diagnostic-counter modes.
 Changing these boot flags invalidates acceptance even on the same Image.

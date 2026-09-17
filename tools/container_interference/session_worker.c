@@ -139,9 +139,7 @@ int main(int argc,char **argv)
 	if(cancelled) reason="CANCELLED";
 drain:
 	notify(channel,"{\"state\":\"DRAIN\"}");
-	stop_error=cis_capture_quiesce(ctx); stopped=cis_clock_ns();
-	stop_cpu=cpu_ns();
-	cis_capture_stop(ctx);
+	stop_error=cis_capture_quiesce(ctx);
 	if(ctx->session_collector==2 && recursion_started) {
 		if(!recursion_snapshot(&recursion_after) &&
 		   !cis_recursion_delta(&recursion_before,&recursion_after,&recursion_skipped)) {
@@ -149,6 +147,12 @@ drain:
 			if(recursion_skipped) { err=1; reason="RECURSION_GAP"; }
 		} else { err=1; reason="RECURSION_TERMINAL"; }
 	}
+	/* Source snapshot v3 waits out raw-tp callbacks before map/ring teardown.
+	 * A failed barrier cannot produce a valid terminal capture receipt. */
+	if(ctx->session_collector==2 && recursion_started && !recursion_valid && !stop_error)
+		stop_error=-EIO;
+	stopped=cis_clock_ns(); stop_cpu=cpu_ns();
+	cis_capture_stop(ctx);
 	/* A skip after the last emitted event cannot be recovered from BPF's last
 	 * observed source counter. Preserve that counter and audit the producer too. */
 	{

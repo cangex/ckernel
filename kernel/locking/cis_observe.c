@@ -104,7 +104,15 @@ static int cis_diag_show(struct seq_file *m, void *unused)
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-	seq_printf(m, "version=2 enabled=%u trace_active=%u bytes_per_possible_cpu=%zu snapshot=non_atomic wait_gate=%u gate_bytes=%zu\n",
+	if (trace_cis_lock_state_enabled())
+		return -EBUSY;
+	/* Last-link close only unregisters callbacks in this OLK. Complete the
+	 * grace periods before userspace consumes terminal BPF/source counters.
+	 * This is control-plane work, never part of a lock callback. */
+	tracepoint_synchronize_unregister();
+	if (trace_cis_lock_state_enabled())
+		return -EBUSY;
+	seq_printf(m, "version=3 enabled=%u trace_active=%u synchronized=1 bytes_per_possible_cpu=%zu snapshot=non_atomic wait_gate=%u gate_bytes=%zu\n",
 		   diag, trace_cis_lock_state_enabled(), sizeof(struct cis_recursion_diag),
 		   wait_gate, sizeof(cis_waited));
 	for_each_possible_cpu(cpu) {
