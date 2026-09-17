@@ -2,6 +2,7 @@
 CC ?= cc
 CLANG ?= clang
 BPFTOOL ?= bpftool
+PYTHON ?= python3
 CFLAGS ?= -O2 -g
 CFLAGS += -Wall -Wextra -Werror
 LDLIBS += -lbpf -lelf -lz
@@ -22,4 +23,8 @@ bpf/cis.bpf.o: bpf/cis.bpf.c bpf/vmlinux.h include/cis_event.h
 	$(CLANG) -O2 -g -target bpf -D__TARGET_ARCH_arm64 -Wall -Werror -c $< -o $@
 clean:
 	rm -f cisd cisctl session-worker session-residue bpf/cis.bpf.o bpf/vmlinux.h bpf/vmlinux.h.tmp
-.PHONY: all clean
+check-python:
+	$(PYTHON) -m unittest discover -s ../testing/selftests/container_interference -p 'test_*.py'
+	$(PYTHON) ../testing/selftests/container_interference/owner_test.py
+	$(PYTHON) ../testing/selftests/container_interference/profile_test.py
+.PHONY: all clean check-python

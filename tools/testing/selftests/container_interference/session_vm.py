@@ -50,7 +50,7 @@ def finished(sid, allow_fault=False):
     until = time.monotonic()+20
     while time.monotonic()<until:
         record = request('status', session=sid)
-        if record['state'] in ('IDLE', 'FAULTED'):
+        if record.get('finalized') and record['state'] in ('IDLE', 'FAULTED'):
             if (record['state'] != 'IDLE' and not allow_fault) or not record.get('objects_absent'):
                 raise AssertionError(record)
             return record

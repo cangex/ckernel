@@ -64,7 +64,7 @@ def require_acceptance(evidence, manifest):
     if evidence.get('phase_complete') is not True:
         raise ValueError('P1 has not passed')
     expected = {key: manifest[key] for key in
-                ('controller_sha256', 'worker_sha256', 'bpf_sha256', 'support_sha256',
+                ('controller_sha256', 'worker_sha256', 'residue_sha256', 'bpf_sha256', 'support_sha256',
                  'kernel_release', 'kernel_notes_sha256')}
     if evidence.get('source') != expected:
         raise ValueError('P1 receipt does not match current binaries/modules/kernel')

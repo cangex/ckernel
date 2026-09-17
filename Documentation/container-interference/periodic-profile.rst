@@ -1,10 +1,12 @@
-Single-shot profile foundation (P0/P1)
-====================================
+Bounded profile sessions and periodic survey prototype
+=====================================================
 
 Scope
 -----
-Explicit single-shot IP or owner captures, not periodic scheduling, automatic
-optimization, CKernel integration or completed S6. Standard-library Python
+Explicit single-shot IP or owner captures and receipt-gated periodic IP surveys.
+This is not automatic optimization, CKernel integration or completed S6.
+The periodic implementation is experimental: offline tests do not constitute
+ARM64 build, VM runtime or performance acceptance. Standard-library Python
 controls bounded identity/journal state; C/libbpf owns capture. Both processes
 count toward costs. Legacy cisd/cisctl protocol remains unchanged.
 Requires the fixed ARM64 observation kernel, 4-KiB pages, cgroup v2, initial
@@ -29,14 +31,20 @@ FDs only, with no periodic root scan or PSI thresholds. One host-wide session
 including drain; one or two targets; 256 registered roots. Fresh maps/buffers
 per session, never pinned. Distinct session and stable registration generations.
 Unknown fields/versions, stale identities, overlapping roots, and nonce-content
-collisions are rejected. Idempotency history is bounded at 256 persistent records;
-archive explicitly when idle rather than silently reusing an evicted nonce.
+collisions are rejected. Idempotency history is bounded at 256 persistent records.
+Without a periodic plan, reaching this bound rejects new sessions. With a plan,
+only expired, cleanup-verified, retention-managed records from this boot can be
+retired. Old P1 evidence and faulted records are not deleted. A new durable nonce
+epoch precedes deletion; expired-epoch requests are rejected, never replayed.
 
 Lifecycle
 ---------
 ADMIT -> PREPARE -> ARMED -> CAPTURING -> DRAIN -> VERIFY -> IDLE.
 Uncertain cleanup yields FAULTED. COMPLETE/PARTIAL/CANCELLED/FAILED are separate
 results: safe cleanup does not imply complete evidence.
+Only a record with ``finalized=true`` is terminal. During durable publication,
+status remains VERIFY; the next session cannot start. Status omits large boundary
+snapshots and survey payloads, which remain in the local administrator-only JSON.
 
 Before enabling a producer the worker sends map/program IDs; the controller
 durably journals ownership and then acknowledges ARM. Perf is disabled during
@@ -57,7 +65,10 @@ Budgets and evidence
 --------------------
 Initial defaults: 2-s window; prepare 10 s; cleanup 5 s; residue verification
 2 s; nominal IP 1000/s; detailed entry 200000/s; output 16 MiB; worker steady
-CPU guard 20 ms/s; combined RSS guard 64 MiB. These are watchdog thresholds,
+CPU guard 20 ms/s; combined RSS guard 64 MiB. A controller-side cooperative guard
+also checks process CPU including reaped helpers and live-child tick estimates.
+Default limits are 250 ms preparation, 20 ms per capture second, 250 ms drain
+and 600 ms whole-session process CPU. These are prototype stop policies,
 not kernel worst-case latency guarantees. Controller+worker CPU and kernel
 allocations remain acceptance measurements: RSS and worker guards alone do not
 prove the inclusive 64-MiB/20-ms contract. Preparation and drain are not hidden
@@ -78,3 +89,110 @@ cancellation, prepare failure, fixed repeat cycles and optional n=5 paired
 costs. Preserve old analysis/owner/profile regressions; zero discovered tests
 is not PASS. See the external validation record for actual pass/fail/blocked
 gates. A COMPLETE session receipt does not mean the development phase passed.
+
+Periodic control (P2)
+--------------------
+The same controller admits manual and periodic work. There is one active or
+draining session per host and at most two targets per session. A configured plan
+also limits manual requests, even when periodic scheduling is paused. Automatic
+owner escalation is deliberately absent.
+
+Configure and inspect without starting collection::
+
+  {"version":1,"op":"schedule_configure","plan":{"interval_s":60,"window_ms":2000}}
+  {"version":1,"op":"schedule_status","offset":0}
+  {"version":1,"op":"status"}
+
+``schedule_status`` paginates 16 roots, using ``next_offset``. Manual starts after
+configuration must include the ``nonce_epoch`` returned by status. Changes to
+configuration, history rotation and controller restart invalidate old epochs.
+Persisted plans restart PAUSED and require explicit root registration; they do
+not guess surviving container identities or replay missed slots.
+
+Enable is a separate request::
+
+  {"version":1,"op":"schedule_enable"}
+  {"version":1,"op":"schedule_pause"}
+  {"version":1,"op":"survey_report","target":"ID:GEN"}
+  {"version":1,"op":"survey_epoch"}
+
+Enabling requires ``--p1-acceptance FILE``. The private root-owned receipt uses
+schema ``cis-p1-admission-v1``, has ``phase_complete=true``, matches the running
+controller/worker/BPF/support-module hashes and kernel notes/release, and has
+PASS for every key in ``periodic_plan.P1_CHECKS``. It must reference the raw
+evidence index SHA256. This is a trusted administrator admission assertion,
+not a replacement for auditing the actual evidence. Never create an all-PASS
+receipt to get around failed or absent measurements. Old P1 blocked reports do
+not qualify. There is no test flag to bypass this runtime gate.
+
+At each due slot the least-recently-attempted root gets priority. Every fourth
+slot may revisit a candidate using the second position. Missed slots are skipped,
+not caught up. Jitter uses a recorded seed; it only extends the base interval.
+No timer reads all roots' metrics every second. Waiting periods have no sampling
+probes or PSI triggers. Manual diagnostics consume the same host interval.
+
+The ideal round time is ``ceil(N/k)*interval``; the conservative fairness bound
+is ``N*(interval+jitter)`` when roots are stable and every slot succeeds. Neither
+is a valid-sample or discovery guarantee. A 60-second interval for 256 roots and
+two targets takes at least 128 minutes per ideal round. Failures, manual work or
+sample scarcity extend this. Plans cannot promise an infeasible sample-age SLO.
+
+Survey semantics
+----------------
+Read only selected roots at session boundaries. Every counter file has its own
+read timestamps. The snapshots enclose preparation/cleanup gaps, not an atomic
+snapshot aligned to the exact perf window. Missing counters remain missing;
+deletion, generation mismatch, counter reset and configuration change invalidate
+comparison rather than creating zero deltas.
+
+IP records carry session, root generation, CPU and sample weight. ``ip_event``
+describes each CPU's sampling unit. Mixed/unknown PMU units are not summed or
+ranked as a common cost and do not qualify as comparable surveys. Top IPs can
+include interrupt context; this is not object-holder or causal evidence.
+
+The first valid sample establishes a reference, not a healthy baseline. That
+reference is frozen until the epoch changes, rather than learning persistent
+anomalies as normal. A 1.5x rate increase AND an absolute increase of 10000
+microseconds/second in CPU use or PSI wait is an experimental candidate rule,
+not a validated interference detector. No business denominator means no business
+interference percentage or cycles per successful operation.
+
+Identity, CPU/memory configuration, collector and explicit administrative epoch
+bind comparisons. Image, credentials, mounts and workload phases are not all
+automatically visible; administrators must notify relevant changes. Reports
+distinguish last service from last valid sample. Unobserved does not mean normal.
+
+Budget and failure boundaries
+-----------------------------
+Slow ARM journaling, residue verification and final reporting use a single
+bounded IO slot; no ARM before durable inventory and no next session before
+publication. Initial admission persistence, registration and explicit recovery
+still perform synchronous IO and need further fault/runtime validation. An
+uninterruptible filesystem operation has no unconditional shutdown bound.
+
+CPU guards use coarse child ticks and are cooperative, not instantaneous quotas.
+Safe cleanup may exceed a budget; the result is downgraded, not reported as a
+successful measurement. Management processes do not account for all BPF/PMU
+entry work or asynchronous kernel reclaim. Per-session pre-write CPU is persisted;
+post-publication CPU is available in live status, not recursively included in
+the same write. Whole-cycle acceptance must measure the complete external window.
+
+RSS includes sampled controller, worker and helper processes, can double-count
+shared pages, and excludes kernel allocations. Default disk admission reserves
+20 MiB per next session and requires 32 MiB free; total owned-session storage is
+capped. Retention TTL may prevent reclamation, so storage exhaustion can suspend
+service even with bounded memory. This is reported, not resolved by deleting
+historical evidence or shortening TTL silently.
+
+P2 validation
+-------------
+``test_periodic.py`` and ``test_periodic_controller.py`` exercise the model,
+admission, budgets, identity/PMU boundaries, fairness, idempotency and asynchronous
+publication. They are offline tests, not Linux resource or latency evidence.
+``periodic_vm.py`` defaults to a negative missing-receipt test; positive mode
+requires real P1 admission and runs two or three actual 60-second cycles with
+namespace containers. It is functional, not n=5 cost/coverage acceptance.
+
+All P1 runtime gaps and cycle-level P99/CPU/memory/coverage gates remain required.
+Do not translate IMPLEMENTED, model PASS, missing hardware, or a gate refusal into
+completed periodic runtime acceptance. Preserve original failed measurements.

@@ -371,6 +371,10 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		if(fd<0 && errno==ENODEV) continue;
 		if(fd<0) goto fail;
 		c->perf_fds[i]=fd;
+		snprintf(detail,sizeof(detail),"cpu=%d unit=%s sample_period=%llu",i,
+			attr.type==PERF_TYPE_SOFTWARE?"kernel_cpu_clock_ns":"kernel_cycles",
+			(unsigned long long)attr.sample_period);
+		cis_report(ctx,"ip_event",NULL,detail);
 		c->perf_page_size=sysconf(_SC_PAGESIZE);
 		c->perf_pages[i]=mmap(NULL,2*c->perf_page_size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
 		if(c->perf_pages[i]==MAP_FAILED) { c->perf_pages[i]=NULL; goto fail; }
