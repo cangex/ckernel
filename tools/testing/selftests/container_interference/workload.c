@@ -228,6 +228,14 @@ int main(int argc, char **argv)
     if (!seconds || seconds > 300) return 4;
     uint64_t start = argc>3?strtoull(argv[3],NULL,10):cis_now_ns();
     uint64_t end = start + seconds * 1000000000ULL, ops = 0;
+    int warmed = (!strcmp(argv[1],"open-loop") ? argc>5 && !strcmp(argv[5],"warm4096") :
+                  !strcmp(argv[1],"throughput") && argc>4 && !strcmp(argv[4],"warm4096"));
+    if(warmed) {
+        for(unsigned int i=0;i<4096;i++) if(one_operation()) return 5;
+        uint64_t ready=cis_now_ns();
+        printf("CIS_WARMUP operations=4096 end_ns=%" PRIu64 " before_start=%d\n",ready,ready<start);
+        if(ready>=start) return 16;
+    }
     if(!strcmp(argv[1],"internal-phase")) return internal_phase(start,seconds);
     if(!strcmp(argv[1],"reclaim")) {
         until(start);

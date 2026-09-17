@@ -21,6 +21,7 @@ parser.add_argument('--stage-faults', action='store_true')
 parser.add_argument('--fixture-rounds', type=int, default=1)
 parser.add_argument('--diagnose-recursion', action='store_true')
 parser.add_argument('--timeline-probe', action='store_true')
+parser.add_argument('--cost-warmup', action='store_true')
 args = parser.parse_args()
 if not 1 <= args.fixture_rounds <= 20:
     raise SystemExit('fixture-rounds must be frozen in [1,20]')
@@ -95,6 +96,9 @@ def launch(label, mode, start, seconds=2, scenario=None, timeline=False):
         if timeline:
             assert mode=='open-loop' and scenario is None
             command += ['2000','timeline']
+        if args.cost_warmup and label.startswith('cost-'):
+            assert scenario is None and not timeline
+            command += ['2000','warm4096'] if mode=='open-loop' else ['warm4096']
         if scenario is not None:
             command=['/session_launch',str(ROOT/('root%d'%i)),str(0 if scenario=='preempt' else i*2),
                      '/workload','fixture',str(i if scenario=='private' else 0),str(start),scenario]
@@ -268,6 +272,11 @@ if args.timeline_probe:
         print('CIS_PROFILE_TIMELINE '+label+' diagnostic_only=1',flush=True)
 
 if args.cost:
+    print('CIS_PROFILE_COST_PROTOCOL '+json.dumps(dict(version=2 if args.cost_warmup else 1,
+          pairs=5, warmup_operations=4096 if args.cost_warmup else 0, window_ms=2000,
+          timer_slack='inherited_default', arrival_rate=2000,
+          no_tracing=True, diagnostic_window_p99_target_pct=2 if args.cost_warmup else None,
+          identity='warm batch separate from all historical version-1 results')),flush=True)
     # Predeclared five pairs, opposite orders. Separate closed/open loop workloads.
     for workload in ('throughput','latency'):
         for repetition in range(5):
@@ -286,6 +295,8 @@ if args.cost:
                 for role in range(2):
                     output=(OUT/('%s-%d.log'%(label,role))).read_text()
                     assert ('CIS_LATENCY ' if workload=='latency' else 'CIS_RESULT ') in output
+                    if args.cost_warmup:
+                        assert 'CIS_WARMUP operations=4096 ' in output and 'before_start=1' in output
                 if sid: finished(sid)
                 if mode=='off':
                     daemon=subprocess.Popen(DAEMON,stdout=daemon_log,stderr=daemon_log)

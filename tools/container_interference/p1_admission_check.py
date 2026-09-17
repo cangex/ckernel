@@ -113,6 +113,15 @@ def evaluate(source, artifacts):
             costs = [x for x in summary['cost'] if x['mode'] == 'idle' and x['workload'] == workload]
             checks[check] = combine([x['status'] for x in costs]) if len(costs) == 2 and entry['vm_exit_zero'] else 'BLOCKED'
             details[check] = dict(artifact_sha256=entry['sha256'], results=costs)
+    tail_batches=[(entry,summary) for entry,summary in rows
+                  if summary.get('cost_protocol',{}).get('version')==2]
+    if len(tail_batches)==1:
+        entry,summary=tail_batches[0]
+        results=[row for row in summary['cost'] if row['workload']=='latency' and row['mode'] in ('ip','owner')]
+        checks['window_latency_contract']=combine([x['status'] for x in results]) if len(results)==4 and entry['vm_exit_zero'] else 'BLOCKED'
+        details['window_latency_contract']=dict(artifact_sha256=entry['sha256'],
+             protocol=summary['cost_protocol'],results=results,
+             scope='frozen engineering tail target, not a production service SLO')
     # This first reader intentionally cannot approve resources, identity or
     # window latency from functional markers or process RSS alone.
     result = dict(schema='cis-p1-admission-v2', source=source, checks=checks,

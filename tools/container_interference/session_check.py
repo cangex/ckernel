@@ -24,6 +24,42 @@ def numbers(line):
     return {key:int(value,0) for key,value in re.findall(r'(\w+)=(-?0x[\da-fA-F]+|-?\d+)',line)}
 
 
+def cost_protocol(text, files):
+    headers = [json.loads(line.split(' ',1)[1]) for line in text.splitlines()
+               if line.startswith('CIS_PROFILE_COST_PROTOCOL ')]
+    if not headers:
+        return dict(version=1, warmup_operations=0, diagnostic_window_p99_target_pct=None)
+    if len(headers)!=1:
+        raise ValueError('one frozen cost protocol required')
+    protocol=headers[0]
+    if protocol.get('version')==1:
+        if protocol.get('warmup_operations')!=0:
+            raise ValueError('legacy protocol cannot claim warmup')
+        return protocol
+    expected=dict(version=2,pairs=5,warmup_operations=4096,window_ms=2000,
+                  timer_slack='inherited_default',arrival_rate=2000,no_tracing=True,
+                  diagnostic_window_p99_target_pct=2)
+    if any(protocol.get(k)!=v for k,v in expected.items()):
+        raise ValueError('unsupported cost protocol')
+    seen=set()
+    for name,body in files.items():
+        match=re.search(r'cost-(throughput|latency)-(\d+)-(off|idle|ip|owner)-(\d)\.log$',name)
+        if not match:continue
+        key=match.groups()
+        if key in seen:raise ValueError('duplicate warm cost cell')
+        seen.add(key)
+        warm=[numbers(x) for x in body.splitlines() if x.startswith('CIS_WARMUP ')]
+        result=[numbers(x) for x in body.splitlines() if x.startswith(('CIS_RESULT ','CIS_LATENCY '))]
+        if len(warm)!=1 or len(result)!=1 or warm[0].get('operations')!=4096 or warm[0].get('before_start')!=1 or warm[0]['end_ns']>=result[0]['start_ns']:
+            raise ValueError('warmup boundary missing or late')
+        if any(x.startswith('CIS_LATENCY_SAMPLE ') for x in body.splitlines()):
+            raise ValueError('traced timeline is not cost acceptance')
+    required={(w,str(r),m,str(role)) for w in ('throughput','latency') for r in range(5)
+              for m in ('off','idle','ip','owner') for role in range(2)}
+    if seen!=required:raise ValueError('incomplete frozen warm cost batch')
+    return protocol
+
+
 def interval(values):
     if len(values)!=5:return {'n':len(values),'status':'BLOCKED'}
     mean=statistics.mean(values);half=2.776445105*statistics.stdev(values)/len(values)**.5
@@ -47,6 +83,7 @@ def capture_quality(records, workload, mode):
 
 def analyze(text):
     files=extract(text)
+    protocol=cost_protocol(text, files)
     records={}
     for name,body in files.items():
         if '/records/' in name and name.endswith('.json'):
@@ -55,7 +92,7 @@ def analyze(text):
             except ValueError:continue
             records[record['session_id']]=record
     repeat={kind:[r for r in records.values() if r['nonce'].startswith('repeat'+kind)] for kind in ('ip','owner')}
-    summary={'version':1,'sessions':len(records),'repeat':{},'owner':{},'cost':[],
+    summary={'version':1,'sessions':len(records),'repeat':{},'owner':{},'cost':[], 'cost_protocol':protocol,
              'stage_status':'BLOCKED','phase_complete':False}
     summary['session_quality'] = {sid: assess(record) for sid, record in records.items()}
     for kind,values in repeat.items():
@@ -101,7 +138,7 @@ def analyze(text):
                     else:changes.append((trial['p99_ns']/base['p99_ns']-1)*100)
                     raw.append({'round':rnd,'off':base,'trial':trial})
                 ci=interval(changes)
-                threshold=(1 if mode=='idle' else 3) if workload=='throughput' else 2 if mode=='idle' else None
+                threshold=(1 if mode=='idle' else 3) if workload=='throughput' else 2 if mode=='idle' else protocol.get('diagnostic_window_p99_target_pct')
                 passed=threshold is not None and ci.get('upper95_pct',float('inf'))<=threshold
                 failed=threshold is not None and ci.get('lower95_pct',float('-inf'))>threshold
                 quality = capture_quality(records, workload, mode) if mode != 'idle' else None
