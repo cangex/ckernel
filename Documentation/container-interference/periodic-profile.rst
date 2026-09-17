@@ -176,13 +176,15 @@ distinguish last service from last valid sample. Unobserved does not mean normal
 
 Budget and failure boundaries
 -----------------------------
-Slow ARM journaling, residue verification and final reporting use a single
-bounded IO slot; no ARM before durable inventory and no next session before
-publication. Initial admission persistence, registration and explicit recovery
-still perform synchronous IO and need further fault/runtime validation. An
+Initial admission, ARM journaling, residue verification and final reporting use
+a single bounded IO slot; no worker before initial persistence, no ARM before
+durable inventory and no next session before publication. Startup, inactive
+registration, retention and explicit recovery still have synchronous operations
+that need separate fault/runtime validation. An
 uninterruptible filesystem operation has no unconditional shutdown bound.
 
-CPU guards use coarse child ticks and are cooperative, not instantaneous quotas.
+CPU guards use process clocks and reaped-child accounting; they are cooperative,
+not instantaneous quotas.
 Safe cleanup may exceed a budget; the result is downgraded, not reported as a
 successful measurement. Management processes do not account for all BPF/PMU
 entry work or asynchronous kernel reclaim. Per-session pre-write CPU is persisted;
@@ -208,6 +210,7 @@ namespace containers. It is functional, not n=5 cost/coverage acceptance.
 All P1 runtime gaps and cycle-level P99/CPU/memory/coverage gates remain required.
 Do not translate IMPLEMENTED, model PASS, missing hardware, or a gate refusal into
 completed periodic runtime acceptance. Preserve original failed measurements.
+
 Admission I/O and failure visibility
 -----------------------------------
 
@@ -238,3 +241,33 @@ Worker receipts distinguish ``ENTRY_RATE_LIMIT`` from ``CAPTURE_ERROR`` and
 retain the negative capture return code. Neither entry limits nor CPU limits
 have been increased. A prefix stopped by an entry limit is PARTIAL, not a valid
 full-window performance or attribution result.
+
+Focused runtime checks
+----------------------
+``storage_vm.py`` fills its own guest-only tmpfs to real ENOSPC and checks that
+admission fails without launching a worker. It does not test every filesystem
+failure or prove that a blocked kernel write can be cancelled.
+``identity_vm.py`` checks descendant attribution, overlapping roots, live task
+migration and deletion/recreation generations. Migration has an explicitly
+excluded timing boundary; it does not claim an atomic cross-CPU migration trace.
+
+``session_vm.py --resource-faults`` lowers only test workers' RLIMIT_NOFILE and
+compares bounded BPF map/program inventories after each failure. The worker logs
+the preparation stage. This exercises descriptor exhaustion, not every mmap,
+attach, allocator or verifier failure. No removed object ID proves all deferred
+reclamation or memory charging has finished.
+
+The functional runner records cleaned-up incomplete windows as failures while
+allowing independent cases to run; its final functional status remains failed.
+Safety errors such as uncertain cleanup still stop the runner. The result
+checker requires COMPLETE, loss-free, error-free receipts for cost captures and
+repeated lifecycle windows; a good throughput number cannot rescue PARTIAL data.
+Skipped owner events from the kernel recursion guard are coverage gaps, even
+when output-buffer loss is zero. They cannot be cleared by filtering records.
+
+``idle_cost_vm.py`` predeclares ten paired OFF/IDLE trials, ten-second workload
+windows, 256 registered roots, alternating target/bystander CPUs and an open-loop
+2000/s latency workload. ``idle_cost_report.py`` preserves every pair and reports
+the upper confidence bounds separately from observed mean changes. Its sampled
+whole-VM CPU/memory residual is explicitly non-atomic and not complete observer
+attribution or a hard transient-memory bound. It does not issue P1 admission.
