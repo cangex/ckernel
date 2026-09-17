@@ -208,3 +208,26 @@ namespace containers. It is functional, not n=5 cost/coverage acceptance.
 All P1 runtime gaps and cycle-level P99/CPU/memory/coverage gates remain required.
 Do not translate IMPLEMENTED, model PASS, missing hardware, or a gate refusal into
 completed periodic runtime acceptance. Preserve original failed measurements.
+Admission I/O and failure visibility
+-----------------------------------
+
+The first session journal and output-file creation use the same single bounded
+I/O slot as the inventory and final journal. No worker exists during this first
+step. Status, cancel, and stop remain available; a cancelled or timed-out
+admission never launches its worker when the write eventually completes.
+Metadata mutations are rejected while admission, capture, or journal work is
+pending. The worker PID and inventory become durable before ARM, not by a
+synchronous write on the event-loop thread immediately after spawning.
+
+A crash between the initial journal and durable worker identity is deliberately
+not recovered by guessing that no worker exists. Recovery requires an offline
+process/object audit. A filesystem error may prevent the failure record itself
+from being persisted; live status marks ``durable_result=false`` and FAULTED.
+Bounded threads do not make a blocked filesystem operation interruptible.
+Startup, history rotation and inactive administrative operations still need
+separate storage-backpressure coverage; this change is not full P1 admission.
+
+Worker receipts distinguish ``ENTRY_RATE_LIMIT`` from ``CAPTURE_ERROR`` and
+retain the negative capture return code. Neither entry limits nor CPU limits
+have been increased. A prefix stopped by an entry limit is PARTIAL, not a valid
+full-window performance or attribution result.

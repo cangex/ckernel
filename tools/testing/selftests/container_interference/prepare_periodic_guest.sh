@@ -31,6 +31,8 @@ cp "$source/tools/container_interference/bpf/cis.bpf.o" "$dest/root/profile/"
 cp "$source/tools/testing/selftests/container_interference/periodic_vm.py" "$dest/root/profile/"
 cp "$source/tools/testing/selftests/container_interference/periodic_vm_init.sh" "$dest/root/init"
 cp "$source/tools/testing/selftests/container_interference/session_launch" "$dest/root/"
+cp "$source/tools/testing/selftests/container_interference/workload" "$dest/root/container-root/"
+cp "$source/tools/testing/selftests/container_interference/storage_vm.py" "$dest/root/profile/"
 chmod 755 "$dest/root/init"
 if [ "$#" -eq 5 ]; then
     test ! -e "$dest/root/profile/p1-admission.json"

@@ -9,6 +9,7 @@ The separate control socket stays usable if report I/O or a worker stalls.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import copy
+from contextlib import ExitStack
 import errno
 import fcntl
 import hashlib
@@ -108,7 +109,7 @@ def validate(request):
         nonce = request.get('nonce', '')
         if not isinstance(nonce, str) or not 1 <= len(nonce) <= 64 or not nonce.isascii() or not nonce.isalnum():
             raise ValueError('bounded alphanumeric idempotency nonce required')
-        if request.get('inject', 'none') not in ('none', 'after_prepare'):
+        if request.get('inject', 'none') not in ('none', 'after_prepare', 'admission_slow', 'admission_full'):
             raise ValueError('unknown injection')
         if 'nonce_epoch' in request and (not isinstance(request['nonce_epoch'], str) or not re.fullmatch('[0-9a-f]{32}', request['nonce_epoch'])):
             raise ValueError('invalid nonce epoch')
@@ -148,6 +149,7 @@ class Controller:
         self.nonce_epoch = secrets.token_hex(16)
         self.roots, self.history = {}, {}
         self.active = None
+        self.admission = None
         self.faulted = False
         self.stopping = False
         self.boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
@@ -250,6 +252,12 @@ class Controller:
                     self.cancel(self.active['record']['session_id'])
                     if self.children.poll(self.active['process']) is not None:
                         self.release_active(faulted=True)
+                elif self.admission:
+                    record = self.admission['record']
+                    record.update(state='FAULTED', result='FAILED', finalized=True,
+                                  io_error=name + ': ' + str(error), durable_result=False,
+                                  objects_absent=True)
+                    self.admission = None
         if self.io or not self.active:
             return
         active = self.active
@@ -365,7 +373,7 @@ class Controller:
                 if saved['request_hash'] != fingerprint:
                     raise ValueError('nonce reused with different request')
                 return saved
-        if self.faulted or self.active:
+        if self.faulted or self.active or self.admission or self.io:
             raise OSError(errno.EBUSY, 'FAULTED or active/draining session')
         self.retire_history()
         if self.schedule and request.get('nonce_epoch') != self.nonce_epoch:
@@ -383,7 +391,6 @@ class Controller:
             if request.get('window_ms', WINDOW_MS) > self.schedule.plan['window_ms']:
                 raise ValueError('manual window exceeds shared host budget')
             self.schedule.admit(request['targets'], manual=planned is None)
-            self.save_metadata()
         cpu_begin = self.process_cpu()
         sid = str(secrets.randbits(63) or 1)
         record = dict(self.manifest, session_id=sid, nonce=request['nonce'], request_hash=fingerprint,
@@ -399,43 +406,99 @@ class Controller:
                                        'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256')},
                       transitions=[{'state': 'ADMIT', 'time_ns': now()}, {'state': 'PREPARE', 'time_ns': now()}])
         record['config_hash'] = hashlib.sha256(encoded({'request': request, 'manifest': self.manifest})).hexdigest()
-        self.persist(record)
         self.history[sid] = record
-        parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        output = os.open(self.directory / (sid + '.jsonl'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        errors = os.open(self.directory / (sid + '.stderr'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        # No worker exists during file I/O. Retain the host admission slot so a
+        # cancellation or slow disk cannot race a second start or target removal.
+        self.admission = dict(record=record, request=dict(request), roots=roots,
+                              cpu_begin=cpu_begin, deadline=now()+PREPARE_NS,
+                              controller_cpu_begin=time.process_time_ns(),
+                              child_cpu_begin=reaped_child_cpu_ns(), timed_out=False)
+        snapshot = copy.deepcopy(record)
+        snapshot['spawn_may_follow'] = True
+        self.submit_io('admission_files', lambda: self.prepare_files(snapshot, request.get('inject', 'none')), self.spawn_admitted)
+        return record
+
+    def prepare_files(self, snapshot, injection='none'):
+        if injection == 'admission_slow':
+            time.sleep(.5)
+        elif injection == 'admission_full':
+            raise OSError(errno.ENOSPC, 'injected admission filesystem full')
+        if self.schedule:
+            self.save_metadata()
+        self.persist(snapshot)
+        with ExitStack() as cleanup:
+            fds = []
+            for suffix in ('.jsonl', '.stderr'):
+                fd = os.open(self.directory/(snapshot['session_id']+suffix),
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                cleanup.callback(os.close, fd)
+                fds.append(fd)
+            cleanup.pop_all()
+            return fds
+
+    def spawn_admitted(self, fds):
+        admission = self.admission
+        record, request, roots = admission['record'], admission['request'], admission['roots']
+        output, errors = fds
+        parent = child = None
         try:
-            command = [self.args.worker, str(child.fileno()), str(output), sid, request['collector'],
-                       str(record['window_ms']), self.args.bpf, request.get('inject', 'none')]
+            if record['cancellation_requested'] or self.stopping or admission['timed_out']:
+                record.update(state='FAULTED' if admission['timed_out'] else 'IDLE',
+                              result='FAILED' if admission['timed_out'] else 'CANCELLED',
+                              objects_absent=True, worker_never_spawned=True,
+                              spawn_may_follow=False, finalized=True)
+                snapshot = copy.deepcopy(record)
+                self.submit_io('admission_cancelled', lambda: self.persist(snapshot),
+                               self.admission_finished)
+                return
+            parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            command = [self.args.worker, str(child.fileno()), str(output), record['session_id'], request['collector'],
+                       str(record['window_ms']), self.args.bpf,
+                       'after_prepare' if request.get('inject') == 'after_prepare' else 'none']
             command += ['%d:%d:%d' % (root['fd'], root['id'], root['generation']) for root in roots]
             child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots]),
                                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors)
         except BaseException:
-            record.update(state='FAULTED', result='FAILED', reason='SPAWN')
             self.faulted = True
-            self.persist(record)
-            parent.close()
+            record.update(state='FAULTED', result='FAILED', reason='SPAWN', finalized=True,
+                          durable_result=False)
+            if parent is not None:
+                parent.close()
             raise
         finally:
-            child.close()
+            if child is not None:
+                child.close()
             os.close(output)
             os.close(errors)
-        pidfd = os.pidfd_open(child_process.pid)
+        try:
+            pidfd = os.pidfd_open(child_process.pid)
+        except OSError:
+            self.children.kill(child_process)
+            self.children.wait(child_process, timeout=1)
+            parent.close()
+            raise
         parent.setblocking(False)
         self.active = {'record': record, 'process': child_process, 'channel': parent,
                        'pidfd': pidfd, 'deadline': now() + PREPARE_NS, 'killed': False,
-                       'controller_cpu_begin': time.process_time_ns(),
-                       'child_cpu_begin': reaped_child_cpu_ns(), 'memory_peak': 0, 'process_cpu_begin': cpu_begin}
-        self.active['budget'] = ProcessBudget(cpu_begin, record['window_ms'], self.schedule.plan if self.schedule else None)
+                       'controller_cpu_begin': admission['controller_cpu_begin'],
+                       'child_cpu_begin': admission['child_cpu_begin'], 'memory_peak': 0, 'process_cpu_begin': admission['cpu_begin']}
+        self.active['budget'] = ProcessBudget(admission['cpu_begin'], record['window_ms'], self.schedule.plan if self.schedule else None)
+        self.admission = None
         self.selector.register(parent, selectors.EVENT_READ, 'worker')
         self.selector.register(pidfd, selectors.EVENT_READ, 'exit')
         record['worker_pid'] = child_process.pid
         record['worker_start_ticks'] = Path('/proc/%d/stat' % child_process.pid).read_text().rsplit(')', 1)[1].split()[19]
-        self.persist(record)
-        return record
+        # The existing ARMED inventory journal persists PID/start time as well;
+        # no probes can be armed before that asynchronous write has completed.
+
+    def admission_finished(self, _):
+        self.admission = None
 
     def cancel(self, sid):
         record = self.history[sid]
+        if self.admission and self.admission['record'] is record:
+            record['cancellation_requested'] = True
+            return record
         if not self.active or self.active['record'] is not record:
             return record
         if self.active.get('publishing'):
@@ -455,6 +518,9 @@ class Controller:
     def request(self, req):
         validate(req)
         op = req['op']
+        if (self.active or self.admission or self.io) and op in (
+                'register', 'unregister', 'schedule_configure', 'schedule_enable', 'survey_epoch', 'recover'):
+            raise OSError(errno.EBUSY, 'drain admission and its IO before changing controller metadata')
         if op == 'register':
             return self.register(req['path'])
         if op == 'unregister':
@@ -540,6 +606,8 @@ class Controller:
             record = json.loads(path.read_text())
             if record['boot_id'] != self.boot:
                 raise ValueError('different boot requires explicit offline audit')
+            if record.get('spawn_may_follow') and not record.get('worker_pid'):
+                raise OSError(errno.EBUSY, 'crash before durable worker identity; offline process/object audit required')
             if Path('/proc/%s' % record.get('worker_pid', 0)).exists():
                 raise OSError(errno.EBUSY, 'recorded PID exists; do not guess or kill reused PID')
             inventory = record.get('inventory') or {'maps': [], 'programs': []}
@@ -559,7 +627,8 @@ class Controller:
             if req.get('session'):
                 record = self.history[req['session']]
                 return compact_record(record) if op == 'status' else record
-            return {'state': 'FAULTED' if self.faulted else self.active['record']['state'] if self.active else 'IDLE',
+            return {'state': 'FAULTED' if self.faulted else self.active['record']['state'] if self.active else
+                             'PREPARE' if self.admission else 'IDLE',
                     'roots': len(self.roots), 'sessions': list(self.history), 'continuous_metrics_scans': 0,
                     'boundary_root_reads': self.boundary_reads, 'psi_triggers': 0,
                     'nonce_epoch': self.nonce_epoch, 'periodic_enabled': bool(self.schedule and self.schedule.enabled)}
@@ -569,6 +638,8 @@ class Controller:
                 self.schedule.pause()
             if self.active:
                 self.cancel(self.active['record']['session_id'])
+            elif self.admission:
+                self.cancel(self.admission['record']['session_id'])
             return {'stopping': True}
 
     def serve_one(self):
@@ -792,7 +863,7 @@ class Controller:
     def periodic_tick(self):
         if not self.schedule or self.stopping:
             return
-        reason = 'faulted' if self.faulted else 'active_or_draining' if self.active or self.io else None
+        reason = 'faulted' if self.faulted else 'active_or_draining' if self.active or self.admission or self.io else None
         proposal = self.schedule.poll(reason)
         if proposal is None:
             return
@@ -819,8 +890,10 @@ class Controller:
         return pages*os.sysconf('SC_PAGE_SIZE')
 
     def run(self):
-        while not self.stopping or self.active:
+        while not self.stopping or self.active or self.admission or self.io:
             timeout = min(.1, max(0, (self.active['deadline']-now())/1e9)) if self.active else None
+            if self.admission:
+                timeout = .1 if timeout is None else min(timeout, .1)
             scheduled = self.schedule.timeout() if self.schedule and not self.stopping else None
             if scheduled is not None:
                 timeout = scheduled if timeout is None else min(timeout, scheduled)
@@ -835,6 +908,13 @@ class Controller:
                     self.wake_r.recv(4096)
             self.pump_io()
             self.periodic_tick()
+            if self.admission and now() >= self.admission['deadline']:
+                self.admission['timed_out'] = True
+                self.admission['record']['cancellation_requested'] = True
+                self.admission['record']['io_error'] = 'ADMISSION_IO_TIMEOUT'
+                self.faulted = True
+                if self.schedule:
+                    self.schedule.pause()
             if self.active:
                 reason = self.active['budget'].check(self.process_cpu(), self.active['record']['state'])
                 if reason:

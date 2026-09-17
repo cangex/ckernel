@@ -106,6 +106,16 @@ def window(sid):
 
 
 # Real sampled IP and bounded owner fixtures are separate from empty-root lifecycle stress.
+before=time.monotonic_ns()
+sid=begin('ip','cancelSlowAdmission',inject='admission_slow')['session_id']
+response_ns=time.monotonic_ns()-before
+record=request('status',session=sid)
+assert 'worker_pid' not in record, record
+request('cancel',session=sid)
+assert finished(sid)['result']=='CANCELLED'
+print('CIS_PROFILE_ADMISSION '+json.dumps(dict(slow_io_cancelled=True,
+      start_response_ns=response_ns, worker_never_spawned=request('status',session=sid)['worker_never_spawned'])),flush=True)
+
 for kind in ('ip','owner'):
     sid=begin(kind,'functional'+kind)['session_id']
     start=window(sid)

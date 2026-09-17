@@ -16,6 +16,10 @@ cp -a /dev/cis-fixture /container-root/cis-fixture
 for test in logic_test budget_test metrics_test; do /$test; done
 /usr/bin/python3 /profile/session_vm.py $(cat /profile/test-arguments)
 status=$?
+if [ "$status" -eq 0 ] && [ -f /profile/storage_vm.py ]; then
+    /usr/bin/python3 /profile/storage_vm.py
+    status=$?
+fi
 echo "CIS_PROFILE_VM_EXIT=$status"
 for f in /tmp/session-evidence/controller.log /tmp/session-evidence/*-*.log /tmp/session-evidence/records/*; do
     [ -f "$f" ] || continue

@@ -38,7 +38,7 @@ int main(int argc,char **argv)
 	const char *reason="COMPLETE";
 	uint64_t begin=cis_clock_ns(),prepared=0,start=0,end=0,stopped=0,cpu_begin=cpu_ns(),budget_cpu=0,budget_time=0;
 	uint64_t prepared_cpu=0,capture_cpu=0,stop_cpu=0;
-	int i,err=0,stop_error=0,channel,window,parent=getppid();
+	int i,err=0,stop_error=0,capture_error=0,channel,window,parent=getppid();
 	if(!ctx || argc<9 || argc>10) return 2;
 	channel=atoi(argv[1]); ctx->output_fd=atoi(argv[2]);
 	ctx->session_id=strtoull(argv[3],NULL,10); window=atoi(argv[5]);
@@ -88,7 +88,10 @@ int main(int argc,char **argv)
 		int p=poll(&control,1,10);
 		if(p>0) { reason="CANCELLED"; break; }
 		if(p<0 && errno!=EINTR) { err=1; reason="POLL"; break; }
-		if(cis_capture_poll(ctx)<0) { err=1; reason="CAPTURE_BUDGET_OR_ERROR"; break; }
+		capture_error=cis_capture_poll(ctx);
+		if(capture_error<0) {
+			err=1; reason=capture_error==-E2BIG?"ENTRY_RATE_LIMIT":"CAPTURE_ERROR"; break;
+		}
 		if(ctx->output_error) { err=1; reason=ctx->output_error==EFBIG?"DATA_LIMIT":"OUTPUT_ERROR"; break; }
 		if(now>budget_time+1000000000ULL) {
 			uint64_t cpu=cpu_ns();
@@ -107,11 +110,11 @@ drain:
 	if(err && !strcmp(reason,"COMPLETE")) reason="QUALITY";
 	if(close(ctx->output_fd)) { err=1; reason="OUTPUT_CLOSE"; }
 	getrusage(RUSAGE_SELF,&usage);
-	snprintf(packet,sizeof(packet),"{\"state\":\"VERIFY\",\"result\":\"%s\",\"reason\":\"%s\",\"begin_ns\":%llu,\"prepared_ns\":%llu,\"start_ns\":%llu,\"end_ns\":%llu,\"producers_stopped_ns\":%llu,\"destroyed_ns\":%llu,\"cpu_ns\":%llu,\"maxrss_kib\":%ld,\"errors\":%u,\"dropped\":%u,\"output_error\":%d,\"bytes\":%llu,\"stop_error\":%d,\"prepare_cpu_ns\":%llu,\"armed_capture_cpu_ns\":%llu,\"drain_cpu_ns\":%llu}",
+	snprintf(packet,sizeof(packet),"{\"state\":\"VERIFY\",\"result\":\"%s\",\"reason\":\"%s\",\"begin_ns\":%llu,\"prepared_ns\":%llu,\"start_ns\":%llu,\"end_ns\":%llu,\"producers_stopped_ns\":%llu,\"destroyed_ns\":%llu,\"cpu_ns\":%llu,\"maxrss_kib\":%ld,\"errors\":%u,\"dropped\":%u,\"output_error\":%d,\"bytes\":%llu,\"stop_error\":%d,\"capture_error\":%d,\"prepare_cpu_ns\":%llu,\"armed_capture_cpu_ns\":%llu,\"drain_cpu_ns\":%llu}",
 		!strcmp(reason,"CANCELLED")?"CANCELLED":err?"PARTIAL":"COMPLETE",reason,
 		(unsigned long long)begin,(unsigned long long)prepared,(unsigned long long)start,(unsigned long long)end,
 		(unsigned long long)stopped,(unsigned long long)cis_clock_ns(),(unsigned long long)(cpu_ns()-cpu_begin),
-		usage.ru_maxrss,ctx->errors,ctx->dropped,ctx->output_error,(unsigned long long)ctx->output_bytes,stop_error,
+		usage.ru_maxrss,ctx->errors,ctx->dropped,ctx->output_error,(unsigned long long)ctx->output_bytes,stop_error,capture_error,
 		(unsigned long long)(prepared_cpu?prepared_cpu-cpu_begin:0),
 		(unsigned long long)(capture_cpu?stop_cpu-capture_cpu:0),(unsigned long long)(cpu_ns()-stop_cpu));
 	notify(channel,packet); close(channel); free(ctx);

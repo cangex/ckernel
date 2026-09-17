@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 from concurrent.futures import ThreadPoolExecutor
+import errno
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -38,7 +40,7 @@ class ControllerTests(unittest.TestCase):
 
     def controller(self):
         c = object.__new__(session.Controller)
-        c.io, c.active, c.schedule = None, None, None
+        c.io, c.active, c.schedule, c.admission = None, None, None, None
         c.faulted, c.stopping = False, False
         c.surveys, c.history, c.roots = {}, {}, {}
         c.references, c.boundary_reads = {}, 0
@@ -188,6 +190,109 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(budget.snapshot()['phase_peak_cpu_ns']['CAPTURING'], 35_000_000)
         self.assertEqual(budget.snapshot()['phase_peak_cpu_ns']['DRAIN'], 15_000_000)
         c.cancel.assert_not_called()
+
+    def test_pending_admission_can_cancel_without_worker(self):
+        c = self.controller()
+        c.nonce_epoch = 'a'*32
+        record = dict(session_id='1', state='PREPARE', cancellation_requested=False)
+        c.history['1'] = record
+        c.admission = dict(record=record, request={}, roots=[], timed_out=False)
+        self.assertEqual(c.request(dict(version=1, op='status'))['state'], 'PREPARE')
+        c.request(dict(version=1, op='cancel', session='1'))
+        c.children.spawn = Mock()
+        jobs = []
+        c.submit_io = lambda name, work, done: jobs.append((work, done))
+        c.persist = Mock()
+        fds = [os.open(os.devnull, os.O_WRONLY) for _ in range(2)]
+        c.spawn_admitted(fds)
+        c.children.spawn.assert_not_called()
+        self.assertEqual(record['result'], 'CANCELLED')
+        self.assertTrue(record['worker_never_spawned'])
+        self.assertIsNotNone(c.admission)
+        for fd in fds:
+            with self.assertRaises(OSError): os.fstat(fd)
+        work, done = jobs.pop()
+        done(work())
+        self.assertIsNone(c.admission)
+
+    def test_start_queues_file_creation_before_spawning(self):
+        c = self.controller()
+        c.args = Mock(test_faults=False)
+        c.survey_epoch = 0
+        c.manifest = {key: 'test' for key in ('controller_sha256', 'worker_sha256',
+            'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256')}
+        c.roots['1:2'] = dict(fd=123, path='/sys/fs/cgroup/target', id=1, generation=2)
+        c.retire_history = c.storage_admit = Mock()
+        c.persist = Mock()
+        c.children.spawn = Mock()
+        jobs = []
+        c.submit_io = lambda name, work, done: jobs.append((name, work, done))
+        with patch.object(session.os, 'readlink', return_value='/sys/fs/cgroup/target'):
+            result = c.start(dict(nonce='start', collector='ip', targets=['1:2']))
+        self.assertEqual(result['state'], 'PREPARE')
+        self.assertIs(c.admission['record'], result)
+        c.persist.assert_not_called()
+        c.children.spawn.assert_not_called()
+        self.assertEqual(jobs[0][0], 'admission_files')
+        with self.assertRaises(OSError):
+            c.start(dict(nonce='second', collector='ip', targets=['1:2']))
+
+    def test_pending_admission_rejects_mutation(self):
+        c = self.controller()
+        c.admission = dict(record={})
+        for request in (dict(op='register', path='/sys/fs/cgroup/x'),
+                        dict(op='unregister', target='1:2'),
+                        dict(op='schedule_configure', plan={}), dict(op='survey_epoch'), dict(op='recover')):
+            with self.assertRaises(OSError): c.request(dict(version=1, **request))
+
+    def test_second_output_failure_closes_first_fd(self):
+        c = self.controller()
+        c.directory = Path('/not-accessed')
+        c.persist = Mock()
+        real_fd = os.open(os.devnull, os.O_WRONLY)
+        with patch.object(session.os, 'open', side_effect=[real_fd, OSError(errno.ENOSPC, 'full')]):
+            with self.assertRaises(OSError): c.prepare_files(dict(session_id='1'))
+        with self.assertRaises(OSError): os.fstat(real_fd)
+
+    def test_admission_io_failure_is_not_success(self):
+        c = self.controller()
+        c.executor = ThreadPoolExecutor(max_workers=1)
+        c.wake_w = Mock()
+        record = dict(session_id='1')
+        c.admission = dict(record=record)
+        c.children.spawn = Mock()
+        try:
+            c.submit_io('admission_files', lambda: c.prepare_files(record, 'admission_full'), c.spawn_admitted)
+            with self.assertRaises(OSError): c.io[1].result(timeout=1)
+            c.pump_io()
+            self.assertTrue(c.faulted)
+            self.assertEqual(record['result'], 'FAILED')
+            self.assertFalse(record['durable_result'])
+            self.assertIsNone(c.admission)
+            c.children.spawn.assert_not_called()
+        finally:
+            c.executor.shutdown()
+
+    def test_stop_while_admission_is_pending(self):
+        c = self.controller()
+        record = dict(session_id='1', cancellation_requested=False)
+        c.history['1'] = record
+        c.admission = dict(record=record)
+        c.request(dict(version=1, op='stop'))
+        self.assertTrue(c.stopping)
+        self.assertTrue(record['cancellation_requested'])
+
+    def test_failed_spawn_closes_socket_and_files(self):
+        c = self.controller()
+        c.args = Mock(worker='/does-not-exist', bpf='/none')
+        record = dict(session_id='1', window_ms=2000, cancellation_requested=False)
+        c.admission = dict(record=record, request=dict(collector='ip'), roots=[], timed_out=False)
+        c.children.spawn = Mock(side_effect=OSError(errno.ENOENT, 'worker'))
+        fds = [os.open(os.devnull, os.O_WRONLY) for _ in range(2)]
+        with self.assertRaises(OSError): c.spawn_admitted(fds)
+        self.assertTrue(c.faulted)
+        for fd in fds:
+            with self.assertRaises(OSError): os.fstat(fd)
 
 
 if __name__ == '__main__': unittest.main()
