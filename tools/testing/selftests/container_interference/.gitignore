@@ -9,5 +9,6 @@
 /fast_test
 /entry_workload
 /entry_storm
+/session_launch
 __pycache__/
 *.pyc
