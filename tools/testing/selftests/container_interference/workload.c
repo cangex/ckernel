@@ -248,6 +248,10 @@ int main(int argc, char **argv)
         uint64_t count=(uint64_t)rate*seconds,timeouts=0,max=0;
         if(!rate || count>1000000) return 8;
         int timeline=argc>5 && !strcmp(argv[5],"timeline");
+        /* Explicit diagnostic control only; the acceptance default is unchanged. */
+        if(argc>6) {
+            if(!timeline || strcmp(argv[6],"slack1") || prctl(PR_SET_TIMERSLACK,1UL,0,0,0)) return 8;
+        }
         /* Bound diagnostic output before allocating buffers or starting work. */
         if(timeline && count>20000) return 8;
         uint64_t *latency=calloc(count,sizeof(*latency));
