@@ -29,6 +29,22 @@ def interval(values):
     return {'n':5,'mean_pct':mean,'lower95_pct':mean-half,'upper95_pct':mean+half,'pairs_pct':values}
 
 
+def capture_quality(records, workload, mode):
+    result = []
+    for repetition in range(5):
+        nonce = ('cost-%s-%d-%s' % (workload, repetition, mode)).replace('-', '')
+        matches = [record for record in records.values() if record.get('nonce') == nonce]
+        if len(matches) != 1:
+            return dict(status='BLOCKED', reason='missing or duplicate capture record', nonce=nonce)
+        record = matches[0]
+        receipt = record.get('receipt') or {}
+        complete = (record.get('result') == 'COMPLETE' and record.get('objects_absent') is True
+                    and receipt.get('result') == 'COMPLETE' and not record.get('budget_reason')
+                    and all(receipt.get(key) == 0 for key in ('stop_error', 'dropped', 'errors', 'output_error')))
+        result.append(dict(nonce=nonce, complete=complete, reason=receipt.get('reason')))
+    return dict(status='PASS' if all(item['complete'] for item in result) else 'FAIL', windows=result)
+
+
 def analyze(text):
     files=extract(text)
     records={}
@@ -42,7 +58,7 @@ def analyze(text):
     summary={'version':1,'sessions':len(records),'repeat':{},'owner':{},'cost':[],
              'stage_status':'BLOCKED','phase_complete':False}
     for kind,values in repeat.items():
-        passed=len(values)==100 and all(r.get('objects_absent') and r['state']=='IDLE' and
+        passed=len(values)==100 and all(r.get('objects_absent') and r['state']=='IDLE' and r.get('result')=='COMPLETE' and
             r.get('receipt',{}).get('stop_error')==0 for r in values)
         summary['repeat'][kind]={'count':len(values),'status':'PASS' if passed else 'BLOCKED',
             'independent_collector':all((r['inventory']['ip_perf_cpus']==0)==(kind=='owner') for r in values)}
@@ -88,9 +104,11 @@ def analyze(text):
                 threshold=(1 if mode=='idle' else 3) if workload=='throughput' else 2 if mode=='idle' else None
                 passed=threshold is not None and ci.get('upper95_pct',float('inf'))<=threshold
                 failed=threshold is not None and ci.get('lower95_pct',float('-inf'))>threshold
+                quality = capture_quality(records, workload, mode) if mode != 'idle' else None
+                status = 'PASS' if passed else 'FAIL' if failed else 'BLOCKED'
+                if quality and quality['status'] != 'PASS': status = quality['status']
                 summary['cost'].append(dict(workload=workload,mode=mode,role=role,threshold_pct=threshold,
-                    status='PASS' if passed else 'FAIL' if failed else 'BLOCKED',
-                    interval=ci,raw=raw))
+                    status=status, capture_quality=quality, interval=ci,raw=raw))
     good=[r for r in records.values() if r.get('receipt') and r['receipt'].get('prepare_cpu_ns')]
     if good:
         summary['measured']={'prepare_cpu_ms_mean':statistics.mean(r['receipt']['prepare_cpu_ns']/1e6 for r in good),

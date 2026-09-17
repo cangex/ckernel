@@ -16,6 +16,7 @@ parser.add_argument('--cost', action='store_true')
 parser.add_argument('--faults', action='store_true')
 parser.add_argument('--resource-faults', action='store_true')
 args = parser.parse_args()
+quality_failures = []
 if not Path('/cis-disposable-vm').exists():
     raise SystemExit('dedicated VM marker missing')
 OUT = Path('/tmp/session-evidence')
@@ -97,6 +98,13 @@ def begin(collector, nonce, target_count=2, **extra):
     return request('start',collector=collector,nonce=nonce,targets=targets[:target_count],window_ms=2000,**extra)
 
 
+def require_complete(record):
+    # A cleaned-up partial capture may not stop independent tests or become PASS.
+    if record.get('result') != 'COMPLETE':
+        quality_failures.append(dict(nonce=record.get('nonce'), result=record.get('result'),
+                                     receipt=record.get('receipt')))
+
+
 def window(sid):
     for _ in range(1000):
         state=request('status',session=sid)
@@ -145,7 +153,7 @@ for kind in ('ip','owner'):
     join(children)
     record=finished(sid)
     print('CIS_PROFILE_FUNCTION '+json.dumps(record),flush=True)
-    assert record['result']=='COMPLETE', record
+    require_complete(record)
     inventory=record['inventory']
     assert len(inventory['programs']) == (1 if kind=='ip' else 2), inventory
     assert len(inventory['maps']) == (4 if kind=='ip' else 10), inventory
@@ -159,7 +167,7 @@ for scenario in ('private','reuse','preempt'):
     join(children)
     record=finished(sid)
     print('CIS_PROFILE_NEGATIVE '+json.dumps(record),flush=True)
-    assert record['result']=='COMPLETE', record
+    require_complete(record)
 
 sid=begin('ip','inject',inject='after_prepare')['session_id']
 assert finished(sid)['result']=='PARTIAL'
@@ -174,6 +182,7 @@ for kind in ('ip','owner'):
     for i in range(args.stress):
         sid=begin(kind,'repeat%s%d'%(kind,i))['session_id']
         record=finished(sid)
+        require_complete(record)
         assert record['receipt']['stop_error']==0
         assert record['inventory']['ip_perf_cpus']==0 if kind=='owner' else record['inventory']['ip_perf_cpus']>0
         if i%10==0: print('CIS_PROFILE_STRESS '+json.dumps({'collector':kind,'iteration':i,'result':record['result']}),flush=True)
@@ -242,4 +251,6 @@ if args.faults:
         print('CIS_PROFILE_FAULT '+('both_crash' if both else 'controller_crash')+'_faulted_recovered=1',flush=True)
 request('stop');assert daemon.wait(timeout=10)==0
 daemon_log.close()
-print('CIS_PROFILE_VM_FUNCTIONAL_PASS=1',flush=True)
+print('CIS_PROFILE_QUALITY_FAILURES '+json.dumps(quality_failures),flush=True)
+print('CIS_PROFILE_VM_FUNCTIONAL_PASS=%d' % (not quality_failures),flush=True)
+raise SystemExit(bool(quality_failures))
