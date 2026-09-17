@@ -625,6 +625,12 @@ class Controller:
             raise ValueError('invalid worker transition')
         record['state'] = state
         record['transitions'].append({'state': state, 'time_ns': now()})
+        # Close the old phase before pump_io can start verification helpers.
+        # Otherwise their CPU can be charged to a just-finished capture phase.
+        reason = active['budget'].check(self.process_cpu(), state)
+        if reason:
+            record['budget_reason'] = reason
+            self.cancel(record['session_id'])
         if state == 'ARMED':
             record['inventory'] = message['inventory']
             active['arm_pending'] = True
@@ -708,6 +714,7 @@ class Controller:
             self.boundary_reads += len(verification['after'])
         snapshot = copy.deepcopy(record)
         snapshot['finalized'] = True
+        snapshot['process_cpu_budget'] = active['budget'].snapshot()
         previous = copy.deepcopy(self.references)
         minimum = self.schedule.plan['min_samples'] if self.schedule else 32
         def save():
@@ -734,6 +741,7 @@ class Controller:
         record.update(saved)
         record['process_cpu_to_publish_ns'] = max(0, self.process_cpu()-self.active['process_cpu_begin'])
         record['publication_accounting'] = 'post-write counter available in live status; pre-write counter persisted'
+        record['process_cpu_budget'] = self.active['budget'].snapshot()
         if late_fault:
             record.update(state='FAULTED', result='FAILED', late_publication_fault=True)
             self.faulted = True

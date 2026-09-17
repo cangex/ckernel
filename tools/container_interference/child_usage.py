@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
 """Serialize child reaping with CPU snapshots, never with a blocking wait."""
-from pathlib import Path
-import os
 import resource
 import subprocess
 import threading
@@ -14,14 +12,16 @@ def reaped_cpu_ns():
 
 
 def live_cpu_ns(pid):
-    fields = Path('/proc/%d/stat' % pid).read_text().rsplit(')', 1)[1].split()
-    return (int(fields[11]) + int(fields[12])) * 1_000_000_000 // os.sysconf('SC_CLK_TCK')
+    # Fixed Linux ABI: include/linux/posix-timers.h make_process_cpuclock(),
+    # CPUCLOCK_SCHED=2. This samples the whole process, not only its main TID.
+    # Fail closed if unavailable; do not silently fall back to tick rounding.
+    return time.clock_gettime_ns((~pid << 3) | 2)
 
 
 class ChildProcesses:
     """All collector/helper spawn and reap operations must use this registry.
 
-    A child transfers from /proc counters to RUSAGE_CHILDREN at waitpid(), not
+    A child transfers from its live CPU clock to RUSAGE_CHILDREN at waitpid(), not
     simply at exit. The transfer and snapshot must share a lock to avoid a
     missing or double-counted interval. This is a controller-local lock only.
     """

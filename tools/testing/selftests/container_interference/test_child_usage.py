@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import os
 import subprocess
 import sys
 import threading
@@ -12,6 +13,19 @@ import child_usage
 
 
 class ChildUsageTests(unittest.TestCase):
+    def test_live_clock_uses_nanoseconds_and_process_scope(self):
+        with patch.object(child_usage.time, 'clock_gettime_ns', return_value=123456789) as clock:
+            self.assertEqual(child_usage.live_cpu_ns(42), 123456789)
+            clock.assert_called_once_with((~42 << 3) | 2)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux process CPU clock ABI')
+    def test_linux_live_clock_matches_self_process_clock(self):
+        before = child_usage.time.process_time_ns()
+        measured = child_usage.live_cpu_ns(os.getpid())
+        after = child_usage.time.process_time_ns()
+        self.assertLessEqual(before, measured)
+        self.assertLessEqual(measured, after)
+
     def test_exit_during_poll_counted_once(self):
         registry = child_usage.ChildProcesses()
         state = dict(reaped=7)

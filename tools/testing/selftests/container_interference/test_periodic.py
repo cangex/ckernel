@@ -176,6 +176,19 @@ class ScheduleTests(unittest.TestCase):
 
 
 class BudgetTests(unittest.TestCase):
+    def test_phase_audit_keeps_violation_without_changing_limits(self):
+        budget = ProcessBudget(0, 2000)
+        budget.check(100_000_000, 'CAPTURING')
+        budget.check(141_000_000, 'DRAIN')
+        budget.check(150_000_000, 'VERIFY')
+        audit = budget.snapshot()
+        self.assertEqual(audit['phase_limits_ns']['CAPTURING'], 40_000_000)
+        self.assertEqual(audit['phase_peak_cpu_ns']['CAPTURING'], 41_000_000)
+        self.assertEqual(audit['phase_peak_cpu_ns']['DRAIN'], 9_000_000)
+        self.assertEqual(audit['first_violation']['phase_cpu_ns'], 41_000_000)
+        audit['phase_peak_cpu_ns']['DRAIN'] = 0
+        self.assertEqual(budget.snapshot()['phase_peak_cpu_ns']['DRAIN'], 9_000_000)
+
     def test_capture_budget_includes_parent(self):
         budget = ProcessBudget(0, 2000)
         self.assertIsNone(budget.check(100_000_000, 'CAPTURING'))

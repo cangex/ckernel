@@ -92,7 +92,7 @@ class ControllerTests(unittest.TestCase):
         c.active = dict(record=dict(session_id='1', receipt=dict(result='COMPLETE'), cancellation_requested=False,
                                     collector='ip', targets=[], transitions=[]), killed=False,
                         controller_cpu_begin=time.process_time_ns(), child_cpu_begin=session.reaped_child_cpu_ns(),
-                        process_cpu_begin=0, memory_peak=0)
+                        process_cpu_begin=0, memory_peak=0, budget=ProcessBudget(0, 2000))
         c.process_cpu = lambda: 100
         jobs = []
         c.submit_io = lambda name, work, done: jobs.append((work, done))
@@ -112,7 +112,7 @@ class ControllerTests(unittest.TestCase):
     def test_late_budget_cannot_publish_success(self):
         c = self.controller()
         c.active = dict(record=dict(session_id='1', state='VERIFY', budget_reason='limit'),
-                        killed=False, process_cpu_begin=0)
+                        killed=False, process_cpu_begin=0, budget=ProcessBudget(0, 2000))
         c.process_cpu = lambda: 100
         c.persist = Mock()
         c.release_active = Mock()
@@ -172,6 +172,22 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(ValueError): c.request(dict(version=1, op='schedule_enable'))
         c.periodic_tick()
         c.start.assert_not_called()
+
+    def test_worker_drain_closes_capture_before_helper_work(self):
+        c = self.controller()
+        budget = ProcessBudget(0, 2000)
+        budget.check(100_000_000, 'CAPTURING')
+        c.active = dict(record=dict(session_id='1', state='CAPTURING', transitions=[]),
+                        budget=budget, channel=Mock())
+        c.active['channel'].recv.return_value = b'{"state":"DRAIN"}'
+        c.process_cpu = lambda: 135_000_000
+        c.cancel = Mock()
+        c.worker_event()
+        self.assertEqual(budget.phase, 'DRAIN')
+        self.assertIsNone(budget.check(150_000_000, 'VERIFY'))
+        self.assertEqual(budget.snapshot()['phase_peak_cpu_ns']['CAPTURING'], 35_000_000)
+        self.assertEqual(budget.snapshot()['phase_peak_cpu_ns']['DRAIN'], 15_000_000)
+        c.cancel.assert_not_called()
 
 
 if __name__ == '__main__': unittest.main()

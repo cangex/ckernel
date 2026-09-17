@@ -66,7 +66,7 @@ Budgets and evidence
 Initial defaults: 2-s window; prepare 10 s; cleanup 5 s; residue verification
 2 s; nominal IP 1000/s; detailed entry 200000/s; output 16 MiB; worker steady
 CPU guard 20 ms/s; combined RSS guard 64 MiB. A controller-side cooperative guard
-also checks process CPU including reaped helpers and live-child tick estimates.
+also checks process CPU including reaped helpers and live-child process clocks.
 Default limits are 250 ms preparation, 20 ms per capture second, 250 ms drain
 and 600 ms whole-session process CPU. These are prototype stop policies,
 not kernel worst-case latency guarantees. Controller+worker CPU and kernel
@@ -76,11 +76,15 @@ outside cost accounting. PMU fallback, multiplexing, losses, incomplete owner
 boundaries and output failures must remain visible.
 
 Collector and residue-helper reaping share a controller-local registry with CPU
-snapshots. A child moves from live ``/proc/PID/stat`` ticks to cumulative
+snapshots. A child moves from its Linux process CPU clock to cumulative
 ``RUSAGE_CHILDREN`` under the same lock, so exit cannot omit or double-count its
 CPU in a snapshot. Waiting polls outside this lock; it does not hold a lock while
-waiting for a child to terminate. Live counters still have kernel tick resolution
-and these counters still exclude asynchronous kernel work. Unit regressions for
+waiting for a child to terminate. Live sampling uses the fixed Linux
+``make_process_cpuclock(pid, CPUCLOCK_SCHED)`` ABI and fails closed if unavailable;
+it does not round to ticks or silently omit a failed counter. Stage guards close
+at worker transitions before verification helpers start. Reports retain per-phase
+peaks, unchanged limits and the first violation. These counters still exclude
+asynchronous kernel work. Unit regressions for
 this handoff do not replace ARM64 budget enforcement or background-cost tests.
 
 No business interference percentage without an aligned business denominator

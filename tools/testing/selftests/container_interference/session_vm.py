@@ -113,6 +113,7 @@ for kind in ('ip','owner'):
     join(children)
     record=finished(sid)
     print('CIS_PROFILE_FUNCTION '+json.dumps(record),flush=True)
+    assert record['result']=='COMPLETE', record
     duplicate=begin(kind,'functional'+kind)
     assert duplicate['session_id']==sid
     request('cancel',session=sid)
@@ -121,7 +122,9 @@ for scenario in ('private','reuse','preempt'):
     sid=begin('owner','fixture'+scenario)['session_id']
     children=launch(scenario,'fixture',window(sid),scenario=scenario)
     join(children)
-    print('CIS_PROFILE_NEGATIVE '+json.dumps(finished(sid)),flush=True)
+    record=finished(sid)
+    print('CIS_PROFILE_NEGATIVE '+json.dumps(record),flush=True)
+    assert record['result']=='COMPLETE', record
 
 sid=begin('ip','inject',inject='after_prepare')['session_id']
 assert finished(sid)['result']=='PARTIAL'
