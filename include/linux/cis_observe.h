@@ -7,7 +7,9 @@ struct task_struct;
 enum cis_resource { CIS_MUTEX = 1, CIS_LOCKREF = 2 };
 enum cis_phase { CIS_RESET = 1, CIS_WAIT, CIS_ACQUIRE,
 	CIS_RELEASE_BEGIN, CIS_RELEASE_END, CIS_SNAPSHOT,
-	CIS_ESCAPE, CIS_RETIRE };
+	CIS_ESCAPE, CIS_RETIRE,
+	/* 9--11 are userspace protocol scheduler/prefix records. */
+	CIS_ABORT = 12 };
 #ifdef CONFIG_CIS_OBSERVE
 #include <trace/events/cis.h>
 void __cis_lock_event(void *, unsigned int, unsigned int, struct task_struct *, unsigned long);

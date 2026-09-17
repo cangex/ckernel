@@ -749,6 +749,7 @@ err:
 err_early_kill:
 	cgroup_ifs_leave_lock(ifs_clock, IFS_MUTEX);
 	trace_contention_end(lock, ret);
+	cis_lock_event(lock, CIS_MUTEX, CIS_ABORT, NULL, (unsigned long)ret);
 	raw_spin_unlock(&lock->wait_lock);
 	debug_mutex_free_waiter(&waiter);
 	mutex_release(&lock->dep_map, ip);
