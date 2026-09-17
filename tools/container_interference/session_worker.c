@@ -1,0 +1,119 @@
+// SPDX-License-Identifier: GPL-2.0
+#define _GNU_SOURCE
+#include "include/cis.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+static volatile sig_atomic_t cancelled;
+static void stop_signal(int sig) { (void)sig; cancelled=1; }
+static int notify(int fd,const char *text)
+{
+	return send(fd,text,strlen(text),MSG_NOSIGNAL|MSG_DONTWAIT)==(ssize_t)strlen(text)?0:-1;
+}
+static uint64_t cpu_ns(void)
+{
+	struct timespec ts; clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+	return ts.tv_sec*1000000000ULL+ts.tv_nsec;
+}
+
+/* No shell, process-name cleanup, pins, or reused BPF objects. Inherited FDs are
+ * supplied only by the administrator controller, with immutable identities. */
+int main(int argc,char **argv)
+{
+	struct cis_context *ctx=calloc(1,sizeof(*ctx));
+	struct pollfd control;
+	struct rusage usage;
+	char packet[4096],inventory[3072];
+	const char *reason="COMPLETE";
+	uint64_t begin=cis_clock_ns(),prepared=0,start=0,end=0,stopped=0,cpu_begin=cpu_ns(),budget_cpu=0,budget_time=0;
+	uint64_t prepared_cpu=0,capture_cpu=0,stop_cpu=0;
+	int i,err=0,stop_error=0,channel,window,parent=getppid();
+	if(!ctx || argc<9 || argc>10) return 2;
+	channel=atoi(argv[1]); ctx->output_fd=atoi(argv[2]);
+	ctx->session_id=strtoull(argv[3],NULL,10); window=atoi(argv[5]);
+	ctx->session_collector=!strcmp(argv[4],"ip")?1:!strcmp(argv[4],"owner")?2:0;
+	if(!ctx->session_id || !ctx->session_collector || window<100 || window>10000) return 2;
+	ctx->output_limit=16ULL<<20; ctx->identity_only=1; ctx->psi_epoll=-1;
+	ctx->window_ms=window; ctx->ip_hz=1000; ctx->entry_rate_limit=200000;
+	ctx->max_diagnostics=2; ctx->memory_limit=64ULL<<20;
+	signal(SIGTERM,stop_signal); signal(SIGINT,stop_signal);
+	if(prctl(PR_SET_PDEATHSIG,SIGTERM) || getppid()!=parent) return 3;
+	control=(struct pollfd){.fd=channel,.events=POLLIN};
+	for(i=8;i<argc;i++) {
+		unsigned long long id,gen; int fd,n=0; struct cis_root *r;
+		if(sscanf(argv[i],"%d:%llu:%llu%n",&fd,&id,&gen,&n)!=3 || argv[i][n] ||
+		   cis_registry_add(ctx,fd,"target",&r) || r->id!=id) { err=1; reason="IDENTITY"; goto drain; }
+		r->generation=gen; close(fd);
+	}
+	if(cis_symbols_load(ctx)) { err=1; reason="SYMBOLS"; goto drain; }
+	if(cis_capture_prepare(ctx,argv[6])) { err=1; reason="PREPARE"; goto drain; }
+	if(cis_capture_inventory(ctx,inventory,sizeof(inventory))) { err=1; reason="INVENTORY"; goto drain; }
+	prepared=cis_clock_ns();
+	prepared_cpu=cpu_ns();
+	snprintf(packet,sizeof(packet),"{\"state\":\"ARMED\",\"time_ns\":%llu,\"inventory\":%s}",(unsigned long long)prepared,inventory);
+	if(notify(channel,packet)) { err=1; reason="CONTROL_LOST"; goto drain; }
+	/* The parent journals ownership before authorizing the first active probe. */
+	if(poll(&control,1,10000)<=0 || recv(channel,packet,sizeof(packet)-1,0)!=3 || memcmp(packet,"ARM",3) || cancelled) {
+		reason="CANCELLED"; goto drain;
+	}
+	if(!strcmp(argv[7],"after_prepare")) { err=1; reason="INJECTED_PREPARE"; goto drain; }
+	start=cis_clock_ns()+100000000ULL; end=start+window*1000000ULL;
+	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
+		struct cis_root *r=&ctx->roots[i];
+		if(cis_capture_root(ctx,r,1)) { err=1; reason="ROOT_MAP"; goto drain; }
+		if(ctx->session_collector==2) {
+			r->diagnostic_kind=16; r->requested_start_ns=start;
+			if(cis_capture_diagnostic(ctx,r,1)) { err=1; reason="OWNER_ATTACH"; goto drain; }
+			r->state=CIS_DIAGNOSING; ctx->diagnostic++;
+		}
+	}
+	if(cis_capture_arm(ctx,start,end) || cis_clock_ns()>=start) { err=1; reason="ARM_LATE"; goto drain; }
+	snprintf(packet,sizeof(packet),"{\"state\":\"CAPTURING\",\"start_ns\":%llu,\"end_ns\":%llu}",(unsigned long long)start,(unsigned long long)end);
+	if(notify(channel,packet)) { err=1; reason="CONTROL_LOST"; goto drain; }
+	budget_time=start; budget_cpu=cpu_ns();
+	capture_cpu=budget_cpu;
+	while(!cancelled && cis_clock_ns()<end) {
+		uint64_t now=cis_clock_ns();
+		int p=poll(&control,1,10);
+		if(p>0) { reason="CANCELLED"; break; }
+		if(p<0 && errno!=EINTR) { err=1; reason="POLL"; break; }
+		if(cis_capture_poll(ctx)<0) { err=1; reason="CAPTURE_BUDGET_OR_ERROR"; break; }
+		if(ctx->output_error) { err=1; reason=ctx->output_error==EFBIG?"DATA_LIMIT":"OUTPUT_ERROR"; break; }
+		if(now>budget_time+1000000000ULL) {
+			uint64_t cpu=cpu_ns();
+			if(cpu-budget_cpu>20000000ULL) { err=1; reason="WORKER_CPU_LIMIT"; break; }
+			budget_time=now; budget_cpu=cpu;
+		}
+	}
+	if(cancelled) reason="CANCELLED";
+drain:
+	notify(channel,"{\"state\":\"DRAIN\"}");
+	stop_error=cis_capture_quiesce(ctx); stopped=cis_clock_ns();
+	stop_cpu=cpu_ns();
+	cis_capture_stop(ctx);
+	cis_registry_destroy(ctx); cis_symbols_free(ctx);
+	if(ctx->errors || ctx->dropped || ctx->output_error) err=1;
+	if(err && !strcmp(reason,"COMPLETE")) reason="QUALITY";
+	if(close(ctx->output_fd)) { err=1; reason="OUTPUT_CLOSE"; }
+	getrusage(RUSAGE_SELF,&usage);
+	snprintf(packet,sizeof(packet),"{\"state\":\"VERIFY\",\"result\":\"%s\",\"reason\":\"%s\",\"begin_ns\":%llu,\"prepared_ns\":%llu,\"start_ns\":%llu,\"end_ns\":%llu,\"producers_stopped_ns\":%llu,\"destroyed_ns\":%llu,\"cpu_ns\":%llu,\"maxrss_kib\":%ld,\"errors\":%u,\"dropped\":%u,\"output_error\":%d,\"bytes\":%llu,\"stop_error\":%d,\"prepare_cpu_ns\":%llu,\"armed_capture_cpu_ns\":%llu,\"drain_cpu_ns\":%llu}",
+		!strcmp(reason,"CANCELLED")?"CANCELLED":err?"PARTIAL":"COMPLETE",reason,
+		(unsigned long long)begin,(unsigned long long)prepared,(unsigned long long)start,(unsigned long long)end,
+		(unsigned long long)stopped,(unsigned long long)cis_clock_ns(),(unsigned long long)(cpu_ns()-cpu_begin),
+		usage.ru_maxrss,ctx->errors,ctx->dropped,ctx->output_error,(unsigned long long)ctx->output_bytes,stop_error,
+		(unsigned long long)(prepared_cpu?prepared_cpu-cpu_begin:0),
+		(unsigned long long)(capture_cpu?stop_cpu-capture_cpu:0),(unsigned long long)(cpu_ns()-stop_cpu));
+	notify(channel,packet); close(channel); free(ctx);
+	return stop_error?4:err?1:0;
+}

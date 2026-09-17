@@ -1,5 +1,7 @@
 /cisd
 /cisctl
+/session-worker
+/session-residue
 /bpf/*.o
 /bpf/vmlinux.h*
 __pycache__/

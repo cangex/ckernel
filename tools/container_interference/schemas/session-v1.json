@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIS single-shot start request v1",
+  "type": "object",
+  "required": ["version", "op", "nonce", "collector", "targets"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": 1},
+    "op": {"const": "start"},
+    "nonce": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9]+$"},
+    "collector": {"enum": ["ip", "owner"]},
+    "targets": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9]+:[0-9]+$"}},
+    "window_ms": {"type": "integer", "minimum": 100, "maximum": 10000, "default": 2000},
+    "inject": {"enum": ["none", "after_prepare"], "default": "none"}
+  }
+}
