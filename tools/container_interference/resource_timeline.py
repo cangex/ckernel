@@ -19,6 +19,8 @@ def counter_delta(first, last):
 
 def cpu_bounds(rows, begin, end):
     """Bracket a phase without pretending asynchronous snapshots are simultaneous."""
+    if type(begin) is not int or type(end) is not int or begin < 0 or begin > end:
+        raise ValueError('CPU phase boundary')
     def boundary(stamp):
         before=[r for r in rows if r.get('end_ns',r['time_ns'])<=stamp]
         after=[r for r in rows if r['time_ns']>=stamp]

@@ -36,5 +36,9 @@ class RuntimeEvidence(unittest.TestCase):
         result=analyze(self.log()+'\nCIS_PROFILE_VM_EXIT=1',{'worker_sha256':'a'})
         self.assertEqual(result['subchecks']['boundary_failures']['status'],'FAIL')
 
+    def test_duplicate_artifact_cannot_overwrite_failure(self):
+        with self.assertRaises(ValueError):
+            analyze(self.log()+'\nCIS_FILE /tmp/records/1.json\n{}',{'worker_sha256':'a'})
+
 
 if __name__=='__main__':unittest.main()

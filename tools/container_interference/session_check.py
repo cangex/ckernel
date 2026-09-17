@@ -14,7 +14,9 @@ def extract(text):
     files={};current=None
     for line in text.splitlines():
         if line.startswith('CIS_FILE '):
-            current=line.split(' ',1)[1];files[current]=[]
+            current=line.split(' ',1)[1]
+            if current in files:raise ValueError('duplicate raw artifact path: '+current)
+            files[current]=[]
         elif current:
             files[current].append(line)
     return {name:'\n'.join(lines) for name,lines in files.items()}

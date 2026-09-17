@@ -43,6 +43,7 @@ class ResourceTimeline(unittest.TestCase):
         bounds=cpu_bounds(rows,5,25)
         self.assertEqual((bounds['lower_usec'],bounds['upper_usec']),(40,200))
         self.assertEqual(cpu_bounds(rows,0,25)['status'],'UNKNOWN')
+        with self.assertRaises(ValueError):cpu_bounds(rows,25,0)
 
 
 if __name__=='__main__': unittest.main()
