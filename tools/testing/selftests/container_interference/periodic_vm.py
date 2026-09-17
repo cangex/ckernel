@@ -34,6 +34,7 @@ def run(args):
     root.mkdir()
     (root/'management').mkdir()
     (root/'management/cgroup.procs').write_text(str(os.getpid()))
+    (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
     os.sched_setaffinity(0, {7})
     endpoint = '/run/profile-periodic-'+stamp+'.sock'
     command = ['/usr/bin/python3', '/profile/session.py', '--socket', endpoint,

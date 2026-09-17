@@ -20,8 +20,12 @@ if [ "$status" -eq 0 ] && [ -f /profile/storage_vm.py ]; then
     /usr/bin/python3 /profile/storage_vm.py
     status=$?
 fi
+if [ "$status" -eq 0 ] && [ -f /profile/identity_vm.py ]; then
+    /usr/bin/python3 /profile/identity_vm.py
+    status=$?
+fi
 echo "CIS_PROFILE_VM_EXIT=$status"
-for f in /tmp/session-evidence/controller.log /tmp/session-evidence/*-*.log /tmp/session-evidence/records/*; do
+for f in /tmp/session-evidence/controller.log /tmp/session-evidence/*-*.log /tmp/session-evidence/*-result.json /tmp/session-evidence/records/* /tmp/session-evidence/identity-records/*; do
     [ -f "$f" ] || continue
     echo "CIS_FILE $f"
     cat "$f"
