@@ -98,7 +98,8 @@ def evaluate(source, artifacts):
                                [checks[mode + '_capture_quality']])
         details[check] = dict(artifact_sha256=entry['sha256'], results=[row for row in costs if row['workload'] == 'throughput'])
     idle_batches = [(entry, summary) for entry, summary in rows
-                    if all(x['interval']['n'] == 5 for x in summary['cost'] if x['mode'] == 'idle')]
+                    if any(x['mode'] == 'idle' for x in summary['cost']) and
+                    all(x['interval']['n'] == 5 for x in summary['cost'] if x['mode'] == 'idle')]
     if len(idle_batches) == 1:
         entry, summary = idle_batches[0]
         for workload, check in (('throughput', 'idle_throughput'), ('latency', 'idle_p99')):
