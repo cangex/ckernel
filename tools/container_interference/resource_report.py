@@ -11,7 +11,7 @@ FIELDS=re.compile(r'(\w+)=([^ ;]+)')
 
 def analyze(text):
     runs, current, collecting, body=[],None,None,[]
-    rss, process_cpu=[],[]
+    rss, process_cpu, lifecycle, memory_inventory=[],[],[],[]
     for line in text.splitlines():
         if line.startswith('CIS_FLEET_BEGIN '):
             current={'configuration':dict(FIELDS.findall(line)),'snapshots':{}}
@@ -30,7 +30,13 @@ def analyze(text):
             except ValueError:continue
             if r.get('kind')=='budget':
                 f=dict(FIELDS.findall(r['detail']))
-                rss.append(int(f.get('rss_bytes',0)));process_cpu.append(int(f.get('user_cpu_ns',0)))
+                rss.append(int(f.get('rss_bytes',0)))
+                # Older releases misnamed process CPU "user_cpu_ns". Never add both.
+                process_cpu.append(int(f.get('process_cpu_ns',f.get('user_cpu_ns',0))))
+            elif r.get('kind')=='lifecycle_cost':
+                lifecycle.append(dict(FIELDS.findall(r['detail'])))
+            elif r.get('kind')=='kernel_memory_inventory':
+                memory_inventory.append(dict(FIELDS.findall(r['detail'])))
     out=[]
     for run in runs:
         config=run['configuration'];s=run['snapshots'].get('start',{});e=run['snapshots'].get('end',{})
@@ -56,6 +62,7 @@ def analyze(text):
         out.append(entry)
     return {'version':1,'runs':out,'max_observer_rss_bytes':max(rss,default=None),
             'max_reported_process_cpu_ns':max(process_cpu,default=None),
+            'lifecycle_costs':lifecycle,'kernel_memory_inventory':memory_inventory,
             'limitations':['RSS is not total kernel memory; memory.current is charge, not ownership of every shared page.',
                            'Startup and unregister CPU outside snapshots require separate budget records.',
                            'Per-CPU kernel work is not automatically attributed to the observer; retain unknown background cost.',

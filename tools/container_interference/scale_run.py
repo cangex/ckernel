@@ -7,10 +7,12 @@ import json
 import pathlib
 from acceptance import performance_gate
 from scale_plan import matrix
+from profiles import collector_gate
 
 
 def generate(plan, gate, gate_raw):
     if (plan.get('status') != 'READY_FOR_WINDOW_VALIDATION' or
+            not collector_gate(gate,plan.get('release_profile')) or
             plan.get('ambient_result_sha256') != hashlib.sha256(gate_raw).hexdigest() or
             plan.get('cases') != matrix() or not gate.get('pass') or
             not performance_gate('S2', 'ambient_throughput', [gate]) or

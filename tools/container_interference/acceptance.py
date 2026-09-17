@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import pathlib
+from profiles import collector_gate
 
 STATES = {'IMPLEMENTED', 'PASS', 'FAIL', 'SKIP', 'UNSUPPORTED', 'BLOCKED'}
 REQUIRED = {
@@ -19,13 +20,15 @@ REQUIRED = {
 }
 
 
-def performance_gate(stage, name, reports):
+def performance_gate(stage, name, reports, profile=None):
     """Recompute numerical gates; a hashed arbitrary log is not a measurement."""
     workload = 'open-loop' if name == 'ambient_p99' else 'bench'
     mode = 'diag' if name == 'diagnostic_throughput' else 'ip'
     threshold = 2 if workload == 'open-loop' else 3 if mode == 'diag' else 1
     for report in reports:
         if not isinstance(report, dict) or not report.get('coverage_valid'):
+            continue
+        if profile is not None and not collector_gate(report, profile, name == 'diagnostic_throughput'):
             continue
         if report.get('failures') or report.get('observer_errors') or report.get('missing_coverage'):
             continue
@@ -36,6 +39,10 @@ def performance_gate(stage, name, reports):
         if stage == 'S6':
             required = {(count, role) for count in (1, 12, 24, 48)
                         for role in ('target', 'bystander') if count > 1 or role == 'target'}
+        collectors = {None}
+        if profile is not None and mode == 'diag':
+            collectors = {x for x in profile['collectors'] if x.startswith('owner_')}
+        required = {(count, role, collector) for count, role in required for collector in collectors}
         valid = set()
         for row in rows:
             interval = row.get('95pct_interval', [])
@@ -44,7 +51,10 @@ def performance_gate(stage, name, reports):
                     interval[0] > interval[1] or interval[1] > threshold or
                     row.get('threshold_percent') != threshold):
                 continue
-            valid.add((row.get('containers') if stage == 'S6' else None, row.get('role')))
+            if profile is not None and mode == 'diag' and row.get('profile_sha256') != report.get('profile_sha256'):
+                continue
+            valid.add((row.get('containers') if stage == 'S6' else None, row.get('role'),
+                       row.get('collector') if profile is not None and mode == 'diag' else None))
         if required <= valid:
             return True
     return False
@@ -52,6 +62,9 @@ def performance_gate(stage, name, reports):
 
 def check(manifest, directory):
     stages, errors = {}, []
+    profile = manifest.get('release_profile')
+    if profile is None:
+        errors.append('release_profile absent: legacy results do not admit the new collectors')
     for stage, required in REQUIRED.items():
         items = manifest.get('stages', {}).get(stage, {})
         results = {}
@@ -83,7 +96,7 @@ def check(manifest, directory):
                 errors.append(f'{stage}/{name}: passing claim lacks verified artifact')
                 acceptable = False
             if acceptable and name in ('ambient_throughput', 'ambient_p99', 'diagnostic_throughput'):
-                if not performance_gate(stage, name, reports):
+                if not performance_gate(stage, name, reports, profile):
                     errors.append(f'{stage}/{name}: numerical or coverage gate not met')
                     acceptable = False
             results[name] = {'status': status, 'accepted': acceptable, 'reason': item.get('reason', '')}

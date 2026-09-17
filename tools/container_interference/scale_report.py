@@ -118,7 +118,9 @@ def analyze(text):
                                         'mean_absolute_change': statistics.mean(absolute) if absolute else None,
                                         '95pct_interval': ci, 'threshold_percent': threshold, 'status': status})
     valid = not failures and not errors and not missing
-    return {'version': 1, 'scope': 'isolated ARM64 KVM only', 'case_count': len(cases), 'results': results,
+    return {'version': 1, 'scope': 'legacy sched-only ARM64 KVM matrix; cannot admit owner or fast-alert profiles',
+            'release_profile_bound': False, 'release_accepted': False,
+            'case_count': len(cases), 'results': results,
             'failures': failures, 'observer_errors': errors, 'missing_coverage': missing, 'coverage_valid': valid,
             'pass': valid and all(r['status']=='PASS' for r in results if r['family']=='ambient' or r['workload']=='bench'),
             'limitations': ['Final bench batch is conservatively charged against the monitored configuration.',

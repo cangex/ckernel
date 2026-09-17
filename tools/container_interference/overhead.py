@@ -17,14 +17,14 @@ def interval(values):
     if len(values) < 2:
         return [None, None]
     # Only predeclared cohort sizes; never extend sampling until the CI passes.
-    critical = {5: 2.776445105, 20: 2.093024054}
+    critical = {5: 2.776445105, 10: 2.262157163, 20: 2.093024054}
     if len(values) not in critical:
         return [None, None]
     half = critical[len(values)] * statistics.stdev(values) / math.sqrt(len(values))
     return [mean-half, mean+half]
 
 
-def analyze(text, rounds=5, modes=('metrics', 'ip')):
+def analyze(text, rounds=5, modes=('metrics', 'ip'), require_fast_alert=False):
     records = {}
     current = None
     failures = []
@@ -32,6 +32,7 @@ def analyze(text, rounds=5, modes=('metrics', 'ip')):
     observer_errors = []
     observer_case, windows, roots, sampled = {}, {}, collections.defaultdict(set), collections.defaultdict(collections.Counter)
     active_observer = None
+    runtime_profiles = {}
     for line in text.splitlines():
         if line.startswith('{'):
             try:
@@ -41,6 +42,8 @@ def analyze(text, rounds=5, modes=('metrics', 'ip')):
                 continue
             observer_kinds[event.get('kind', 'unrelated')] += 1
             case = observer_case.get(active_observer)
+            if case and event.get('kind') == 'runtime_profile':
+                runtime_profiles[case] = dict(VALUES.findall(event.get('detail', '')))
             if case and event.get('kind') == 'register':
                 roots[case].add(event['id'])
             if case and event.get('kind') == 'IP':
@@ -48,7 +51,7 @@ def analyze(text, rounds=5, modes=('metrics', 'ip')):
                 begin, finish = windows[case]
                 if begin <= int(fields['sample_time_ns']) <= finish:
                     sampled[case][event['id']] += 1
-            if event.get('kind') in ('capture_failure','budget_disable','capture_error','sample_schema_error','metrics_budget_disable','budget_unavailable','entry_budget_disable','buffer_loss'):
+            if event.get('kind') in ('capture_failure','budget_disable','capture_error','sample_schema_error','metrics_budget_disable','budget_unavailable','entry_budget_disable','buffer_loss','fast_budget_disable','fast_source_error'):
                 observer_errors.append(event)
             if event.get('kind') == 'budget':
                 quality = dict(VALUES.findall(event.get('detail', '')))
@@ -112,6 +115,8 @@ def analyze(text, rounds=5, modes=('metrics', 'ip')):
             case=(run,workload,'ip')
             if len(roots[case])!=2 or any(not sampled[case][root] for root in roots[case]):
                 missing_coverage.append({'case':case,'registered_roots':list(roots[case]),'samples':dict(sampled[case])})
+            if require_fast_alert and any(runtime_profiles.get(case,{}).get(k)!='1' for k in ('metrics','kernel_ip','psi_alert')):
+                missing_coverage.append({'case':case,'reason':'full ambient profile not active'})
     return {'version': 2, 'environment': 'isolated ARM64 KVM; no bare-metal claim',
             'baseline_mode': 'no daemon/probes; same test harness', 'results': results,
             'failures': failures, 'measurement_count': len(records),
@@ -119,6 +124,8 @@ def analyze(text, rounds=5, modes=('metrics', 'ip')):
             'missing_coverage': missing_coverage,
             'coverage_valid': not missing_coverage and not observer_errors,
             'predeclared_rounds': rounds, 'compared_modes': modes,
+            'runtime_profiles': [dict(case=k,**v) for k,v in runtime_profiles.items()],
+            'require_fast_alert': require_fast_alert,
             'pass': len(records) == rounds*2*2*(1+len(modes)) and not failures and not observer_errors and not missing_coverage and all(x['status'] == 'PASS' for x in results),
             'limitations': ['Initial screen: 2 active containers only, not S6 scale coverage.',
                             'Paired t interval assumes independent paired rounds; no significance claim from non-rejection.',
@@ -130,10 +137,11 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('input', type=pathlib.Path)
     p.add_argument('output', type=pathlib.Path)
-    p.add_argument('--rounds', type=int, choices=(5,20), default=5)
+    p.add_argument('--rounds', type=int, choices=(5,10,20), default=5)
     p.add_argument('--full-mode-only', action='store_true')
+    p.add_argument('--require-fast-alert', action='store_true')
     args = p.parse_args()
-    result = analyze(args.input.read_text(), args.rounds, ('ip',) if args.full_mode_only else ('metrics','ip'))
+    result = analyze(args.input.read_text(), args.rounds, ('ip',) if args.full_mode_only else ('metrics','ip'), args.require_fast_alert)
     with args.output.open('x') as output:
         json.dump(result, output, indent=2)
         output.write('\n')

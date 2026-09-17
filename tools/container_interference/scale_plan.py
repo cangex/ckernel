@@ -6,6 +6,7 @@ import hashlib
 import json
 import pathlib
 from acceptance import performance_gate
+from profiles import collector_gate
 
 
 def matrix():
@@ -28,13 +29,16 @@ if __name__=='__main__':
     p=argparse.ArgumentParser()
     p.add_argument('--ambient-result',type=pathlib.Path,required=True)
     p.add_argument('--output',type=pathlib.Path,required=True)
+    p.add_argument('--profile',type=pathlib.Path,required=True)
     a=p.parse_args();raw=a.ambient_result.read_bytes();gate=json.loads(raw)
+    profile=json.loads(a.profile.read_text())
     accepted=(gate.get('pass') is True and gate.get('coverage_valid') is True and
+              collector_gate(gate,profile) and
               performance_gate('S2','ambient_throughput',[gate]) and
               performance_gate('S2','ambient_p99',[gate]))
     result={'version':2,'status':'READY_FOR_WINDOW_VALIDATION' if accepted else 'BLOCKED',
             'reason':'Diagnostic windows must be validated before their cost is accepted.' if accepted else 'Ambient overhead/coverage prerequisite not accepted; no performance execution authorized by this plan.',
-            'ambient_result_sha256':hashlib.sha256(raw).hexdigest(),'cases':matrix(),
+            'ambient_result_sha256':hashlib.sha256(raw).hexdigest(),'cases':matrix(),'release_profile':profile,
             'idle_counts':[128,256],'same_kernel':True,'minimum_vcpus':49,
             'tail_definition':'fixed offered rate; response from scheduled arrival; retain backlog/timeouts',
             'thresholds':{'ambient_throughput_percent':1,'ambient_p99_percent':2,'diagnostic_throughput_percent':3},
