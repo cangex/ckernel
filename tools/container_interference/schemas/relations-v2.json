@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIS typed evidence relation v2",
+  "type": "object",
+  "required": ["level", "relation_type", "causal"],
+  "properties": {
+    "level": {"enum": ["E0", "E1", "E2", "E3", "INCOMPLETE"]},
+    "relation_type": {"enum": ["observation", "cowaiter", "holder_waiter", "submitter_executor", "pressure_contributor", "eligible_cpu_overlap", "queue_service"]},
+    "causal": {"type": "boolean"},
+    "attempt_ns": {"type": "integer", "minimum": 1},
+    "outcome": {"enum": ["acquired", "aborted"]},
+    "result": {"type": "integer"},
+    "intervention_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "controlled_experiment": {"type": "boolean"}
+  },
+  "allOf": [
+    {"if": {"properties": {"level": {"enum": ["E0", "E1", "E2", "INCOMPLETE"]}}},
+     "then": {"properties": {"causal": {"const": false}}}},
+    {"if": {"properties": {"relation_type": {"const": "holder_waiter"}}},
+     "then": {"required": ["attempt_ns", "outcome", "result", "holder", "waiter", "begin_ns", "end_ns"]}},
+    {"if": {"properties": {"relation_type": {"const": "cowaiter"}}},
+     "then": {"required": ["owner"], "properties": {"owner": {"const": "unknown"}}}},
+    {"if": {"properties": {"level": {"const": "E3"}}},
+     "then": {"required": ["intervention_evidence_sha256", "controlled_experiment"],
+              "properties": {"controlled_experiment": {"const": true}, "causal": {"const": true}}}}
+  ]
+}

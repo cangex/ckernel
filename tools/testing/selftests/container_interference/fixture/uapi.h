@@ -26,4 +26,11 @@ struct cis_fixture_dentry {
 	__u64 object, cgroup_id, tid, begin_ns, end_ns, slowpaths;
 };
 #define CIS_FIXTURE_DENTRY _IOWR('C',8,struct cis_fixture_dentry)
+struct cis_fixture_attempt {
+	__u32 mode, hold_us;
+	__s32 result;
+	__u32 reserved;
+	__u64 object, tid, cgroup_id, begin_ns, end_ns, acquired_ns;
+};
+#define CIS_FIXTURE_ATTEMPT _IOWR('C',9,struct cis_fixture_attempt)
 #endif

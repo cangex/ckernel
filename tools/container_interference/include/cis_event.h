@@ -31,7 +31,9 @@ struct cis_owner_event {
 	__u64 holder_id, holder_generation, holder_tid, holder_start;
 	__u32 phase, resource;
 	__u64 skipped;
+	__u64 attempt_ns;
 };
+struct cis_attempt { __u64 start_ns, epoch, id, generation; };
 struct cis_object_key { __u64 object; __u32 kind, reserved; };
 struct cis_watch { __u64 id, generation, start_ns, deadline_ns, epoch, events; };
 struct cis_owner_record { __u64 id, generation, tid, task_start, acquired_ns; };

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #define _GNU_SOURCE
 #include "include/cis.h"
+#include "include/cis_metrics_schedule.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -27,6 +28,22 @@ static uint64_t profile_cpu(void)
 	return (uint64_t)t.tv_sec*1000000000ULL+t.tv_nsec;
 }
 
+static void lifecycle_cost(struct cis_context *ctx,const char *phase,uint64_t began,uint64_t cpu)
+{
+	uint64_t ended=cis_clock_ns(),consumed=profile_cpu();
+	struct rusage usage;
+	char detail[512];
+	if(!consumed || consumed<cpu || ended<began || getrusage(RUSAGE_SELF,&usage)) {
+		cis_report(ctx,"lifecycle_cost_unavailable",NULL,phase); return;
+	}
+	snprintf(detail,sizeof(detail),"phase=%s wall_ns=%llu process_cpu_ns=%llu user_total_ns=%llu system_total_ns=%llu max_rss_bytes=%llu excludes_async_kernel_work=1",
+		phase,(unsigned long long)(ended-began),(unsigned long long)(consumed-cpu),
+		(unsigned long long)usage.ru_utime.tv_sec*1000000000ULL+(unsigned long long)usage.ru_utime.tv_usec*1000,
+		(unsigned long long)usage.ru_stime.tv_sec*1000000000ULL+(unsigned long long)usage.ru_stime.tv_usec*1000,
+		(unsigned long long)usage.ru_maxrss*1024);
+	cis_report(ctx,"lifecycle_cost",NULL,detail);
+}
+
 static int server(const char *path)
 {
 	struct sockaddr_un addr = { .sun_family = AF_UNIX };
@@ -42,7 +59,7 @@ static int server(const char *path)
 	return fd;
 }
 
-static void request(struct cis_context *ctx, int fd)
+static unsigned int request(struct cis_context *ctx, int fd)
 {
 	struct cis_request req = { 0 };
 	struct cis_reply rep = { .error = -EINVAL, .size = sizeof(rep) };
@@ -110,10 +127,12 @@ static void request(struct cis_context *ctx, int fd)
 done:
 	for (i = 0; i < (unsigned int)nfds; i++) close(passed[i]);
 	if (send(fd, &rep, sizeof(rep), MSG_DONTWAIT|MSG_NOSIGNAL) < 0) ctx->errors++;
+	return req.command;
 }
 
 int main(int argc, char **argv)
 {
+	uint64_t started=cis_clock_ns(),started_cpu=profile_cpu(),cleanup_ns,cleanup_cpu;
 	struct cis_context *ctx = calloc(1, sizeof(*ctx));
 	const char *socket_path = CIS_SOCKET, *object = "bpf/cis.bpf.o", *output = NULL;
 	int i, status = 1, ready_fd = -1;
@@ -173,11 +192,18 @@ int main(int argc, char **argv)
 	}
 	cis_report(ctx,"start",NULL,"no workload interference percentage inferred; report files host-admin only");
 	{
+		char profile[256];
+		snprintf(profile,sizeof(profile),"metrics=%d kernel_ip=%d psi_alert=%d owner_protocol=2 default_release_accepted=0",ctx->mode>0,ctx->mode==2,ctx->fast_alert);
+		cis_report(ctx,"runtime_profile",NULL,profile);
+	}
+	{
 		char budget[96];
 		snprintf(budget,sizeof(budget),"entry_rate_limit=%u ip_hz=%u",ctx->entry_rate_limit,ctx->ip_hz);
 		cis_report(ctx,"capture_policy",NULL,budget);
+		cis_report(ctx,"control_policy",NULL,"registration_max_requests_per_second=16 other_admin_max_requests_per_second=32 business_sampling_unchanged=1");
 		cis_report(ctx,"metric_policy",NULL,"populated_full_interval_ms=1000 empty_presence_memory_interval_ms=1000 empty_cpu_psi_interval_ms=5000 empty_samples_never_train_business_baseline=1");
 	}
+	lifecycle_cost(ctx,"startup",started,started_cpu);
 	if (ready_fd >= 0) { if (write(ready_fd,"R",1)!=1) goto out; close(ready_fd); }
 	while (!quitting && !ctx->stopping && (!end || cis_clock_ns()<end)) {
 		struct pollfd fds[3]={{ctx->socket_fd,POLLIN,0},{ctx->mode?ctx->psi_epoll:-1,POLLIN,0},{cis_capture_fd(ctx),POLLIN,0}};
@@ -203,7 +229,12 @@ int main(int argc, char **argv)
 			int client=accept4(ctx->socket_fd,NULL,NULL,SOCK_CLOEXEC|SOCK_NONBLOCK);
 			if (client>=0) {
 				struct pollfd cp={client,POLLIN,0};
-				if (poll(&cp,1,10)>0) request(ctx,client);
+				if (poll(&cp,1,10)>0) {
+					unsigned int command=request(ctx,client);
+					/* Slow bulk administrative changes, never business events. */
+					if(command==CIS_REGISTER || command==CIS_UNREGISTER)
+						next_control_ns=cis_clock_ns()+62500000;
+				}
 				close(client);
 			}
 			if(ctx->profile_loop) profile_totals[0]+=profile_cpu()-segment;
@@ -215,7 +246,7 @@ int main(int argc, char **argv)
 			struct cis_metric m;
 			int metric_result;
 			if (!r->used || now<r->next_ns) continue;
-			r->next_ns=now+1000000000;
+			r->next_ns=cis_metric_next(r->next_ns,now);
 			ctx->metrics_reads++;
 			metric_result=cis_metrics_read(r,&m);
 			if(metric_result<0) {
@@ -229,7 +260,10 @@ int main(int argc, char **argv)
 					cis_registry_remove(ctx,r->id,r->generation);
 				} else { ctx->errors++; cis_report(ctx,"metric_error",r,"missing/stale resource field, not zero"); }
 			} else {
-				if(cis_config_epoch(ctx,r,now)) { ctx->errors++; cis_report(ctx,"config_error",r,"configuration read failed, not silently frozen"); }
+				if(cis_config_epoch(ctx,r,now)) {
+					ctx->errors++; cis_report(ctx,"config_error",r,"configuration unavailable; diagnostic stopped and learning reset");
+					continue;
+				}
 				if(!m.populated) cis_baseline_idle(ctx,r,&m,metric_result);
 				else cis_baseline_update(ctx,r,&m);
 			}
@@ -255,8 +289,11 @@ int main(int argc, char **argv)
 	}
 	status=0;
 out:
+	cleanup_ns=cis_clock_ns();cleanup_cpu=profile_cpu();
 	cis_registry_destroy(ctx); cis_capture_stop(ctx); cis_symbols_free(ctx);
 	if(ctx->psi_epoll>=0) close(ctx->psi_epoll);
+	lifecycle_cost(ctx,"teardown",cleanup_ns,cleanup_cpu);
+	lifecycle_cost(ctx,"process_pre_exit",started,0);
 	{
 		char quality[192];
 		snprintf(quality,sizeof(quality),"errors=%u drops=%u retired_or_unknown_userspace_samples=%u",ctx->errors,ctx->dropped,ctx->unknown);

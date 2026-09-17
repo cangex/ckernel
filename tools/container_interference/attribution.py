@@ -13,7 +13,7 @@ FIELDS = re.compile(r'(\w+)=([^ ;]+)')
 def classify(record):
     fields = dict(FIELDS.findall(record.get('detail', '')))
     result = {k: record[k] for k in ('time_ns', 'id', 'generation', 'name') if k in record}
-    result.update(level='E0', relation='unknown', causal=False, fields=fields)
+    result.update(level='E0', relation='unknown', relation_type='observation', causal=False, fields=fields)
     if record.get('kind') == 'E1':
         kind = int(fields.get('type', '0'))
         result['level'] = 'E1'
@@ -62,13 +62,13 @@ def analyze(lines):
                     relation = 'same_container_cowaiters'
                 else:
                     relation = 'cross_container_cowaiters'
-                relations.append({'level':'E2', 'relation':relation, 'object':obj,
+                relations.append({'level':'E2', 'relation':relation, 'relation_type':'cowaiter', 'object':obj,
                                   'participants':[[prior['id'],prior['generation']],[item['id'],item['generation']]],
                                   'trusted_interval_ns':[start,min(limit,end)],
                                   'owner':'unknown', 'causal':False,
                                   'condition':'supported mutex begin/end protocol and valid kernel object lifetime during both waits'})
             active.append((end,item))
-    return {'version': 1, 'evidence': evidence, 'relations':relations, 'record_counts': dict(counts),
+    return {'version': 2, 'evidence': evidence, 'relations':relations, 'record_counts': dict(counts),
             'parse_errors': failures,
             'coverage_boundary': 'E2 co-waiter relation only for overlapping supported mutex intervals; never holder/victim or E3 causality',
             'additive_total': None}

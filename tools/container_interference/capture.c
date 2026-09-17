@@ -33,7 +33,7 @@ struct capture {
 	uint64_t last_stats_ns, last_received;
 	uint64_t counter_enabled[CIS_CPU_CAP],counter_running[CIS_CPU_CAP],counter_read_ns[CIS_CPU_CAP];
 	unsigned int counter_cursor;
-	uint64_t next_counter_ns;
+	uint64_t next_counter_ns, next_full_consume_ns;
 	struct cis_bpf_stats *cpu_stats;
 	int possible_cpus;
 };
@@ -41,6 +41,40 @@ struct capture {
 static int mapfd(struct capture *c,const char *name)
 {
 	return bpf_object__find_map_fd_by_name(c->object,name);
+}
+
+static int fd_memlock(int fd,unsigned long long *bytes)
+{
+	char path[64],line[256];
+	FILE *file;
+	snprintf(path,sizeof(path),"/proc/self/fdinfo/%d",fd);
+	file=fopen(path,"r");
+	if(!file) return -1;
+	while(fgets(line,sizeof(line),file)) if(sscanf(line,"memlock: %llu",bytes)==1) {
+		fclose(file); return 0;
+	}
+	fclose(file); return -1;
+}
+
+static void memory_inventory(struct capture *c,int pages)
+{
+	struct bpf_map *map;
+	struct bpf_program *program;
+	unsigned long long maps=0,programs=0,value;
+	unsigned int missing=0;
+	char detail[600];
+	bpf_object__for_each_map(map,c->object) {
+		if(fd_memlock(bpf_map__fd(map),&value)) missing++;
+		else maps+=value;
+	}
+	bpf_object__for_each_program(program,c->object) {
+		if(fd_memlock(bpf_program__fd(program),&value)) missing++;
+		else programs+=value;
+	}
+	snprintf(detail,sizeof(detail),"bpf_maps_fdinfo_bytes=%llu bpf_program_pages_bytes=%llu perf_output_mapping_bytes=%llu ip_mapping_bytes=%llu missing_fdinfo=%u rss_overlap_do_not_sum=1 excludes=jit_aux_btf_perf_objects_psi_workers total_complete=0",
+		maps,programs,(unsigned long long)(pages+1)*4096*c->possible_cpus,
+		(unsigned long long)2*4096*c->ncpu,missing);
+	cis_report(c->ctx,"kernel_memory_inventory",NULL,detail);
 }
 
 static void event(void *opaque,int cpu,void *data,__u32 size)
@@ -57,11 +91,12 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 		char d[1100];
 		r=cis_registry_lookup(ctx,e->id,e->generation);
 		if(!r) {ctx->unknown++;return;}
-		snprintf(d,sizeof(d),"sample_time_ns=%llu object=0x%llx epoch=%llu phase=%u resource=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu holder_tid=%llu holder_start=%llu holder_id=%llu holder_generation=%llu cpu=%u flags=%u skipped=%llu stack_id=%d",
+		snprintf(d,sizeof(d),"protocol=2 sample_time_ns=%llu object=0x%llx epoch=%llu phase=%u resource=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu holder_tid=%llu holder_start=%llu holder_id=%llu holder_generation=%llu cpu=%u flags=%u skipped=%llu stack_id=%d attempt_ns=%llu result=%d",
 			(unsigned long long)e->time_ns,(unsigned long long)e->object,(unsigned long long)e->sequence_ns,o->phase,o->resource,
 			(unsigned long long)e->tid,(unsigned long long)o->actor_start,(unsigned long long)o->actor_id,(unsigned long long)o->actor_generation,
 			(unsigned long long)o->holder_tid,(unsigned long long)o->holder_start,(unsigned long long)o->holder_id,(unsigned long long)o->holder_generation,
-			e->cpu,e->flags,(unsigned long long)o->skipped,e->stack_id);
+			e->cpu,e->flags,(unsigned long long)o->skipped,e->stack_id,
+			(unsigned long long)o->attempt_ns,o->phase==12?(int)e->flags:0);
 		cis_report(ctx,"OWNER",r,d);return;
 	}
 	/* PERF_SAMPLE_RAW includes trailing alignment bytes in its reported size. */
@@ -126,6 +161,13 @@ static int configure_links(struct capture *c,unsigned int kinds)
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
 		if(!(kinds&masks[i])) { bpf_link__destroy(c->diagnostic_links[i]); c->diagnostic_links[i]=NULL; }
 		else if(!c->diagnostic_links[i] && attach(c,names[i],&c->diagnostic_links[i])) return -EIO;
+	}
+	if(c->active_kinds!=kinds) {
+		char detail[256];
+		unsigned int count=0;
+		for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) count+=!!c->diagnostic_links[i];
+		snprintf(detail,sizeof(detail),"collector_mask=%u attached_links=%u owner_protocol=2",kinds,count);
+		cis_report(c->ctx,"diagnostic_links",NULL,detail);
 	}
 	c->active_kinds=kinds; return 0;
 }
@@ -227,6 +269,19 @@ static void clear_watches(struct capture *c,struct cis_root *r)
 		key=next;
 	}
 	if(visited>=128) cis_report(c->ctx,"owner_cleanup_limited",r,"bounded watch cleanup; expired entries remain rejected by time/target");
+	{
+		struct cis_pending_key attempt,next_attempt;
+		struct cis_attempt a;
+		fd=mapfd(c,"owner_attempts"); visited=0;
+		ret=bpf_map_get_next_key(fd,NULL,&attempt);
+		while(!ret && visited++<CIS_INFLIGHT*2) {
+			int end=bpf_map_get_next_key(fd,&attempt,&next_attempt);
+			if(!bpf_map_lookup_elem(fd,&attempt,&a) && a.id==r->id && a.generation==r->generation)
+				bpf_map_delete_elem(fd,&attempt);
+			if(end) break;
+			attempt=next_attempt;
+		}
+	}
 }
 
 int cis_capture_diagnostic(struct cis_context *ctx,struct cis_root *r,int enable)
@@ -253,7 +308,8 @@ int cis_capture_diagnostic(struct cis_context *ctx,struct cis_root *r,int enable
 		bpf_map_delete_elem(c->targets,&r->id);
 		configure_links(c,kinds);
 		clear_watches(c,r);
-		perf_buffer__poll(c->ring,0); unfinished(c,r); unfinished_work(c,r); export_stacks(c,r);
+		/* poll() may see no wakeup for a partially filled low-rate buffer. */
+		perf_buffer__consume(c->ring); unfinished(c,r); unfinished_work(c,r); export_stacks(c,r);
 	}
 	return 0;
 }
@@ -316,6 +372,8 @@ int cis_capture_start(struct cis_context *ctx,const char *path)
 	snprintf(detail,sizeof(detail),"configured_cpus=%d per_cpu_budget_hz=%u nominal_total_budget_hz=%u per_cpu_buffer_pages=%u inflight_limit=%u fixed_period_at_4GHz_bound=1 no_idle_period_shrinking=1",
 		c->ncpu,ctx->ip_hz/c->ncpu,(ctx->ip_hz/c->ncpu)*c->ncpu,(unsigned int)pages,CIS_INFLIGHT);
 	cis_report(ctx,"capture_ready",NULL,detail);
+	cis_report(ctx,"buffer_policy",NULL,"ready_buffers_each_loop=1 ambient_full_consume_interval_ms=100 diagnostic_full_consume_each_loop=1 sampling_budget_unchanged=1");
+	memory_inventory(c,pages);
 	return 0;
 fail:
 	cis_capture_stop(ctx); return -EIO;
@@ -358,6 +416,12 @@ int cis_capture_poll(struct cis_context *ctx)
 	if(!c) return 0;
 	ret=perf_buffer__poll(c->ring,0);
 	if(ret<0 && ret!=-EINTR) return ret;
+	/* Ready buffers stay prompt; periodically drain records below the wakeup watermark. */
+	if(ctx->diagnostic || now>=c->next_full_consume_ns) {
+		ret=perf_buffer__consume(c->ring);
+		if(ret<0 && ret!=-EINTR) return ret;
+		c->next_full_consume_ns=now+100000000;
+	}
 	/* Spread perf reads across one second rather than sending an all-CPU burst. */
 	if(now>=c->next_counter_ns) {
 		unsigned int batch=(c->ncpu+9)/10,j;
@@ -429,15 +493,19 @@ void cis_capture_stop(struct cis_context *ctx)
 	int i;
 	if(!c) return;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) bpf_link__destroy(c->diagnostic_links[i]);
-	if(c->ring) perf_buffer__poll(c->ring,0);
+	if(c->ring) perf_buffer__consume(c->ring);
 	if(c->cpu_stats) {
 		__u32 zero=0;
 		__u64 lost_count=0,skipped=0;
 		if(!bpf_map_lookup_elem(c->stats,&zero,c->cpu_stats)) {
 			char detail[160];
+			__u64 received=0,emitted=0,rejected=0;
 			for(i=0;i<c->possible_cpus;i++) {lost_count+=c->cpu_stats[i].lost;skipped+=c->cpu_stats[i].owner_skipped;}
 			snprintf(detail,sizeof(detail),"lost=%llu owner_skipped=%llu",(unsigned long long)lost_count,(unsigned long long)skipped);
 			cis_report(ctx,"terminal_coverage",NULL,detail);
+			for(i=0;i<c->possible_cpus;i++) {received+=c->cpu_stats[i].received;emitted+=c->cpu_stats[i].emitted;rejected+=c->cpu_stats[i].rejected;}
+			snprintf(detail,sizeof(detail),"received=%llu emitted=%llu rejected=%llu",(unsigned long long)received,(unsigned long long)emitted,(unsigned long long)rejected);
+			cis_report(ctx,"terminal_counters",NULL,detail);
 		}
 	}
 	for(i=0;i<CIS_CPU_CAP;i++) if(c->perf_fds[i]>=0) {

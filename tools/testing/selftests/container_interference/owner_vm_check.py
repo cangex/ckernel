@@ -32,7 +32,11 @@ def check(path, preempt):
         report = owner.analyze(records)
         truth = [owner.fields(s) for s in lines if s.startswith("CIS_TRUTH ")]
         dentries = [owner.fields(s) for s in lines if s.startswith("CIS_DENTRY ")]
-        objects = {q["object"] for q in truth+dentries}
+        attempts = [owner.fields(s) for s in lines if s.startswith("CIS_ATTEMPT ")]
+        killed = [owner.fields(s) for s in lines if s.startswith("CIS_KILLABLE ")]
+        failed_truth = [q for q in attempts if q.get('result') in (-4,-35)]
+        failed_truth.extend(q for q in killed if 'host_tid' in q)
+        objects = {q["object"] for q in truth+dentries+attempts}
         edges = [e for e in report["edges"] if int(e["object"], 16) in objects]
         wrong = 0
         for e in edges:
@@ -55,11 +59,36 @@ def check(path, preempt):
             "prefix_limits": report["bounded_prefix_limits"],
             "lock_candidate_ms": (candidates[0]["time_ns"]-f["start_ns"])/1e6 if candidates else None,
             "real_dentry_slowpaths": sum(q["slowpaths"] for q in dentries if q.get("real_dentry")),
+            "abort_truth": sum(q.get('result') == -4 for q in attempts),
+            "ww_abort_truth": sum(q.get('result') == -35 for q in attempts),
+            "aborted_attempts": report['aborted_attempts'],
+            "legacy_protocol": report['legacy_protocol'],
+            "killable_children": sum(s.startswith('CIS_KILLABLE ') for s in lines),
+            "post_abort_splices": sum(not any(q['object']==int(e['object'],16) and
+                q['host_tid']==(e['waiter'][2]&0xffffffff) and q['result'] in (-4,-35) and
+                q['begin_ns'] <= e['wait_begin_ns'] <= e['wait_end_ns'] <= q['end_ns']
+                for q in failed_truth) for e in edges if e.get('outcome')=='aborted'),
+            "independent_cancel_boundaries": len(failed_truth),
         }
     failures = []
     for name in ("bench", "cpu-compete", "quota"):
         if name not in cases or not cases[name]["fleet_pass"]:
             failures.append(name+": surrounding fast-warning control failed")
+    abort = cases.get('fixture-abort', {})
+    if (not abort.get('fleet_pass') or abort.get('abort_truth') != 4 or
+            abort.get('aborted_attempts',0) < 4 or abort.get('post_abort_splices',1) or
+            abort.get('legacy_protocol',True) or not abort.get('e2') or abort.get('loss')):
+        failures.append('fixture-abort: failed runtime abort/retry protocol or wrong post-abort attribution')
+    killable=cases.get('fixture-killable',{})
+    if (not killable.get('fleet_pass') or killable.get('killable_children')!=4 or
+            killable.get('aborted_attempts',0)<4 or killable.get('loss') or
+            killable.get('independent_cancel_boundaries')!=4 or killable.get('post_abort_splices',1) or
+            killable.get('legacy_protocol',True)):
+        failures.append('fixture-killable: fatal-signal cancellation not observed completely')
+    ww=cases.get('fixture-ww',{})
+    if (not ww.get('fleet_pass') or ww.get('ww_abort_truth')!=4 or
+            ww.get('aborted_attempts',0)<4 or ww.get('post_abort_splices',1) or ww.get('loss')):
+        failures.append('fixture-ww: wait-die EDEADLK attempts not paired correctly')
     required = ("fixture-shared", "fixture-private", "fixture-reuse",
                 "dentry-shared", "dentry-private", "dentry-auto")
     for name in required + (("fixture-preempt",) if preempt else ()):

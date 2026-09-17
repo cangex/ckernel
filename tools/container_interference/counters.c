@@ -20,6 +20,7 @@ int cis_metrics_open(struct cis_root *r)
 {
 	static const char *names[] = { "cpu.stat", "cpu.pressure", "memory.pressure", "memory.current", "memory.events", "cgroup.events" };
 	unsigned int i;
+	for(i=0;i<4;i++) r->config_fd[i]=-1;
 	for (i = 0; i < 6; i++) {
 		r->metric_fd[i] = openat(r->fd, names[i], O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
 		if (r->metric_fd[i] < 0) { cis_metrics_close(r); return -errno; }
@@ -32,6 +33,8 @@ void cis_metrics_close(struct cis_root *r)
 	unsigned int i;
 	for (i = 0; i < 6; i++)
 		if (r->metric_fd[i] >= 0) { close(r->metric_fd[i]); r->metric_fd[i] = -1; }
+	for (i = 0; i < 4; i++)
+		if (r->config_fd[i] >= 0) { close(r->config_fd[i]); r->config_fd[i] = -1; }
 }
 
 static int read_value(int fd, char *buf, size_t len)
@@ -96,13 +99,21 @@ int cis_config_epoch(struct cis_context *ctx,struct cis_root *r,uint64_t now)
 	uint64_t hash=1469598103934665603ULL;
 	char b[4096];
 	unsigned int i,j,missing=0;
+	int error=-EIO;
 	if(now<r->config_due_ns) return 0;
 	r->config_due_ns=now+5000000000ULL;
 	for(i=0;i<4;i++) {
-		int fd=openat(r->fd,names[i],O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
-		if(fd<0) { missing++; hash^=i+1; continue; }
-		if(read_value(fd,b,sizeof(b))) { close(fd); return -EIO; }
-		close(fd);
+		/* Keep a root-relative handle, not a cached value or a path-name identity. */
+		if(r->config_fd[i]<0)
+			r->config_fd[i]=openat(r->fd,names[i],O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+		if(r->config_fd[i]<0) {
+			if(errno!=ENOENT && errno!=ENODEV && errno!=EOPNOTSUPP) { error=-errno; goto invalid; }
+			missing++; hash^=i+1; continue;
+		}
+		if(read_value(r->config_fd[i],b,sizeof(b))) {
+			close(r->config_fd[i]); r->config_fd[i]=-1;
+			goto invalid;
+		}
 		for(j=0;b[j];j++) { hash^=(unsigned char)b[j]; hash*=1099511628211ULL; }
 		hash^=0xff; hash*=1099511628211ULL;
 	}
@@ -114,4 +125,13 @@ int cis_config_epoch(struct cis_context *ctx,struct cis_root *r,uint64_t now)
 		cis_report(ctx,"config_epoch",r,"resource configuration changed; new baseline, no attribution across epochs");
 	}
 	r->config_hash=hash; return 0;
+invalid:
+	if(r->state==CIS_DIAGNOSING) {
+		cis_capture_diagnostic(ctx,r,0);
+		if(ctx->diagnostic) ctx->diagnostic--;
+	}
+	r->epoch++; r->config_due_ns=0; r->config_hash=0;
+	r->samples=r->deviations=0; r->pending=0;
+	r->previous.time_ns=0; r->state=CIS_WARMUP;
+	return error;
 }

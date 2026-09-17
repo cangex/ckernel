@@ -15,6 +15,8 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
+#include <sys/time.h>
+#include <signal.h>
 #include <time.h>
 #include <unistd.h>
 #include "fixture/uapi.h"
@@ -106,6 +108,68 @@ static int fixture(int argc,char **argv)
     close(fd); return 0;
 }
 
+static void interrupted(int sig) { (void)sig; }
+
+static int attempt_fixture(int argc,char **argv)
+{
+    unsigned int role=argc>2?strtoul(argv[2],NULL,10):0;
+    uint64_t start=strtoull(argv[3],NULL,10);
+    int fd=open("/cis-fixture",O_RDWR|O_CLOEXEC);
+    struct sigaction sa={.sa_handler=interrupted};
+    int killable=argc>4 && !strcmp(argv[4],"killable");
+    int ww=argc>4 && !strcmp(argv[4],"ww");
+    if(fd<0 || sigaction(SIGALRM,&sa,NULL)) return 6;
+    for(unsigned int i=0;i<4;i++) {
+        uint64_t base=start+i*250000000ULL;
+        struct cis_fixture_attempt a={.mode=role?1:0,.hold_us=role?0:120000};
+        struct itimerval alarm={.it_value={0,20000}},cancel={0};
+        until(base+(role?20000000:0));
+        if(role && killable) {
+            int identity_pipe[2];
+            struct cis_fixture_attempt child_identity={0};
+            if(pipe2(identity_pipe,O_CLOEXEC)) return 10;
+            pid_t child=fork();
+            int status;
+            if(!child) {
+                close(identity_pipe[0]); a.mode=6;
+                if(ioctl(fd,CIS_FIXTURE_ATTEMPT,&a) ||
+                   write(identity_pipe[1],&a,sizeof(a))!=(ssize_t)sizeof(a)) _exit(98);
+                close(identity_pipe[1]); a.mode=2;
+                ioctl(fd,CIS_FIXTURE_ATTEMPT,&a); _exit(99);
+            }
+            if(child<0) return 10;
+            close(identity_pipe[1]);
+            if(read(identity_pipe[0],&child_identity,sizeof(child_identity))!=(ssize_t)sizeof(child_identity)) return 10;
+            close(identity_pipe[0]);
+            until(base+40000000ULL);
+            if(kill(child,SIGKILL) || waitpid(child,&status,0)!=child ||
+               !WIFSIGNALED(status) || WTERMSIG(status)!=SIGKILL) return 10;
+            printf("CIS_KILLABLE iteration=%u aborted_child=1 object=0x%" PRIx64 " host_tid=%" PRIu64 " begin_ns=%" PRIu64 " end_ns=%" PRIu64 " result=-4 endpoint=waitpid_upper_bound\n",
+                   i,(uint64_t)child_identity.object,(uint64_t)child_identity.tid,(uint64_t)child_identity.begin_ns,cis_now_ns());
+            until(base+180000000ULL);a.mode=3;
+            if(ioctl(fd,CIS_FIXTURE_ATTEMPT,&a) || a.result) return 9;
+            printf("CIS_RETRY object=0x%" PRIx64 " host_tid=%" PRIu64 " begin_ns=%" PRIu64 " end_ns=%" PRIu64 " acquired_ns=%" PRIu64 " result=%d iteration=%u\n",
+                   (uint64_t)a.object,(uint64_t)a.tid,(uint64_t)a.begin_ns,(uint64_t)a.end_ns,(uint64_t)a.acquired_ns,a.result,i);
+            fflush(stdout);continue;
+        }
+        if(ww) a.mode=role?4:5;
+        if(role && !ww && setitimer(ITIMER_REAL,&alarm,NULL)) return 6;
+        if(ioctl(fd,CIS_FIXTURE_ATTEMPT,&a)) return 7;
+        if(role && setitimer(ITIMER_REAL,&cancel,NULL)) return 6;
+        printf("CIS_ATTEMPT object=0x%" PRIx64 " host_tid=%" PRIu64 " begin_ns=%" PRIu64 " end_ns=%" PRIu64 " acquired_ns=%" PRIu64 " result=%d role=%u iteration=%u\n",
+               (uint64_t)a.object,(uint64_t)a.tid,(uint64_t)a.begin_ns,(uint64_t)a.end_ns,(uint64_t)a.acquired_ns,a.result,role,i);
+        if(a.result!=(role?(ww?-EDEADLK:-EINTR):0)) return 8;
+        if(role && !ww) {
+            until(base+180000000ULL); a.mode=3;
+            if(ioctl(fd,CIS_FIXTURE_ATTEMPT,&a) || a.result) return 9;
+            printf("CIS_RETRY object=0x%" PRIx64 " host_tid=%" PRIu64 " begin_ns=%" PRIu64 " end_ns=%" PRIu64 " acquired_ns=%" PRIu64 " result=%d iteration=%u\n",
+                   (uint64_t)a.object,(uint64_t)a.tid,(uint64_t)a.begin_ns,(uint64_t)a.end_ns,(uint64_t)a.acquired_ns,a.result,i);
+        }
+        fflush(stdout);
+    }
+    close(fd); return 0;
+}
+
 static int dentry_fixture(int argc,char **argv)
 {
     struct cis_fixture_dentry q={.seed=1};
@@ -157,6 +221,7 @@ int main(int argc, char **argv)
     fflush(stdout);
     if (argc < 2 || !strcmp(argv[1], "identity")) return 0;
     if (!strcmp(argv[1],"fixture")) return fixture(argc,argv);
+    if (!strcmp(argv[1],"attempt")) return attempt_fixture(argc,argv);
     if (!strcmp(argv[1],"dentry")) return dentry_fixture(argc,argv);
     if (!strcmp(argv[1],"async-fixture")) return async_fixture(argc,argv);
     unsigned seconds = argc > 2 ? strtoul(argv[2], NULL, 10) : 2;

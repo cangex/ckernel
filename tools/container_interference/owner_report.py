@@ -37,7 +37,8 @@ def analyze(records):
         e = fields(r["detail"])
         loss |= bool(e.get("skipped", 0))
         groups[(e["resource"], e["object"], e["epoch"])].append(e)
-    edges, incomplete, snapshots, resets = [], 0, 0, 0
+    edges, incomplete, snapshots, resets, aborted = [], 0, 0, 0, 0
+    legacy = any(e.get("protocol", 1) != 2 for es in groups.values() for e in es)
     for key, events in groups.items():
         # Duplicate cached acquires are the same observation, not new ownership.
         unique = {(e["sample_time_ns"], e["phase"], actor(e)): e for e in events}
@@ -59,10 +60,19 @@ def analyze(records):
                 if who in waits:
                     incomplete += 1
                 waits[who] = e
-            elif phase == 3:
+            elif phase in (3, 12):
                 if who in waits:
                     w = waits.pop(who)
-                    finished.append((who, w["sample_time_ns"], t, w.get("stack_id", -1)))
+                    if (w.get("attempt_ns") and w["attempt_ns"] == e.get("attempt_ns")
+                            and w.get("protocol") == e.get("protocol") == 2):
+                        finished.append((who, w["sample_time_ns"], t, w.get("stack_id", -1),
+                                         w["attempt_ns"], "aborted" if phase == 12 else "acquired",
+                                         e.get("result", 0)))
+                    else:
+                        incomplete += 1
+                if phase == 12:
+                    aborted += 1
+                    continue
                 if holding is not None:
                     incomplete += 1
                 holding = (who, t)
@@ -85,7 +95,7 @@ def analyze(records):
                 off_spans[who].append((start, t, flags))
             # RELEASE_END is deliberately not a hold endpoint: handoff may precede it.
         incomplete += len(waits) + bool(holding)
-        for waiter, begin, end, stack in finished:
+        for waiter, begin, end, stack, attempt, outcome, result in finished:
             for holder, acquired, released in holds:
                 lo, hi = max(begin, acquired), min(end, released)
                 if hi <= lo or waiter == holder or not all(waiter) or not all(holder):
@@ -99,15 +109,18 @@ def analyze(records):
                 edges.append({"resource": "mutex" if key[0] == 1 else "lockref", "object": hex(key[1]),
                               "epoch": key[2], "waiter": waiter, "holder": holder,
                               "relation": "container_internal" if waiter[:2] == holder[:2] else "cross_container",
+                              "relation_type": "holder_waiter", "causal": False,
+                              "attempt_ns": attempt, "outcome": outcome, "result": result,
                               "begin_ns": lo, "end_ns": hi, "overlap_ns": hi-lo,
                               "wait_begin_ns": begin, "wait_end_ns": end, "stack_id": stack,
                               "waiter_stack_ips": stacks.get(stack, []),
                               "waiter_stack_leaf_to_root": symbols.get(stack, []),
                               "holder_offcpu": sched,
                               "offcpu_coverage": "observed lower bound; nested held objects or map eviction may leave gaps",
-                              "level": "INCOMPLETE" if loss else "E2",
+                              "level": "INCOMPLETE" if loss or legacy else "E2",
                               "meaning": "observed exclusive ownership overlaps observed wait; not total wait or CPU burn"})
-    return {"edges": edges, "incomplete_intervals": incomplete, "point_snapshots": snapshots,
+    return {"version": 2, "edges": edges, "incomplete_intervals": incomplete, "point_snapshots": snapshots,
+            "aborted_attempts": aborted, "legacy_protocol": legacy,
             "bounded_prefix_limits": sum(e["phase"]==11 for events in groups.values() for e in events),
             "lifecycle_boundaries": resets, "loss_or_recursion_gap": loss,
             "scope": "explicit non-RT mutex / lockref fallback observations only; escape and missing intervals unknown"}

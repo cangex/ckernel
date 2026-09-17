@@ -19,7 +19,7 @@ for test in logic_test budget_test metrics_test identity; do
 done
 if insmod /cis_fixture.ko isolated_vm=1; then
     cp -a /dev/cis-fixture /container-root/cis-fixture
-    for scenario in fixture-shared fixture-private fixture-reuse fixture-preempt dentry-shared dentry-private; do
+    for scenario in fixture-shared fixture-private fixture-reuse fixture-preempt fixture-abort fixture-killable fixture-ww dentry-shared dentry-private; do
         CIS_TEST_OWNER=1 /fleet 2 ip "$scenario" 3 0 > "/tmp/owner-$scenario.log" 2>&1 || failed=1
     done
     CIS_TEST_FAST_ALERT=1 /fleet 2 ip dentry-auto 3 0 > /tmp/owner-dentry-auto.log 2>&1 || failed=1

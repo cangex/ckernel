@@ -119,9 +119,9 @@ void cis_diagnostics_tick(struct cis_context *ctx, uint64_t now)
 		ctx->diagnostic++; ctx->queue_cursor = (k+1)%CIS_MAX_ROOTS;
 		{
 			char detail[192];
-			snprintf(detail,sizeof(detail),"start_ns=%llu deadline_ns=%llu ready_ns=%llu bounded_target_window=1",
+			snprintf(detail,sizeof(detail),"start_ns=%llu deadline_ns=%llu ready_ns=%llu bounded_target_window=1 collector_mask=%u owner_protocol=2",
 				(unsigned long long)r->diagnostic_start_ns,(unsigned long long)r->deadline_ns,
-				(unsigned long long)cis_clock_ns());
+				(unsigned long long)cis_clock_ns(),r->diagnostic_kind);
 			cis_report(ctx, "diagnostic_start", r, detail);
 		}
 		break;

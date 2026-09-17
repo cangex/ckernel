@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #define _GNU_SOURCE
 #include "include/cis.h"
+#include "include/cis_metrics_schedule.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/magic.h>
@@ -89,7 +90,7 @@ int cis_registry_add(struct cis_context *ctx, int fd, const char *name,
 	r->state = CIS_WARMUP;
 	snprintf(r->name, sizeof(r->name), "%s", name);
 	snprintf(r->path, sizeof(r->path), "%s", path);
-	r->next_ns = cis_clock_ns() + ((ctx->serial * 618) % 1000) * 1000000ULL;
+	r->next_ns = cis_metric_first(cis_clock_ns(),ctx->serial);
 	if (cis_metrics_open(r)) { close(r->fd); return -EIO; }
 	if(cis_fast_open(ctx,r)) { cis_metrics_close(r); close(r->fd); return -EIO; }
 	r->used = 1;

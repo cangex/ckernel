@@ -16,6 +16,7 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,struct cis_object_key); __type(value,struct cis_owner_record); } holders SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_owner_task); } holder_tasks SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_attempt); } owner_attempts SEC(".maps");
 
 static __always_inline struct cis_bpf_stats *statistics(void);
 static __always_inline void owner_emit(void *ctx,struct cis_owner_event *e)
@@ -351,6 +352,19 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		e.phase=phase;e.resource=key.kind;e.skipped=s?s->owner_skipped:1;
 		e.actor_id=actor.id;e.actor_generation=actor.generation;
 		e.actor_start=BPF_CORE_READ(task,start_boottime);e.base.flags=ctx->args[4];
+		if(phase==2 || phase==3 || phase==12) {
+			struct cis_pending_key pk={.tid=tid,.object=key.object,
+				.task_start_ns=e.actor_start,.type=key.kind};
+			struct cis_attempt *a,attempt={.start_ns=now,.epoch=w->epoch,
+				.id=w->id,.generation=w->generation};
+			if(phase==2) {
+				/* A new WAIT replaces only this task's attempt. No global sequence. */
+				if(bpf_map_update_elem(&owner_attempts,&pk,&attempt,BPF_ANY)) COUNT(s,rejected);
+			}
+			a=bpf_map_lookup_elem(&owner_attempts,&pk);
+			if(a && a->epoch==w->epoch) e.attempt_ns=a->start_ns;
+			if(phase!=2) bpf_map_delete_elem(&owner_attempts,&pk);
+		}
 		if(phase==2 && owner) {
 			identity(owner,&holder);
 			e.holder_id=holder.id;e.holder_generation=holder.generation;

@@ -18,6 +18,7 @@
 #include <linux/dcache.h>
 #include <linux/percpu.h>
 #include <linux/cis_observe.h>
+#include <linux/ww_mutex.h>
 #ifdef CONFIG_CIS_OBSERVE
 #include <trace/events/cis.h>
 #endif
@@ -26,6 +27,9 @@ static bool isolated_vm;
 module_param(isolated_vm,bool,0400);
 static DEFINE_MUTEX(lock_a);
 static DEFINE_MUTEX(lock_b);
+static DEFINE_MUTEX(attempt_lock);
+static DEFINE_WD_CLASS(attempt_class);
+static struct ww_mutex attempt_ww[2];
 static DECLARE_RWSEM(fixture_lifetime);
 static u64 object_generation=1;
 static DEFINE_SPINLOCK(storm_lock);
@@ -150,6 +154,48 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 	struct mutex *lock;
 	(void)file;
 	if(!capable(CAP_SYS_ADMIN)) return -EPERM;
+	if(cmd==CIS_FIXTURE_ATTEMPT) {
+		struct cis_fixture_attempt a;
+		if(copy_from_user(&a,(void __user*)arg,sizeof(a))) return -EFAULT;
+		if(a.mode>6 || a.hold_us>150000 || a.reserved) return -EINVAL;
+		a.object=(unsigned long)&attempt_lock; a.tid=task_pid_nr(current);
+		rcu_read_lock(); a.cgroup_id=cgroup_id(task_dfl_cgroup(current)); rcu_read_unlock();
+		a.begin_ns=ktime_get_ns(); a.acquired_ns=0;
+		if(a.mode==6) {
+			/* Ground truth for a child that SIGKILL prevents returning to userspace. */
+			a.result=0; a.end_ns=a.begin_ns;
+			return copy_to_user((void __user*)arg,&a,sizeof(a))?-EFAULT:0;
+		}
+		if(a.mode>=4) {
+			struct ww_acquire_ctx ctx;
+			ww_acquire_init(&ctx,&attempt_class);
+			a.object=(unsigned long)&attempt_ww[0].base;
+			a.result=ww_mutex_lock_interruptible(&attempt_ww[a.mode==4],&ctx);
+			if(!a.result) {
+				if(a.mode==4) {
+					a.result=ww_mutex_lock_interruptible(&attempt_ww[0],&ctx);
+					if(!a.result) {a.acquired_ns=ktime_get_ns();ww_mutex_unlock(&attempt_ww[0]);}
+					ww_mutex_unlock(&attempt_ww[1]);
+				} else {
+					a.acquired_ns=ktime_get_ns(); usleep_range(a.hold_us,a.hold_us+50);
+					ww_mutex_unlock(&attempt_ww[0]);
+				}
+			}
+			ww_acquire_fini(&ctx);
+			a.end_ns=ktime_get_ns();
+			return copy_to_user((void __user*)arg,&a,sizeof(a))?-EFAULT:0;
+		}
+		if(a.mode==3) a.result=mutex_trylock(&attempt_lock)?0:-EBUSY;
+		else if(a.mode==2) a.result=mutex_lock_killable(&attempt_lock);
+		else a.result=mutex_lock_interruptible(&attempt_lock);
+		if(!a.result) {
+			a.acquired_ns=ktime_get_ns();
+			if(a.hold_us) usleep_range(a.hold_us,a.hold_us+50);
+			mutex_unlock(&attempt_lock);
+		}
+		a.end_ns=ktime_get_ns();
+		return copy_to_user((void __user*)arg,&a,sizeof(a))?-EFAULT:0;
+	}
 	if(cmd==CIS_FIXTURE_DENTRY) return dentry_ioctl(arg);
 	if(cmd==CIS_FIXTURE_STORM) {
 		struct cis_fixture_storm storm;
@@ -200,6 +246,8 @@ static int __init fixture_init(void)
 {
 	int ret;
 	if(!isolated_vm) return -EPERM;
+	ww_mutex_init(&attempt_ww[0],&attempt_class);
+	ww_mutex_init(&attempt_ww[1],&attempt_class);
 #ifdef CONFIG_CIS_OBSERVE
 	ret=register_trace_cis_lock_state(dentry_delay,NULL);
 	if(ret) return ret;

@@ -88,6 +88,10 @@ int main(int argc,char **argv)
 			if(cis_write_text("/sys/fs/cgroup/cis-monitor/cgroup.procs",num)) _exit(119);
 			snprintf(num,sizeof(num),"%d",ready[1]); snprintf(out,sizeof(out),"/tmp/observer-%d.jsonl",getpid());
 			if(getenv("CIS_TEST_PROFILE_LOOP")) {
+				if(getenv("CIS_TEST_FAST_ALERT")) {
+					execl("/cisd","cisd","--mode",!strcmp(mode,"diag")?"ip":mode,"--socket","/run/cis-fleet.sock","--output",out,"--bpf","/cis.bpf.o","--ready-fd",num,"--profile-loop","--fast-alert",NULL);
+					_exit(127);
+				}
 				execl("/cisd","cisd","--mode",!strcmp(mode,"diag")?"ip":mode,"--socket","/run/cis-fleet.sock","--output",out,"--bpf","/cis.bpf.o","--ready-fd",num,"--profile-loop",NULL);
 				_exit(127);
 			}
@@ -136,6 +140,11 @@ int main(int argc,char **argv)
 			args[1]="fixture"; args[2]=slot;
 			if(!strcmp(work,"fixture-reuse")) args[4]="reuse";
 			if(!strcmp(work,"fixture-preempt")) args[4]="preempt";
+			if(!strcmp(work,"fixture-abort") || !strcmp(work,"fixture-killable") || !strcmp(work,"fixture-ww")) {
+				snprintf(slot,sizeof(slot),"%u",i%2); args[1]="attempt";
+				if(!strcmp(work,"fixture-killable")) args[4]="killable";
+				if(!strcmp(work,"fixture-ww")) args[4]="ww";
+			}
 		}
 		if(dentry) { args[1]="dentry"; args[4]=!strcmp(work,"dentry-private")?"private":"shared"; }
 		snprintf(path,sizeof(path),"/sys/fs/cgroup/cis-fleet-%u",i);

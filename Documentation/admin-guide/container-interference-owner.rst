@@ -33,7 +33,11 @@ Ownership protocol
 ------------------
 
 The non-RT mutex observation records successful owner acquisition, entry
-to unlock, unlock completion, contended wait and mutex initialization.
+to unlock, unlock completion, contended wait, mutex initialization and an
+ABORT terminal event at the native failed-acquisition exit. The errno is
+preserved. Interruptible EINTR, fatal-signal killable cancellation and a
+wait-die ww_mutex EDEADLK are exercised separately in the disposable fixture.
+This does not claim all ww_mutex policies or PREEMPT_RT coverage.
 The native owner snapshot rejects unstable reads and handoff/pickup flags.
 It is protected by RCU but remains a point observation: it is not a record
 of how long the task owned the mutex.
@@ -80,23 +84,30 @@ Evidence interpretation
 ``owner_report.py LOG`` sorts source timestamps, de-duplicates cached
 acquire observations and joins:
 
-* WAIT to the matching task's successful ACQUIRE;
+* WAIT to the same task and nonzero attempt ID's ACQUIRE or ABORT;
 * a holder's ACQUIRE to its own RELEASE_BEGIN;
 * their time intersection, with identical object, kind and watch epoch.
 
 RELEASE_END is not a hold endpoint because a new owner can acquire before
 the previous unlock call returns. Snapshots alone never generate durations.
+An aborted acquisition ends at ABORT, not at a later trylock. A failed wait
+may still have a valid observed-holder intersection before cancellation.
+The protocol-2 attempt is keyed by task start time, object kind/address and
+watch epoch; the bounded 1024-entry attempt map is cleared on target teardown.
+Legacy protocol-1 records are readable, but cannot pass the new E2 gate.
 Missing acquire/release, escaped locks, incomplete waits and limit boundaries
 do not receive invented endpoints. A task cannot block itself in the emitted
 cross-task edge. Same-container edges are labelled separately.
 
-A closed edge supports an E2 dependency: while the waiter was in this
+A closed edge with relation_type=holder_waiter supports an E2 dependency: while the waiter was in this
 observed acquisition, the named task exclusively held this same object.
 It is not E3 workload causality, the entire wait duration, pure spinning
 cycles or an application interference percentage. After release there may
 still be queueing, wakeup delay and scheduler delay. These are not charged
 to the old owner. Event loss or a recursion gap downgrades the log's joins
 to INCOMPLETE rather than manufacturing precise attribution.
+The separate generic contention report can emit relation_type=cowaiter.
+That never identifies a holder; consumers must inspect both type and level.
 
 Scheduler switch observations mark sleeping, runnable-deschedule or
 preempt-flagged off-CPU intervals of a known holder. They are a lower bound,
@@ -147,3 +158,16 @@ preemption and automatically triggered dentry diagnosis. A fleet exit code
 alone cannot pass it. It checks the emitted subset against fixture operation
 truth; it does not measure full-window recall or generalize zero observed
 contradictions to a production false-positive rate.
+
+Low-rate export and release gates
+--------------------------------
+
+Periodic drain and detach consume the perf buffers even when their wakeup
+watermark has not been reached. Otherwise a short, low-volume aborted wait
+could leave a valid stack export but no exported transition records.
+
+Release acceptance is bound to a versioned collector profile. A sched-only
+DIAG result does not admit owner-mutex or owner-dentry. Each default owner
+collector needs its own precise-window cost results, actual episode coverage
+and protocol version. A single successful relation does not establish recall.
+The current candidate is experimental; protocol tests do not establish R6/S6.
