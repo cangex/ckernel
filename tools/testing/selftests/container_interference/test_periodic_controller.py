@@ -30,6 +30,15 @@ class ControllerTests(unittest.TestCase):
             with self.assertRaises(ValueError): session.worker_roots(roots, targets, 'owner')
         self.assertNotIn('owner_identities', session.compact_record(dict(owner_identities=owner)))
 
+    def test_cancel_reply_omits_bounded_identity_universe(self):
+        c = self.controller()
+        c.history['7'] = dict(session_id='7', owner_identities={str(i): dict(id=i+1, generation=99,
+                              session_target=i==0) for i in range(256)})
+        response = c.request(dict(version=1, op='cancel', session='7'))
+        self.assertNotIn('owner_identities', response)
+        self.assertLess(len(session.encoded(response)), session.MAX_PACKET)
+        self.assertEqual(len(c.history['7']['owner_identities']), 256)
+
     def test_schedule_validation(self):
         session.validate(dict(version=1, op='schedule_configure', plan={}))
         for offset in (-1, True, 257):

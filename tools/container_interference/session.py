@@ -652,7 +652,7 @@ class Controller:
             self.faulted = False
             return record
         if op == 'cancel':
-            return self.cancel(req['session'])
+            return compact_record(self.cancel(req['session']))
         if op in ('status', 'report'):
             if req.get('session'):
                 record = self.history[req['session']]
