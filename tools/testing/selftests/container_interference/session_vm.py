@@ -15,7 +15,11 @@ parser.add_argument('--stress', type=int, default=100)
 parser.add_argument('--cost', action='store_true')
 parser.add_argument('--faults', action='store_true')
 parser.add_argument('--resource-faults', action='store_true')
+parser.add_argument('--fixture-rounds', type=int, default=1)
+parser.add_argument('--diagnose-recursion', action='store_true')
 args = parser.parse_args()
+if not 1 <= args.fixture_rounds <= 20:
+    raise SystemExit('fixture-rounds must be frozen in [1,20]')
 quality_failures = []
 if not Path('/cis-disposable-vm').exists():
     raise SystemExit('dedicated VM marker missing')
@@ -103,6 +107,11 @@ def require_complete(record):
     if record.get('result') != 'COMPLETE':
         quality_failures.append(dict(nonce=record.get('nonce'), result=record.get('result'),
                                      receipt=record.get('receipt')))
+    if args.diagnose_recursion:
+        # Read only at session boundaries, never in the performance workload.
+        snapshot = Path('/sys/kernel/debug/cis_recursion').read_text()
+        assert 'enabled=1' in snapshot and 'trace_active=0' in snapshot, snapshot[:200]
+        (OUT/('observer-%s.log' % record['nonce'])).write_text(snapshot)
 
 
 def window(sid):
@@ -161,13 +170,15 @@ for kind in ('ip','owner'):
     assert duplicate['session_id']==sid
     request('cancel',session=sid)
 
-for scenario in ('private','reuse','preempt'):
-    sid=begin('owner','fixture'+scenario)['session_id']
-    children=launch(scenario,'fixture',window(sid),scenario=scenario)
-    join(children)
-    record=finished(sid)
-    print('CIS_PROFILE_NEGATIVE '+json.dumps(record),flush=True)
-    require_complete(record)
+for repetition in range(args.fixture_rounds):
+    for scenario in ('private','reuse','preempt'):
+        nonce='fixture'+scenario+('r%d'%repetition if repetition else '')
+        sid=begin('owner',nonce)['session_id']
+        children=launch(nonce,'fixture',window(sid),scenario=scenario)
+        join(children)
+        record=finished(sid)
+        print('CIS_PROFILE_NEGATIVE '+json.dumps(record),flush=True)
+        require_complete(record)
 
 sid=begin('ip','inject',inject='after_prepare')['session_id']
 assert finished(sid)['result']=='PARTIAL'
