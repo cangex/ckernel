@@ -60,7 +60,7 @@ def snapshot(text):
 def analyze(text):
     files = extract(text)
     values = {name: snapshot(body) for name, body in files.items()
-              if '/observer-' in name and name.endswith('.log')}
+              if '/observer-' in name and name.endswith('.log') and not name.endswith('observer-kallsyms.log')}
     if not values:
         raise ValueError('no quiescent recursion snapshots')
     peak = max(values.values(), key=lambda x: x['skipped'])

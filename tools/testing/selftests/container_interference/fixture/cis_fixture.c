@@ -25,6 +25,9 @@
 #include "uapi.h"
 static bool isolated_vm;
 module_param(isolated_vm,bool,0400);
+/* Do not keep the lock tracepoint active during IDLE/IP cost tests. */
+static bool enable_dentry_delay;
+module_param(enable_dentry_delay,bool,0400);
 static DEFINE_MUTEX(lock_a);
 static DEFINE_MUTEX(lock_b);
 static DEFINE_MUTEX(attempt_lock);
@@ -56,6 +59,7 @@ static long dentry_ioctl(unsigned long arg)
 	struct fd f;
 	struct dentry *d;
 	unsigned int i;
+	if(!enable_dentry_delay) return -EOPNOTSUPP;
 	if(copy_from_user(&q,(void __user*)arg,sizeof(q))) return -EFAULT;
 	if(q.seed>1) return -EINVAL;
 	f=fdget(q.fd); if(!f.file) return -EBADF;
@@ -249,12 +253,14 @@ static int __init fixture_init(void)
 	ww_mutex_init(&attempt_ww[0],&attempt_class);
 	ww_mutex_init(&attempt_ww[1],&attempt_class);
 #ifdef CONFIG_CIS_OBSERVE
-	ret=register_trace_cis_lock_state(dentry_delay,NULL);
-	if(ret) return ret;
+	if(enable_dentry_delay) {
+		ret=register_trace_cis_lock_state(dentry_delay,NULL);
+		if(ret) return ret;
+	}
 #endif
 	ret=misc_register(&device);
 #ifdef CONFIG_CIS_OBSERVE
-	if(ret) { unregister_trace_cis_lock_state(dentry_delay,NULL); tracepoint_synchronize_unregister(); }
+	if(ret && enable_dentry_delay) { unregister_trace_cis_lock_state(dentry_delay,NULL); tracepoint_synchronize_unregister(); }
 #endif
 	return ret;
 }
@@ -262,7 +268,7 @@ static void __exit fixture_exit(void)
 {
 	misc_deregister(&device);
 #ifdef CONFIG_CIS_OBSERVE
-	unregister_trace_cis_lock_state(dentry_delay,NULL); tracepoint_synchronize_unregister();
+	if(enable_dentry_delay) { unregister_trace_cis_lock_state(dentry_delay,NULL); tracepoint_synchronize_unregister(); }
 #endif
 }
 module_init(fixture_init);

@@ -28,6 +28,9 @@ if not Path('/cis-disposable-vm').exists():
     raise SystemExit('dedicated VM marker missing')
 OUT = Path('/tmp/session-evidence')
 OUT.mkdir()
+if args.diagnose_recursion:
+    # Needed for addresses in the bounded diagnostic; do not disable KASLR.
+    (OUT/'observer-kallsyms.log').write_text(Path('/proc/kallsyms').read_text())
 ROOT = Path('/sys/fs/cgroup/cis-session')
 ROOT.mkdir()
 (ROOT/'management').mkdir()

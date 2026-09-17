@@ -17,7 +17,7 @@ uname -a
 for test in logic_test budget_test metrics_test identity; do
     /$test || failed=1
 done
-if insmod /cis_fixture.ko isolated_vm=1; then
+if insmod /cis_fixture.ko isolated_vm=1 enable_dentry_delay=1; then
     cp -a /dev/cis-fixture /container-root/cis-fixture
     for scenario in fixture-shared fixture-private fixture-reuse fixture-preempt fixture-abort fixture-killable fixture-ww dentry-shared dentry-private; do
         CIS_TEST_OWNER=1 /fleet 2 ip "$scenario" 3 0 > "/tmp/owner-$scenario.log" 2>&1 || failed=1
