@@ -69,6 +69,7 @@ int main(int argc,char **argv)
 	struct cis_reply ids[256];
 	int monitored=strcmp(mode,"off"),idle=!strcmp(work,"idle"),ret=0,ready[2];
 	int fixture=!strncmp(work,"fixture-",8);
+	int dentry=!strncmp(work,"dentry-",7);
 	int async=!strcmp(work,"async-fixture");
 	int quota=!strcmp(work,"quota"),compete=!strcmp(work,"cpu-compete"),reclaim=!strcmp(work,"reclaim");
 	unsigned int i,cpus=sysconf(_SC_NPROCESSORS_ONLN);
@@ -90,11 +91,15 @@ int main(int argc,char **argv)
 				execl("/cisd","cisd","--mode",!strcmp(mode,"diag")?"ip":mode,"--socket","/run/cis-fleet.sock","--output",out,"--bpf","/cis.bpf.o","--ready-fd",num,"--profile-loop",NULL);
 				_exit(127);
 			}
+			if(getenv("CIS_TEST_FAST_ALERT")) {
+				execl("/cisd","cisd","--mode",!strcmp(mode,"diag")?"ip":mode,"--socket","/run/cis-fleet.sock","--output",out,"--bpf","/cis.bpf.o","--ready-fd",num,"--fast-alert",NULL);
+				_exit(127);
+			}
 			execl("/cisd","cisd","--mode",!strcmp(mode,"diag")?"ip":mode,"--socket","/run/cis-fleet.sock","--output",out,"--bpf","/cis.bpf.o","--ready-fd",num,NULL); _exit(127);
 		}
 		close(ready[1]);
 		char c;
-		if(read(ready[0],&c,1)!=1) { close(ready[0]); waitpid(daemon,NULL,0); return 1; }
+		if(read(ready[0],&c,1)!=1) { close(ready[0]); waitpid(daemon,NULL,0); daemon=-1; ret=1; goto cleanup; }
 		close(ready[0]);
 	}
 	for(i=0;i<count;i++) {
@@ -130,23 +135,25 @@ int main(int argc,char **argv)
 			snprintf(slot,sizeof(slot),"%u",!strcmp(work,"fixture-private")?i%2:0);
 			args[1]="fixture"; args[2]=slot;
 			if(!strcmp(work,"fixture-reuse")) args[4]="reuse";
+			if(!strcmp(work,"fixture-preempt")) args[4]="preempt";
 		}
+		if(dentry) { args[1]="dentry"; args[4]=!strcmp(work,"dentry-private")?"private":"shared"; }
 		snprintf(path,sizeof(path),"/sys/fs/cgroup/cis-fleet-%u",i);
 		snprintf(out,sizeof(out),"/tmp/container-%d-%u.log",getpid(),i);
 		int output=open(out,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);
 		if(output<0) { ret=1; goto cleanup; }
-		pids[i]=cis_container_start_output(path,"/container-root",args,compete?1:1+i%(cpus-1),output);
+		pids[i]=cis_container_start_output(path,"/container-root",args,(compete || !strcmp(work,"fixture-preempt"))?1:1+i%(cpus-1),output);
 		close(output);
 		if(pids[i]<0) { ret=1; goto cleanup; }
 	}
-	if((fixture || async) && monitored) {
+	if((fixture || async || (dentry && strcmp(work,"dentry-auto"))) && monitored) {
 		until(start-100000000ULL);
 		for(i=0;i<count && i<2;i++) {
-			struct cis_reply r=request(CIS_DIAGNOSE,-1,ids[i].id,ids[i].generation,async?"work":"lock");
+			struct cis_reply r=request(CIS_DIAGNOSE,-1,ids[i].id,ids[i].generation,async?"work":getenv("CIS_TEST_OWNER")?"owner":"lock");
 			if(r.error) ret=1;
 		}
 	}
-	if(!strcmp(mode,"diag") && !fixture && !async) {
+	if(!strcmp(mode,"diag") && !fixture && !async && !dentry) {
 		until(start-1000000000ULL);
 		requested_start_ns=start;
 		struct cis_reply r=request(CIS_DIAGNOSE,-1,ids[target].id,ids[target].generation,reclaim?"reclaim":"sched");

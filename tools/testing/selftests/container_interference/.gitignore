@@ -6,6 +6,7 @@
 /logic_test
 /budget_test
 /metrics_test
+/fast_test
 /entry_workload
 /entry_storm
 __pycache__/

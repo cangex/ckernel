@@ -14,6 +14,13 @@
 #include <linux/workqueue.h>
 #include <linux/rwsem.h>
 #include <linux/spinlock.h>
+#include <linux/file.h>
+#include <linux/dcache.h>
+#include <linux/percpu.h>
+#include <linux/cis_observe.h>
+#ifdef CONFIG_CIS_OBSERVE
+#include <trace/events/cis.h>
+#endif
 #include "uapi.h"
 static bool isolated_vm;
 module_param(isolated_vm,bool,0400);
@@ -23,6 +30,51 @@ static DECLARE_RWSEM(fixture_lifetime);
 static u64 object_generation=1;
 static DEFINE_SPINLOCK(storm_lock);
 static u64 storm_counter;
+struct dentry_test_context { struct task_struct *task; struct dentry *dentry; u64 slowpaths; };
+static DEFINE_PER_CPU(struct dentry_test_context, dentry_test);
+#ifdef CONFIG_CIS_OBSERVE
+static void dentry_delay(void *unused,void *object,unsigned int kind,unsigned int phase,
+		struct task_struct *owner,unsigned long flags,unsigned long skipped)
+{
+	struct dentry_test_context *test=this_cpu_ptr(&dentry_test);
+	(void)unused; (void)owner; (void)flags; (void)skipped;
+	if(kind==CIS_LOCKREF && phase==CIS_ACQUIRE && test->task==current &&
+	   test->dentry && object==&test->dentry->d_lockref) {
+		test->slowpaths++;
+		/* Test-only bounded delay inside a real fallback; never sleep under d_lock. */
+		udelay(40);
+	}
+}
+#endif
+static long dentry_ioctl(unsigned long arg)
+{
+	struct cis_fixture_dentry q;
+	struct fd f;
+	struct dentry *d;
+	unsigned int i;
+	if(copy_from_user(&q,(void __user*)arg,sizeof(q))) return -EFAULT;
+	if(q.seed>1) return -EINVAL;
+	f=fdget(q.fd); if(!f.file) return -EBADF;
+	d=f.file->f_path.dentry;
+	q.object=(unsigned long)&d->d_lockref; q.tid=task_pid_nr(current); q.slowpaths=0;
+	rcu_read_lock(); q.cgroup_id=cgroup_id(task_dfl_cgroup(current)); rcu_read_unlock();
+	q.begin_ns=ktime_get_ns();
+	for(i=0;i<2048;i++) {
+		struct dentry_test_context *test;
+		preempt_disable();
+		test=this_cpu_ptr(&dentry_test); test->task=current; test->dentry=d; test->slowpaths=0;
+		if(q.seed && !(i&7)) {
+			/* Direct d_lock is deliberately outside the lockref-owner coverage. */
+			spin_lock(&d->d_lock); udelay(80); spin_unlock(&d->d_lock);
+		}
+		dget(d); dput(d);
+		q.slowpaths+=test->slowpaths;
+		test->task=NULL; test->dentry=NULL;
+		preempt_enable(); cond_resched();
+	}
+	q.end_ns=ktime_get_ns(); fdput(f);
+	return copy_to_user((void __user*)arg,&q,sizeof(q))?-EFAULT:0;
+}
 struct async_context {
 	struct work_struct work;
 	struct completion done;
@@ -98,6 +150,7 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 	struct mutex *lock;
 	(void)file;
 	if(!capable(CAP_SYS_ADMIN)) return -EPERM;
+	if(cmd==CIS_FIXTURE_DENTRY) return dentry_ioctl(arg);
 	if(cmd==CIS_FIXTURE_STORM) {
 		struct cis_fixture_storm storm;
 		u32 i;
@@ -110,7 +163,7 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 		return 0;
 	}
 	if(cmd==CIS_FIXTURE_QUEUE || cmd==CIS_FIXTURE_WAIT || cmd==CIS_FIXTURE_CANCEL) return async_ioctl(file,cmd,arg);
-	if(cmd!=CIS_FIXTURE_LOCK && cmd!=CIS_FIXTURE_RESET) return -ENOTTY;
+	if(cmd!=CIS_FIXTURE_LOCK && cmd!=CIS_FIXTURE_RESET && cmd!=CIS_FIXTURE_BUSY) return -ENOTTY;
 	if(copy_from_user(&q,(void __user *)arg,sizeof(q))) return -EFAULT;
 	if(cmd==CIS_FIXTURE_RESET) {
 		/* Drain all old users, then deliberately reuse the same mutex addresses. */
@@ -122,16 +175,20 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 		up_write(&fixture_lifetime);
 		return copy_to_user((void __user*)arg,&q,sizeof(q))?-EFAULT:0;
 	}
-	if(q.slot>1 || !q.hold_us || q.hold_us>2000) return -EINVAL;
+	if(q.slot>1 || !q.hold_us || q.hold_us>(cmd==CIS_FIXTURE_BUSY?20000:2000)) return -EINVAL;
 	down_read(&fixture_lifetime);
 	q.object_generation=object_generation;
 	lock=q.slot?&lock_b:&lock_a;
 	q.object=(unsigned long)lock;
+	q.tid=task_pid_nr(current);
 	rcu_read_lock(); q.cgroup_id=cgroup_id(task_dfl_cgroup(current)); rcu_read_unlock();
 	q.begin_ns=ktime_get_ns();
 	if(mutex_lock_interruptible(lock)) { up_read(&fixture_lifetime); return -EINTR; }
 	q.acquired_ns=ktime_get_ns();
-	usleep_range(q.hold_us,q.hold_us+50);
+	if(cmd==CIS_FIXTURE_BUSY) {
+		u64 until=ktime_get_ns()+q.hold_us*1000ULL;
+		while(ktime_get_ns()<until) cpu_relax();
+	} else usleep_range(q.hold_us,q.hold_us+50);
 	q.released_ns=ktime_get_ns();
 	mutex_unlock(lock);
 	up_read(&fixture_lifetime);
@@ -141,10 +198,25 @@ static const struct file_operations ops={.owner=THIS_MODULE,.open=fixture_open,.
 static struct miscdevice device={.minor=MISC_DYNAMIC_MINOR,.name="cis-fixture",.fops=&ops,.mode=0600};
 static int __init fixture_init(void)
 {
+	int ret;
 	if(!isolated_vm) return -EPERM;
-	return misc_register(&device);
+#ifdef CONFIG_CIS_OBSERVE
+	ret=register_trace_cis_lock_state(dentry_delay,NULL);
+	if(ret) return ret;
+#endif
+	ret=misc_register(&device);
+#ifdef CONFIG_CIS_OBSERVE
+	if(ret) { unregister_trace_cis_lock_state(dentry_delay,NULL); tracepoint_synchronize_unregister(); }
+#endif
+	return ret;
 }
-static void __exit fixture_exit(void) { misc_deregister(&device); }
+static void __exit fixture_exit(void)
+{
+	misc_deregister(&device);
+#ifdef CONFIG_CIS_OBSERVE
+	unregister_trace_cis_lock_state(dentry_delay,NULL); tracepoint_synchronize_unregister();
+#endif
+}
 module_init(fixture_init);
 module_exit(fixture_exit);
 MODULE_LICENSE("GPL");

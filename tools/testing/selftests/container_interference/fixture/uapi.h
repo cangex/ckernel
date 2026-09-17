@@ -6,6 +6,7 @@
 struct cis_fixture_request {
 	__u32 slot, hold_us;
 	__u64 object, begin_ns, acquired_ns, released_ns, cgroup_id, object_generation;
+	__u64 tid;
 };
 #define CIS_FIXTURE_LOCK _IOWR('C', 1, struct cis_fixture_request)
 struct cis_fixture_async {
@@ -18,4 +19,11 @@ struct cis_fixture_async {
 #define CIS_FIXTURE_RESET _IOWR('C',5,struct cis_fixture_request)
 struct cis_fixture_storm { __u32 iterations, reserved; };
 #define CIS_FIXTURE_STORM _IOW('C',6,struct cis_fixture_storm)
+#define CIS_FIXTURE_BUSY _IOWR('C',7,struct cis_fixture_request)
+struct cis_fixture_dentry {
+	__s32 fd;
+	__u32 seed;
+	__u64 object, cgroup_id, tid, begin_ns, end_ns, slowpaths;
+};
+#define CIS_FIXTURE_DENTRY _IOWR('C',8,struct cis_fixture_dentry)
 #endif

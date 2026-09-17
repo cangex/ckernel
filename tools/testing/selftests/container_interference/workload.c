@@ -79,22 +79,45 @@ static int fixture(int argc,char **argv)
     struct cis_fixture_request q={.slot=argc>2?strtoul(argv[2],NULL,10):0,.hold_us=1000};
     int fd=open("/cis-fixture",O_RDWR|O_CLOEXEC);
     uint64_t start=argc>3?strtoull(argv[3],NULL,10):cis_now_ns();
+    int busy=argc>4 && !strcmp(argv[4],"preempt");
+    pid_t competitor=0;
+    if(busy) q.hold_us=10000;
     if(fd<0) { perror("fixture"); return 6; }
     until(start);
-    for(unsigned int i=0;i<200;i++) {
+    if(busy) {
+        competitor=fork();
+        if(!competitor) { cpu_until(start+1500000000ULL); _exit(0); }
+        if(competitor<0) return 6;
+    }
+    for(unsigned int i=0;i<(busy?40U:200U);i++) {
         if(i==100 && argc>4 && !strcmp(argv[4],"reuse")) {
             if(ioctl(fd,CIS_FIXTURE_RESET,&q)) { close(fd); return 7; }
             printf("CIS_RESET object=0x%" PRIx64 " generation=%" PRIu64 " time_ns=%" PRIu64 " fixture_reinitialization=1\n",
                    (uint64_t)q.object,(uint64_t)q.object_generation,(uint64_t)q.begin_ns);
             fflush(stdout);
         }
-        if(ioctl(fd,CIS_FIXTURE_LOCK,&q)) { perror("ioctl"); close(fd); return 7; }
+        if(ioctl(fd,busy?CIS_FIXTURE_BUSY:CIS_FIXTURE_LOCK,&q)) { perror("ioctl"); close(fd); return 7; }
         char line[448];
-        int size=snprintf(line,sizeof(line),"CIS_TRUTH slot=%u object=0x%" PRIx64 " begin_ns=%" PRIu64 " acquired_ns=%" PRIu64 " released_ns=%" PRIu64 " cgroup_id=%" PRIu64 " generation=%" PRIu64 "\n",
-               q.slot,(uint64_t)q.object,(uint64_t)q.begin_ns,(uint64_t)q.acquired_ns,(uint64_t)q.released_ns,(uint64_t)q.cgroup_id,(uint64_t)q.object_generation);
+        int size=snprintf(line,sizeof(line),"CIS_TRUTH slot=%u object=0x%" PRIx64 " begin_ns=%" PRIu64 " acquired_ns=%" PRIu64 " released_ns=%" PRIu64 " cgroup_id=%" PRIu64 " generation=%" PRIu64 " host_tid=%" PRIu64 " busy=%d\n",
+               q.slot,(uint64_t)q.object,(uint64_t)q.begin_ns,(uint64_t)q.acquired_ns,(uint64_t)q.released_ns,(uint64_t)q.cgroup_id,(uint64_t)q.object_generation,(uint64_t)q.tid,busy);
         if(size<0 || size>=(int)sizeof(line) || write(STDOUT_FILENO,line,size)!=size) { close(fd); return 10; }
     }
+    if(competitor>0) { int status; if(waitpid(competitor,&status,0)!=competitor || status) return 8; }
     close(fd); return 0;
+}
+
+static int dentry_fixture(int argc,char **argv)
+{
+    struct cis_fixture_dentry q={.seed=1};
+    int dev=open("/cis-fixture",O_RDWR|O_CLOEXEC);
+    int private=argc>4 && !strcmp(argv[4],"private");
+    q.fd=open(private?"/tmp/private-object":"/sample",private?O_CREAT|O_RDWR:O_RDONLY,0600);
+    if(dev<0 || q.fd<0) return 6;
+    until(argc>3?strtoull(argv[3],NULL,10):cis_now_ns());
+    if(ioctl(dev,CIS_FIXTURE_DENTRY,&q)) { perror("dentry ioctl"); return 7; }
+    printf("CIS_DENTRY object=0x%" PRIx64 " cgroup_id=%" PRIu64 " host_tid=%" PRIu64 " begin_ns=%" PRIu64 " end_ns=%" PRIu64 " slowpaths=%" PRIu64 " private=%d real_dentry=1 injected_delay_us=40\n",
+           (uint64_t)q.object,(uint64_t)q.cgroup_id,(uint64_t)q.tid,(uint64_t)q.begin_ns,(uint64_t)q.end_ns,(uint64_t)q.slowpaths,private);
+    close(q.fd); close(dev); return 0;
 }
 
 static int async_fixture(int argc,char **argv)
@@ -134,6 +157,7 @@ int main(int argc, char **argv)
     fflush(stdout);
     if (argc < 2 || !strcmp(argv[1], "identity")) return 0;
     if (!strcmp(argv[1],"fixture")) return fixture(argc,argv);
+    if (!strcmp(argv[1],"dentry")) return dentry_fixture(argc,argv);
     if (!strcmp(argv[1],"async-fixture")) return async_fixture(argc,argv);
     unsigned seconds = argc > 2 ? strtoul(argv[2], NULL, 10) : 2;
     if (!seconds || seconds > 300) return 4;
