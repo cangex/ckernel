@@ -42,8 +42,7 @@ class ControllerTests(unittest.TestCase):
         c.faulted, c.stopping = False, False
         c.surveys, c.history, c.roots = {}, {}, {}
         c.references, c.boundary_reads = {}, 0
-        c.helper_lock = threading.Lock()
-        c.helpers = set()
+        c.children = session.ChildProcesses()
         return c
 
     def test_slow_io_does_not_block_status(self):

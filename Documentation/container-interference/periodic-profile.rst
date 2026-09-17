@@ -75,6 +75,14 @@ prove the inclusive 64-MiB/20-ms contract. Preparation and drain are not hidden
 outside cost accounting. PMU fallback, multiplexing, losses, incomplete owner
 boundaries and output failures must remain visible.
 
+Collector and residue-helper reaping share a controller-local registry with CPU
+snapshots. A child moves from live ``/proc/PID/stat`` ticks to cumulative
+``RUSAGE_CHILDREN`` under the same lock, so exit cannot omit or double-count its
+CPU in a snapshot. Waiting polls outside this lock; it does not hold a lock while
+waiting for a child to terminate. Live counters still have kernel tick resolution
+and these counters still exclude asynchronous kernel work. Unit regressions for
+this handoff do not replace ARM64 budget enforcement or background-cost tests.
+
 No business interference percentage without an aligned business denominator
 and comparable baseline. Protocol-2 ABORT, task-start identity, object epoch and
 preempted holder handling remain intact. Empty-root lifecycle stress is not

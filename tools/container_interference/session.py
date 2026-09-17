@@ -16,7 +16,6 @@ import json
 import os
 from pathlib import Path
 import re
-import resource
 import secrets
 import selectors
 import signal
@@ -25,7 +24,6 @@ import stat
 import struct
 import subprocess
 import sys
-import threading
 import time
 
 VERSION = 1
@@ -41,17 +39,13 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from periodic_plan import capacity, digest, require_acceptance, validate_plan
 from process_budget import ProcessBudget
+from child_usage import ChildProcesses, reaped_cpu_ns as reaped_child_cpu_ns
 from schedule import Schedule
 import survey
 
 
 def now():
     return time.monotonic_ns()
-
-
-def reaped_child_cpu_ns():
-    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return round((usage.ru_utime + usage.ru_stime) * 1e9)
 
 
 def encoded(value):
@@ -145,8 +139,7 @@ class Controller:
         signal.set_wakeup_fd(self.wake_w.fileno())
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='cis-io')
         self.io = None
-        self.helpers = set()
-        self.helper_lock = threading.Lock()
+        self.children = ChildProcesses()
         self.schedule = None
         self.surveys = {}
         self.references = {}
@@ -165,7 +158,7 @@ class Controller:
                          'residue_sha256': hashlib.sha256(Path(args.residue).read_bytes()).hexdigest(),
                          'bpf_sha256': hashlib.sha256(Path(args.bpf).read_bytes()).hexdigest(),
                          'support_sha256': digest({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
-                            for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py')}),
+                            for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py', 'child_usage.py')}),
                          'kernel_release': os.uname().release,
                          'kernel_notes_sha256': hashlib.sha256(Path('/sys/kernel/notes').read_bytes()).hexdigest(),
                          'memory_total_complete': False}
@@ -231,33 +224,16 @@ class Controller:
         future.add_done_callback(wake)
 
     def helper(self, command):
-        child = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        with self.helper_lock:
-            self.helpers.add(child.pid)
+        child = self.children.spawn(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            try:
-                return child.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-                return -1
-        finally:
-            with self.helper_lock:
-                self.helpers.discard(child.pid)
+            return self.children.wait(child, timeout=1)
+        except subprocess.TimeoutExpired:
+            self.children.kill(child)
+            self.children.wait(child)
+            return -1
 
     def process_cpu(self):
-        result = time.process_time_ns() + reaped_child_cpu_ns()
-        with self.helper_lock:
-            pids = list(self.helpers)
-        if self.active and self.active['process'].poll() is None:
-            pids.append(self.active['process'].pid)
-        for pid in pids:
-            try:
-                fields = Path('/proc/%d/stat' % pid).read_text().rsplit(')', 1)[1].split()
-                result += (int(fields[11])+int(fields[12])) * 1_000_000_000 // os.sysconf('SC_CLK_TCK')
-            except (FileNotFoundError, ProcessLookupError):
-                pass
-        return result
+        return self.children.cpu_ns()
 
     def pump_io(self):
         if self.io and self.io[1].done():
@@ -272,7 +248,7 @@ class Controller:
                 if self.active:
                     self.active['record']['io_error'] = name + ': ' + str(error)
                     self.cancel(self.active['record']['session_id'])
-                    if self.active['process'].poll() is not None:
+                    if self.children.poll(self.active['process']) is not None:
                         self.release_active(faulted=True)
         if self.io or not self.active:
             return
@@ -432,7 +408,7 @@ class Controller:
             command = [self.args.worker, str(child.fileno()), str(output), sid, request['collector'],
                        str(record['window_ms']), self.args.bpf, request.get('inject', 'none')]
             command += ['%d:%d:%d' % (root['fd'], root['id'], root['generation']) for root in roots]
-            child_process = subprocess.Popen(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots]),
+            child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots]),
                                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors)
         except BaseException:
             record.update(state='FAULTED', result='FAILED', reason='SPAWN')
@@ -471,7 +447,7 @@ class Controller:
                 self.active['channel'].send(b'CANCEL')
             except OSError:
                 pass
-            if self.active['process'].poll() is None:
+            if self.children.poll(self.active['process']) is None:
                 signal.pidfd_send_signal(self.active['pidfd'], signal.SIGTERM)
             self.active['deadline'] = now() + CLEANUP_NS
         return record
@@ -671,7 +647,9 @@ class Controller:
                 self.worker_event()
             except (KeyError, OSError):
                 break
-        code = active['process'].wait()
+        code = self.children.poll(active['process'])
+        if code is None:
+            return
         record['exit_code'] = code
         active['exited'] = True
         self.selector.unregister(active['pidfd'])
@@ -822,11 +800,8 @@ class Controller:
                 self.schedule.outcome(key)
 
     def sample_rss(self):
-        with self.helper_lock:
-            pids = list(self.helpers)
+        pids = self.children.pids()
         pids.append(os.getpid())
-        if self.active:
-            pids.append(self.active['process'].pid)
         pages = 0
         for pid in set(pids):
             try:
@@ -866,7 +841,7 @@ class Controller:
                 except (FileNotFoundError, ProcessLookupError):
                     pass
             if self.active and now() >= self.active['deadline']:
-                if self.active['process'].poll() is None:
+                if self.children.poll(self.active['process']) is None:
                     signal.pidfd_send_signal(self.active['pidfd'], signal.SIGKILL)
                 self.active['killed'] = True
                 self.active['deadline'] = now() + CLEANUP_NS
