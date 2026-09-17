@@ -5,6 +5,8 @@
 #include <bpf/bpf_tracing.h>
 #include "../include/cis_event.h"
 char LICENSE[] SEC("license") = "GPL";
+struct session_window { __u64 session_id, start_ns, end_ns; };
+struct { __uint(type,BPF_MAP_TYPE_ARRAY); __uint(max_entries,1); __type(key,__u32); __type(value,struct session_window); } session_window SEC(".maps");
 #define COUNT(s, field) do { if (s) __sync_fetch_and_add(&(s)->field, 1); } while (0)
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u64); __type(value,struct cis_identity); } roots SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,2); __type(key,__u64); __type(value,struct cis_target); } targets SEC(".maps");
@@ -92,6 +94,13 @@ int sample_ip(struct bpf_perf_event_data *ctx)
 	struct cis_event e={0};
 	struct cis_bpf_stats *s=statistics();
 	COUNT(s,received);
+	{
+		__u32 zero=0;
+		struct session_window *w=bpf_map_lookup_elem(&session_window,&zero);
+		__u64 now=bpf_ktime_get_ns();
+		/* Zero ID preserves the legacy ambient collector. Session resources are fresh. */
+		if(w && w->session_id && (now<w->start_ns || now>=w->end_ns)) return 0;
+	}
 	if(!identity((void*)bpf_get_current_task(),&id)) return 0;
 	e.time_ns=bpf_ktime_get_ns(); e.id=id.id; e.generation=id.generation;
 	e.tid=bpf_get_current_pid_tgid(); e.ip=ctx->regs.pc; e.weight=ctx->sample_period;

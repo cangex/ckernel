@@ -19,6 +19,11 @@ def event(t, phase, who, obj=100, epoch=10, flags=0, **extra):
 
 
 class OwnerTests(unittest.TestCase):
+    def test_distinct_profile_sessions_never_join(self):
+        first=event(1,3,1); first['session_id']=1
+        second=event(2,2,2); second['session_id']=2
+        with self.assertRaises(ValueError): owner.analyze([first,second])
+
     def test_aborted_attempt_cannot_splice_to_later_trylock(self):
         r=[event(1,3,1),event(2,2,2),event(3,12,2,result=-4),
            event(10,4,1),event(20,3,2,attempt_ns=0)]

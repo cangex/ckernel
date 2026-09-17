@@ -79,6 +79,7 @@ int cis_registry_add(struct cis_context *ctx, int fd, const char *name,
 	if (!r) return -ENOSPC;
 	memset(r, 0, sizeof(*r));
 	for (i = 0; i < 6; i++) r->metric_fd[i] = -1;
+	for (i = 0; i < 4; i++) r->config_fd[i] = -1;
 	r->psi_fd[0]=r->psi_fd[1]=-1;
 	r->fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
 	if (r->fd < 0) return -errno;
@@ -91,7 +92,7 @@ int cis_registry_add(struct cis_context *ctx, int fd, const char *name,
 	snprintf(r->name, sizeof(r->name), "%s", name);
 	snprintf(r->path, sizeof(r->path), "%s", path);
 	r->next_ns = cis_metric_first(cis_clock_ns(),ctx->serial);
-	if (cis_metrics_open(r)) { close(r->fd); return -EIO; }
+	if (!ctx->identity_only && cis_metrics_open(r)) { close(r->fd); return -EIO; }
 	if(cis_fast_open(ctx,r)) { cis_metrics_close(r); close(r->fd); return -EIO; }
 	r->used = 1;
 	if (cis_capture_root(ctx, r, 1)) {

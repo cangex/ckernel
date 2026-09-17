@@ -22,8 +22,14 @@ void cis_report(struct cis_context *ctx, const char *kind, const struct cis_root
 	char b[2048], text[1200], name[384];
 	int n;
 	escape(text, sizeof(text), detail); escape(name, sizeof(name), r ? r->name : "host");
-	n = snprintf(b, sizeof(b), "{\"version\":1,\"time_ns\":%llu,\"kind\":\"%s\",\"id\":%llu,\"generation\":%llu,\"name\":\"%s\",\"state\":\"%s\",\"detail\":\"%s\"}\n",
-		(unsigned long long)cis_clock_ns(), kind, (unsigned long long)(r?r->id:0),
+	n = snprintf(b, sizeof(b), "{\"version\":1,\"session_id\":%llu,\"time_ns\":%llu,\"kind\":\"%s\",\"id\":%llu,\"generation\":%llu,\"name\":\"%s\",\"state\":\"%s\",\"detail\":\"%s\"}\n",
+		(unsigned long long)ctx->session_id, (unsigned long long)cis_clock_ns(), kind, (unsigned long long)(r?r->id:0),
 		(unsigned long long)(r?r->generation:0), name, r?cis_state_name(r->state):"HOST", text);
-	if (n < 0 || (size_t)n >= sizeof(b) || write(ctx->output_fd, b, n) != n) ctx->dropped++;
+	if (ctx->output_error) return;
+	if (n < 0 || (size_t)n >= sizeof(b)) { ctx->output_error=EOVERFLOW; ctx->dropped++; return; }
+	if (ctx->output_limit && (uint64_t)n>ctx->output_limit-ctx->output_bytes) {
+		ctx->output_error=EFBIG; ctx->dropped++; return;
+	}
+	if (write(ctx->output_fd,b,n)!=n) { ctx->output_error=errno?errno:EIO; ctx->dropped++; }
+	else ctx->output_bytes+=n;
 }

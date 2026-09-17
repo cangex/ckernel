@@ -16,6 +16,9 @@ def actor(e):
 
 
 def analyze(records):
+    sessions = {r.get('session_id', 0) for r in records if r.get('kind') == 'OWNER'}
+    if len(sessions) > 1:
+        raise ValueError('owner records from distinct sessions must not be joined')
     groups = defaultdict(list)
     stacks, symbols = {}, {}
     for r in records:
