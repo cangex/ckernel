@@ -615,14 +615,25 @@ void cis_capture_stop(struct cis_context *ctx)
 		__u32 zero=0;
 		__u64 lost_count=0,skipped=0;
 		if(!bpf_map_lookup_elem(c->stats,&zero,c->cpu_stats)) {
-			char detail[160];
+			char detail[256];
 			__u64 received=0,emitted=0,rejected=0;
+			__u64 owner_entries=0,sched_entries=0,target_waits=0,watch_events=0;
 			for(i=0;i<c->possible_cpus;i++) {lost_count+=c->cpu_stats[i].lost;skipped+=c->cpu_stats[i].owner_skipped;}
 			snprintf(detail,sizeof(detail),"lost=%llu owner_skipped=%llu",(unsigned long long)lost_count,(unsigned long long)skipped);
 			cis_report(ctx,"terminal_coverage",NULL,detail);
 			for(i=0;i<c->possible_cpus;i++) {received+=c->cpu_stats[i].received;emitted+=c->cpu_stats[i].emitted;rejected+=c->cpu_stats[i].rejected;}
 			snprintf(detail,sizeof(detail),"received=%llu emitted=%llu rejected=%llu",(unsigned long long)received,(unsigned long long)emitted,(unsigned long long)rejected);
 			cis_report(ctx,"terminal_counters",NULL,detail);
+			for(i=0;i<c->possible_cpus;i++) {
+				owner_entries+=c->cpu_stats[i].owner_entries;
+				sched_entries+=c->cpu_stats[i].owner_sched_entries;
+				target_waits+=c->cpu_stats[i].owner_target_waits;
+				watch_events+=c->cpu_stats[i].owner_watch_events;
+			}
+			snprintf(detail,sizeof(detail),"owner_entries=%llu sched_entries=%llu target_waits=%llu watch_events=%llu counters_overlap=1",
+				(unsigned long long)owner_entries,(unsigned long long)sched_entries,
+				(unsigned long long)target_waits,(unsigned long long)watch_events);
+			cis_report(ctx,"owner_entry_stages",NULL,detail);
 			ctx->terminal_valid=1;
 			ctx->terminal_received=received; ctx->terminal_emitted=emitted;
 			ctx->terminal_rejected=rejected; ctx->terminal_lost=lost_count;

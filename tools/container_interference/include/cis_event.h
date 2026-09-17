@@ -24,7 +24,11 @@ struct cis_event {
 };
 struct cis_work_state { struct cis_event queued, active; __u32 queued_valid, active_valid; };
 struct cis_pending_key { __u64 tid, object, task_start_ns; __u32 type, reserved; };
-struct cis_bpf_stats { __u64 received, emitted, lost, unknown, overdepth, unmatched, nested, rejected, expired, phase_changes, irq_context, owner_seen, owner_skip_base, owner_skipped; };
+struct cis_bpf_stats {
+	__u64 received, emitted, lost, unknown, overdepth, unmatched, nested, rejected,
+	      expired, phase_changes, irq_context, owner_seen, owner_skip_base, owner_skipped;
+	__u64 owner_entries, owner_sched_entries, owner_target_waits, owner_watch_events;
+};
 struct cis_owner_event {
 	struct cis_event base;
 	__u64 actor_id, actor_generation, actor_start;

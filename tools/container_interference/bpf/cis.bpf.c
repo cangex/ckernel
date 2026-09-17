@@ -320,6 +320,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 	__u64 now=bpf_ktime_get_ns(),tid=bpf_get_current_pid_tgid();
 	__u32 phase=ctx->args[2];
 	COUNT(s,received);
+	COUNT(s,owner_entries);
 	if(s) {
 		if(!s->owner_seen) {s->owner_seen=1;s->owner_skip_base=raw_skipped;}
 		s->owner_skipped=raw_skipped-s->owner_skip_base;
@@ -332,6 +333,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 	identity(task,&actor);
 	if(phase==2 && allowed(&actor,CIS_DIAG_OWNER,now)) {
 		struct cis_target *t=bpf_map_lookup_elem(&targets,&actor.id);
+		COUNT(s,owner_target_waits);
 		if(!t) return 0;
 		if(!w) {
 			create.id=actor.id;create.generation=actor.generation;
@@ -347,6 +349,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		if(bpf_map_update_elem(&holders,&key,&rec,BPF_ANY)) COUNT(s,rejected);
 	}
 	if(w) {
+		COUNT(s,owner_watch_events);
 		if(key.kind==2 && phase!=1 && phase!=8) {
 			__u64 seq;
 			/* A bounded prefix, not dropped records in an allegedly complete window. */
@@ -427,6 +430,7 @@ SEC("raw_tp/sched_switch")
 int owner_switch(struct bpf_raw_tracepoint_args *ctx)
 {
 	struct cis_bpf_stats *s=statistics(); COUNT(s,received);
+	COUNT(s,owner_sched_entries);
 	owner_schedule(ctx,(void*)ctx->args[1],9,ctx->args[0]?1:ctx->args[3]?2:4);
 	owner_schedule(ctx,(void*)ctx->args[2],10,0);
 	return 0;
