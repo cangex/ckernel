@@ -209,11 +209,19 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(record['result'], 'CANCELLED')
         self.assertTrue(record['worker_never_spawned'])
         self.assertIsNotNone(c.admission)
+        self.assertFalse(record['finalized'])
+        self.assertEqual(record['state'], 'VERIFY')
         for fd in fds:
             with self.assertRaises(OSError): os.fstat(fd)
         work, done = jobs.pop()
-        done(work())
+        saved = work()
+        self.assertFalse(record['finalized'])
+        self.assertIsNotNone(c.admission)
+        self.assertTrue(saved['finalized'])
+        done(saved)
         self.assertIsNone(c.admission)
+        self.assertTrue(record['finalized'])
+        self.assertEqual(record['state'], 'IDLE')
 
     def test_start_queues_file_creation_before_spawning(self):
         c = self.controller()

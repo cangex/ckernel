@@ -453,8 +453,13 @@ class Controller:
                               objects_absent=True, worker_never_spawned=True,
                               spawn_may_follow=False, finalized=True)
                 snapshot = copy.deepcopy(record)
-                self.submit_io('admission_cancelled', lambda: self.persist(snapshot),
-                               self.admission_finished)
+                # Status must not promise completion while final publication
+                # still owns the admission slot (start would return EBUSY).
+                record.update(state='VERIFY', finalized=False)
+                def publish_cancelled():
+                    self.persist(snapshot)
+                    return snapshot
+                self.submit_io('admission_cancelled', publish_cancelled, self.admission_finished)
                 return
             parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             command = [self.args.worker, str(child.fileno()), str(output), record['session_id'], request['collector'],
@@ -497,7 +502,8 @@ class Controller:
         # The existing ARMED inventory journal persists PID/start time as well;
         # no probes can be armed before that asynchronous write has completed.
 
-    def admission_finished(self, _):
+    def admission_finished(self, saved):
+        self.admission['record'].update(saved)
         self.admission = None
 
     def cancel(self, sid):
