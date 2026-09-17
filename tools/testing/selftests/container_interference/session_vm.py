@@ -15,6 +15,7 @@ parser.add_argument('--stress', type=int, default=100)
 parser.add_argument('--cost', action='store_true')
 parser.add_argument('--faults', action='store_true')
 parser.add_argument('--resource-faults', action='store_true')
+parser.add_argument('--stage-faults', action='store_true')
 parser.add_argument('--fixture-rounds', type=int, default=1)
 parser.add_argument('--diagnose-recursion', action='store_true')
 args = parser.parse_args()
@@ -123,12 +124,12 @@ def window(sid):
     raise TimeoutError('arming')
 
 
-if args.resource_faults:
+if args.resource_faults or args.stage_faults:
     def inventory():
         return json.loads(subprocess.check_output(['/profile/session-residue','--snapshot'],text=True))
     original=inventory()
     observations=[]
-    for limit in range(4,25):
+    for limit in range(4,25) if args.resource_faults else ():
         sid=begin('ip','fdLimit%d'%limit,inject='fd_limit_%d'%limit)['session_id']
         record=finished(sid)
         assert record.get('receipt'), record
@@ -140,8 +141,28 @@ if args.resource_faults:
         assert remaining==original, (original,remaining)
         observations.append(dict(limit=limit,result=record['result'],reason=record['receipt']['reason'],
                                  inventory_restored=True))
-    assert any(value['result']=='PARTIAL' for value in observations)
-    print('CIS_PROFILE_RESOURCE_FAILURES '+json.dumps(observations),flush=True)
+    if args.resource_faults:
+        assert any(value['result']=='PARTIAL' for value in observations)
+        print('CIS_PROFILE_RESOURCE_FAILURES '+json.dumps(observations),flush=True)
+    stages=[]
+    for point in ('object_load','cpu_stats','output_perf_buffer','ip_perf_fd',
+                  'ip_perf_mmap','ip_perf_attach','owner_attach','window_map') if args.stage_faults else ():
+        kind='owner' if point=='owner_attach' else 'ip'
+        sid=begin(kind,'stage'+point.replace('_',''),inject='fail_'+point)['session_id']
+        record=finished(sid)
+        assert record['result']=='PARTIAL', record
+        for _ in range(100):
+            remaining=inventory()
+            if remaining==original: break
+            time.sleep(.02)
+        assert remaining==original, (original,remaining)
+        lines=(OUT/'records'/(sid+'.jsonl')).read_text().splitlines()
+        injected=[json.loads(line) for line in lines if json.loads(line).get('kind')=='fault_injection']
+        assert len(injected)==1 and 'stage='+point in injected[0]['detail'], injected
+        stages.append(dict(stage=point,result=record['result'],inventory_restored=True,
+                           injection=injected[0],scope='injected boundary; not allocator internals'))
+    if args.stage_faults:
+        print('CIS_PROFILE_STAGE_FAILURES '+json.dumps(stages),flush=True)
 
 
 # Real sampled IP and bounded owner fixtures are separate from empty-root lifecycle stress.

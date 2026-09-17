@@ -47,6 +47,7 @@ int main(int argc,char **argv)
 	ctx->output_limit=16ULL<<20; ctx->identity_only=1; ctx->psi_epoll=-1;
 	ctx->window_ms=window; ctx->ip_hz=1000; ctx->entry_rate_limit=200000;
 	ctx->max_diagnostics=2; ctx->memory_limit=64ULL<<20;
+	if(!strncmp(argv[7],"fail_",5)) ctx->fault_stage=argv[7]+5;
 	signal(SIGTERM,stop_signal); signal(SIGINT,stop_signal);
 	if(prctl(PR_SET_PDEATHSIG,SIGTERM) || getppid()!=parent) return 3;
 	control=(struct pollfd){.fd=channel,.events=POLLIN};

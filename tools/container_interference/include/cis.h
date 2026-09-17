@@ -59,6 +59,8 @@ struct cis_context {
 	uint64_t terminal_received, terminal_emitted, terminal_rejected;
 	uint64_t terminal_lost, terminal_owner_skipped;
 	int terminal_valid;
+	const char *fault_stage;
+	unsigned int fault_seen;
 	void *capture;
 	void *symbols;
 };

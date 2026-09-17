@@ -47,6 +47,10 @@ class Contract(unittest.TestCase):
 
     def test_injection_bounded(self):
         with self.assertRaises(ValueError): session.validate(start(inject='run_shell'))
+        for stage in ('object_load','cpu_stats','output_perf_buffer','ip_perf_fd',
+                      'ip_perf_mmap','ip_perf_attach','owner_attach','window_map'):
+            session.validate(start(inject='fail_'+stage))
+        with self.assertRaises(ValueError): session.validate(start(inject='fail_anything'))
         for limit in (3, 25, 1000):
             with self.assertRaises(ValueError): session.validate(start(inject='fd_limit_'+str(limit)))
         for limit in (4, 12, 24):

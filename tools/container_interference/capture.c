@@ -148,10 +148,21 @@ static void lost(void *opaque,int cpu,__u64 count)
 	cis_report(c->ctx,"buffer_loss",NULL,detail);
 }
 
+static int fault_at(struct cis_context *ctx,const char *stage,unsigned int ordinal)
+{
+	char detail[160];
+	if(!ctx->fault_stage || strcmp(ctx->fault_stage,stage) || ++ctx->fault_seen!=ordinal) return 0;
+	snprintf(detail,sizeof(detail),"stage=%s ordinal=%u kind=injected_boundary_failure errno=%d",stage,ordinal,ENOMEM);
+	cis_report(ctx,"fault_injection",NULL,detail);
+	errno=ENOMEM;
+	return 1;
+}
+
 static int attach(struct capture *c,const char *name,struct bpf_link **slot)
 {
 	struct bpf_program *p=bpf_object__find_program_by_name(c->object,name);
 	if(!p) return -ENOENT;
+	if(fault_at(c->ctx,"owner_attach",2)) return -ENOMEM;
 	*slot=bpf_program__attach(p);
 	if(libbpf_get_error(*slot)) { *slot=NULL; return -EIO; }
 	return 0;
@@ -351,17 +362,20 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	bpf_object__for_each_map(map,c->object)
 		if(bpf_map__set_autocreate(map,cis_profile_map(ctx->session_collector,bpf_map__name(map)))) goto fail;
 	stage="object_load";
+	if(fault_at(ctx,stage,1)) goto fail;
 	if(bpf_object__load(c->object)) goto fail;
 	c->roots=mapfd(c,"roots"); c->targets=mapfd(c,"targets"); c->pending=mapfd(c,"pending");
 	c->stacks=mapfd(c,"stacks"); c->stats=mapfd(c,"stats");
 	c->possible_cpus=libbpf_num_possible_cpus();
 	if(c->possible_cpus<1 || c->possible_cpus>CIS_CPU_CAP) goto fail;
 	stage="cpu_stats";
+	if(fault_at(ctx,stage,1)) goto fail;
 	c->cpu_stats=calloc(c->possible_cpus,sizeof(*c->cpu_stats));
 	if(!c->cpu_stats) goto fail;
 	/* More burst room on small systems, still <=4 MiB of payload globally. */
 	while(pages<16 && (unsigned long long)(pages*2)*4096*c->possible_cpus<=(4ULL<<20)) pages*=2;
 	stage="output_perf_buffer";
+	if(fault_at(ctx,stage,1)) goto fail;
 	c->ring=perf_buffer__new(mapfd(c,"events"),pages,event,lost,c,NULL);
 	if(libbpf_get_error(c->ring)) { c->ring=NULL; goto fail; }
 	snprintf(detail,sizeof(detail),"pages_per_cpu=%d possible_cpus=%d payload_bytes=%llu cap_bytes=4194304",pages,c->possible_cpus,(unsigned long long)pages*4096*c->possible_cpus);
@@ -378,6 +392,7 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 			.sample_period=4000000000ULL/(ctx->ip_hz/c->ncpu),.exclude_user=1,.exclude_hv=1,.disabled=1};
 		int fd;
 		stage="ip_perf_fd";
+		if(fault_at(ctx,stage,2)) goto fail;
 		fd=syscall(__NR_perf_event_open,&attr,-1,i,-1,PERF_FLAG_FD_CLOEXEC);
 		if(fd<0 && (errno==ENOENT || errno==EOPNOTSUPP || errno==EINVAL)) {
 			attr.type=PERF_TYPE_SOFTWARE; attr.config=PERF_COUNT_SW_CPU_CLOCK;
@@ -394,9 +409,11 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		cis_report(ctx,"ip_event",NULL,detail);
 		c->perf_page_size=sysconf(_SC_PAGESIZE);
 		stage="ip_perf_mmap";
+		if(fault_at(ctx,stage,2)) goto fail;
 		c->perf_pages[i]=mmap(NULL,2*c->perf_page_size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
 		if(c->perf_pages[i]==MAP_FAILED) { c->perf_pages[i]=NULL; goto fail; }
 		stage="ip_perf_attach";
+		if(fault_at(ctx,stage,2)) goto fail;
 		if(ioctl(fd,PERF_EVENT_IOC_SET_BPF,prog_fd)) goto fail;
 	}
 	snprintf(detail,sizeof(detail),"configured_cpus=%d per_cpu_budget_hz=%u nominal_total_budget_hz=%u per_cpu_buffer_pages=%u inflight_limit=%u fixed_period_at_4GHz_bound=1 no_idle_period_shrinking=1",
@@ -446,6 +463,7 @@ int cis_capture_arm(struct cis_context *ctx,uint64_t start,uint64_t end)
 	uint64_t first=cis_clock_ns();
 	char detail[256];
 	if(!c) return -EINVAL;
+	if(fault_at(ctx,"window_map",1)) return -ENOMEM;
 	if(ctx->session_id && bpf_map_update_elem(mapfd(c,"session_window"),&zero,&window,BPF_ANY)) return -errno;
 	for(i=0;i<c->ncpu;i++) if(c->perf_fds[i]>=0 && ioctl(c->perf_fds[i],PERF_EVENT_IOC_ENABLE,0)) return -errno;
 	snprintf(detail,sizeof(detail),"first_enable_ns=%llu last_enable_ns=%llu window_start_ns=%llu window_end_ns=%llu",

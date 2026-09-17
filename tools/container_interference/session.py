@@ -110,7 +110,10 @@ def validate(request):
         if not isinstance(nonce, str) or not 1 <= len(nonce) <= 64 or not nonce.isascii() or not nonce.isalnum():
             raise ValueError('bounded alphanumeric idempotency nonce required')
         injection = request.get('inject', 'none')
-        if (injection not in ('none', 'after_prepare', 'admission_slow', 'admission_full') and
+        if (injection not in ('none', 'after_prepare', 'admission_slow', 'admission_full',
+                             'fail_object_load', 'fail_cpu_stats', 'fail_output_perf_buffer',
+                             'fail_ip_perf_fd', 'fail_ip_perf_mmap', 'fail_ip_perf_attach',
+                             'fail_owner_attach', 'fail_window_map') and
                 not (isinstance(injection, str) and re.fullmatch(r'fd_limit_(?:[4-9]|1[0-9]|2[0-4])', injection))):
             raise ValueError('unknown injection')
         if 'nonce_epoch' in request and (not isinstance(request['nonce_epoch'], str) or not re.fullmatch('[0-9a-f]{32}', request['nonce_epoch'])):
@@ -456,7 +459,7 @@ class Controller:
             parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             command = [self.args.worker, str(child.fileno()), str(output), record['session_id'], request['collector'],
                        str(record['window_ms']), self.args.bpf,
-                       request.get('inject', 'none') if request.get('inject', '').startswith('fd_limit_') or
+                       request.get('inject', 'none') if request.get('inject', '').startswith(('fd_limit_', 'fail_')) or
                        request.get('inject') == 'after_prepare' else 'none']
             command += ['%d:%d:%d' % (root['fd'], root['id'], root['generation']) for root in roots]
             child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots]),
