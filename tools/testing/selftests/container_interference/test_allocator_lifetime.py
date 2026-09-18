@@ -40,6 +40,19 @@ class AllocationLifetime(unittest.TestCase):
         self.assertIsNone(item['release_executor']['tid'])
         self.assertEqual(item['release_executor']['context'],'softirq')
 
+    def test_stack_hash_collision_is_not_bad_identity_or_a_fabricated_stack(self):
+        row=self.sample(context=1)
+        row['detail']=row['detail'].replace('stack_id=-1', 'stack_id=-17')
+        result=self.run_rows([row])
+        self.assertEqual(result['status'],'PASS')
+        self.assertEqual(result['release_stack_errors'],{'-17':1})
+        entry=result['release_entries'][0]
+        self.assertEqual(entry['release_stack_status'],'UNAVAILABLE')
+        self.assertEqual(entry['release_stack_error'],-17)
+        self.assertFalse(entry['release_stack_leaf_to_root'])
+        row['detail']=row['detail'].replace('stack_id=-17', 'stack_id=-4096')
+        self.assertEqual(self.run_rows([row])['status'],'FAIL')
+
     def test_old_generation_wrong_object_and_double_free_rejected(self):
         for row in (self.sample(call_ns=9),self.sample(object_address=501),self.sample(ordinal=2),self.sample(free_time=15)):
             self.assertEqual(self.run_rows([row])['status'],'FAIL')

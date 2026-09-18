@@ -291,11 +291,13 @@ static void unfinished(struct capture *c,struct cis_root *r)
 
 static void export_stacks(struct capture *c,struct cis_root *r)
 {
+	struct bpf_map *map = bpf_object__find_map_by_name(c->object,"stacks");
 	__u32 key,next;
 	__u64 ips[CIS_STACK_DEPTH];
 	int err=bpf_map_get_next_key(c->stacks,NULL,&key);
-	unsigned int visited=0;
-	while(!err && visited++<CIS_STACKS*2) {
+	unsigned int visited=0, capacity=map?bpf_map__max_entries(map):0;
+	if(!capacity || capacity>4096) { c->ctx->errors++; return; }
+	while(!err && visited++<capacity*2) {
 		unsigned int i;
 		char detail[1200];
 		size_t n=snprintf(detail,sizeof(detail),"stack_id=%u ips=",key);

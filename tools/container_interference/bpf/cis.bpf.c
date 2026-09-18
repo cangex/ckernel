@@ -21,7 +21,12 @@ struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(k
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 #endif
 #if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 9
-struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,CIS_STACKS); __type(key,__u32); __type(value,__u64[CIS_STACK_DEPTH]); } stacks SEC(".maps");
+#if CIS_PROFILE == 8 || CIS_PROFILE == 9
+#define PROFILE_STACKS 2048
+#else
+#define PROFILE_STACKS CIS_STACKS
+#endif
+struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,PROFILE_STACKS); __type(key,__u32); __type(value,__u64[CIS_STACK_DEPTH]); } stacks SEC(".maps");
 #endif
 #if CIS_PROFILE == 0
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_work_state); } work_items SEC(".maps");

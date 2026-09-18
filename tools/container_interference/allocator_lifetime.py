@@ -7,7 +7,7 @@ from explain import within_window
 
 
 def correlate(record,raw,report,stacks):
-    objects, releases, excluded = {}, [], Counter()
+    objects, releases, excluded, stack_errors = {}, [], Counter(), Counter()
     known={(v['id'],v['generation']) for v in record.get('root_identities',{}).values()}
     supported='alloc_release' in record.get('inventory',{}).get('program_names',[])
     accepted=report['quality']['status']=='PASS' and report['scope_audit']['status']=='PASS'
@@ -27,7 +27,7 @@ def correlate(record,raw,report,stacks):
         if item.get('kind')!='ALLOC_RELEASE': continue
         d=fields(item.get('detail',''))
         if (not required<=d.keys() or any(type(d[k]) is not int or d[k]<0 for k in required-{'stack_id'})
-                or d['stack_id'] < -1 or d['protocol']!=1 or d['context'] not in (0,1,2)):
+                or d['stack_id'] < -4095 or d['protocol']!=1 or d['context'] not in (0,1,2)):
             excluded['schema']+=1; continue
         key=(item.get('id'),item.get('generation'),d['tid'],d['task_start'],d['call_ns'],d['cache'],
              d['object'],d['allocation_time_ns'],d['allocation_ordinal'])
@@ -46,6 +46,8 @@ def correlate(record,raw,report,stacks):
                 or executor!=(0,0) and executor not in known):
             excluded['executor_identity']+=1; continue
         seen.add(key)
+        if d['stack_id'] < 0:
+            stack_errors[str(d['stack_id'])] += 1
         releases.append(dict(object_address=d['object'],cache_address=d['cache'],evidence='E2',
             observation_key=dict(boot_id=record.get('boot_id'),session_id=record.get('session_id'),
                                  call_ns=d['call_ns'],ordinal=d['allocation_ordinal']),
@@ -57,8 +59,12 @@ def correlate(record,raw,report,stacks):
                 tid=d['executor_tid'] or None,task_start=d['executor_start'] or None,
                 context=('task','softirq','hardirq')[d['context']]),
             release_stack_leaf_to_root=stacks.get(d['stack_id'],[]),release_caller=d['caller'],
+            release_stack_error=d['stack_id'] if d['stack_id'] < 0 else None,
+            release_stack_status='AVAILABLE' if stacks.get(d['stack_id']) else 'UNAVAILABLE',
             release_completed='UNOBSERVED',rcu_grace_period='UNOBSERVED',blocking_container=None))
     return dict(status='FAIL' if excluded else 'PASS' if supported and accepted else 'UNOBSERVED',
         release_entries=releases,excluded=dict(excluded),allocations_without_release=len(objects)-len(seen),
+        release_stack_errors=dict(stack_errors),
+        status_scope='allocation-instance to release-entry identity; stack availability is reported separately',
         completion='entry before native release/reuse, not completion; no mutation of allocator ownership',
         unknown_semantics=['memcg billing','Maple tree owner','RCU grace-period start/end','allocator free backend cost'])

@@ -83,3 +83,24 @@ release and RCU-deferred release.  It is not loaded on the host.  Fixture
 module taint is expected and distinguished from an Oops or kernel warning.
 Native runtime evidence for the new release collector is still required;
 unit tests, code existence and successful compilation do not complete X3.
+
+Runtime follow-up: stack collision and identity are distinct
+-----------------------------------------------------------
+
+The context-separated release build a63f83cc2 completed the 36-state fixture
+but the ordinary VMA bridge stopped on release parser validation. Its first
+capture recorded zero source gaps and zero perf loss; 43 softirq release
+records had ``bpf_get_stackid`` return -EEXIST (-17), not corrupt identity.
+The prior parser accepted only -1 and incorrectly called these schema errors.
+The failed cohort remains preserved; it is not rewritten as a successful run.
+
+Release correlation now validates the errno range, reports each missing stack
+and retains the independently joined allocation/release-entry identity and
+caller address. It NEVER substitutes a colliding stack or claims full-stack
+coverage for that event. The status explicitly applies to object identity;
+release-stack availability and error histogram are separate. Allocation-side
+complete-call requirements, dropped-event rejection and ownership validation
+are unchanged. Allocator/network stack maps use 2048 fixed slots (1 MiB value
+payload at depth 64), rather than 256; this reduces but cannot eliminate hash
+collisions. Export reads the actual bounded map capacity. Runtime cost and
+coverage of this revision still need fresh verification.
