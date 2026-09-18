@@ -57,13 +57,48 @@ evidence. Call elapsed time includes observation and preemption; it is not
 atomic cycles or cache-line contention. Stages within a call are not summed
 as independent call costs, and sampled counts are not scaled to a total.
 
-X2 is INCOMPLETE: ordinary memcg bridge, selected-ancestor bounded aggregate,
+X2 is INCOMPLETE: selected-ancestor bounded aggregate,
 native lifetime/address reuse, no-shared-counter CPU competition, high-rate
 source audit and total cost remain open. SPE/PMU cache-line proof requires
 separate supported hardware. X1 rwsem/recall/cost gaps remain open as well.
 X3--X7 have no runtime acceptance from this cohort.
 
-The ordinary bridge added after this cohort runs mmap/touch/munmap in two
-containers with default shift=6, fixed OFF/counter order, no fixture ioctl,
-and per-container resource snapshots. It must be tested separately; its
-operation count is not ground truth for the number of native counter calls.
+Ordinary memory bridge
+----------------------
+
+Source 8f9540252 runs mmap/touch/munmap in two containers with default shift=6,
+fixed OFF/counter order, no fixture ioctl, and per-container resource
+snapshots. Each actor has 16 operations, touching 8MiB each, with a 2ms gap.
+The memory limit is 64MiB per root. This is not a saturation benchmark.
+
+Evidence directory on 14::
+
+  /root/cis-20260916-232524/evidence/x2-memcg-runtime-20260918-1
+
+Serial x2-memcg-20260918-230703.log passes counter_mem_check.py's independent
+replay: six OFF/counter states, 192/192 completed memory operations, three
+clean capture sessions. The native stacks include try_charge_memcg and
+uncharge_batch under real anonymous allocation/unmap, plus FD accounting
+outside the operation boundary. The latter is retained but is not passed
+off as memory-workload charge attribution.
+
+There is exactly one selected complete native memory-counter call per
+actor per capture in this workload. THP appears in the actual allocation
+stack. This is enough to establish the bridge, not to estimate frequency,
+contention strength or per-operation total counter cost. The business
+operation count is not counter-event ground truth, so recall is UNAVAILABLE.
+Same-address candidates still have unknown native lifetime.
+
+Combined CAPTURING process CPU is 8.51601--9.55027ms, maximum combined process
+RSS 32133120 bytes. The recorded paired whole-loop rates change by +0.61%
+to +2.62%; operation medians and CPU also vary. These short n=3 measurements
+with pacing and warm-state variation do not establish zero perturbation or
+performance acceptance. All 16 operation latencies per actor are retained;
+they are not a reliable response-P99 estimate. proc/stat snapshots retain
+VM-wide CPU, not identified background observer cost. Kernel/BPF memory
+and asynchronous CPU remain incomplete.
+
+Local exported archives (SHA256)::
+
+  fixture: 3e5a4e27607cbfd8cfe6ccf4eb2659351125ca3520ff1b06eea8df081e8a15fc
+  bridge: fc2b7ab5bfb80bd23549a5485f934b2f26d42cf70d281bb05b5828d537d7033d
