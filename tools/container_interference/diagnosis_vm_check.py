@@ -98,7 +98,7 @@ def check(text):
 if __name__=='__main__':
     p=argparse.ArgumentParser(); p.add_argument('serial',type=Path); p.add_argument('output',type=Path); a=p.parse_args()
     if a.serial.stat().st_size>128<<20: raise ValueError('serial input capacity')
-    result=check(a.serial.read_text())
+    result=check(a.serial.read_bytes().decode())
     with a.output.open('x') as f: json.dump(result,f,indent=2)
     print(json.dumps({k:result[k] for k in ('status','errors','records','automatic','manual')}))
     raise SystemExit(result['status']!='PASS')

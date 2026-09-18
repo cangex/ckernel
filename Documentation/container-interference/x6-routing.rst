@@ -72,3 +72,13 @@ The corrected harness opens pidfds for verified owned child PIDs, stops those
 children gracefully, checks real workload coverage and only publishes PASS
 after all four launchers exit normally. Its runtime result must be recorded
 separately; implementation alone is not acceptance.
+
+``x6-routing-fix1-20260919`` at bdf6b962b/kernel 1eb5bfeda passed the
+independent replay: ten records, two automatic specialists, one manual,
+the same six real periodic slots, verified full business-window coverage
+and all four graceful exits. Raw serial SHA256 (including serial CRLF):
+06aba596a2b8aa1834a611d340983b729ea9e267dbad4c9f6d5af15caa376434.
+The older CLI reader normalized CRLF before hashing; the replay API and
+corrected CLI preserve the input bytes. That earlier normalized hash is not
+an archive hash. The routing result is unchanged. No production cost claim
+or completion of other resource adapters follows from this scoped PASS.
