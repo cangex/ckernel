@@ -166,10 +166,17 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
 
+#ifdef CONFIG_CIS_OBSERVE_COUNTER
+static const struct file_operations cis_counter_audit_fops;
+#endif
+
 static int __init cis_diag_init(void)
 {
 	debugfs_create_file("cis_recursion", 0400, NULL, NULL, &cis_diag_fops);
 	debugfs_create_file("cis_sources", 0400, NULL, NULL, &cis_sources_fops);
+#ifdef CONFIG_CIS_OBSERVE_COUNTER
+	debugfs_create_file("cis_counter_audit", 0400, NULL, NULL, &cis_counter_audit_fops);
+#endif
 	return 0;
 }
 late_initcall(cis_diag_init);
@@ -213,11 +220,50 @@ static unsigned int counter_shift = 6;
 module_param(counter_shift, uint, 0400);
 MODULE_PARM_DESC(counter_shift, "Sample one in 2^shift page-counter calls per CPU (clamped to 16)");
 static DEFINE_PER_CPU(unsigned long, cis_counter_calls);
+static DEFINE_PER_CPU(unsigned long, cis_counter_entries);
+static DEFINE_PER_CPU(unsigned long, cis_counter_sampled);
+static DEFINE_PER_CPU(unsigned long, cis_counter_steps);
+static DEFINE_PER_CPU(unsigned long, cis_counter_capped);
+/* Initialization only: no shared sequence update on the charge hot path. */
+static atomic64_t cis_counter_generation = ATOMIC64_INIT(0);
 
-bool cis_counter_enabled(void)
+void cis_counter_init(struct page_counter *counter)
 {
-	return trace_cis_counter_step_enabled();
+	s64 old = atomic64_read(&cis_counter_generation), next;
+
+	for (;;) {
+		if (unlikely(old == S64_MAX)) {
+			counter->cis_generation = 0;
+			return;
+		}
+		next = atomic64_cmpxchg(&cis_counter_generation, old, old + 1);
+		if (next == old) {
+			counter->cis_generation = old + 1;
+			return;
+		}
+		old = next;
+	}
 }
+EXPORT_SYMBOL_GPL(cis_counter_init);
+
+static int cis_counter_audit_show(struct seq_file *m, void *unused)
+{
+	int cpu;
+
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+	seq_printf(m, "version=1 active=%u shift=%u snapshot=non_atomic sequence=%lld counter_bytes=%zu source_counter_bytes_per_cpu=%zu\n",
+		trace_cis_counter_step_enabled(), min(counter_shift, 16U),
+		(long long)atomic64_read(&cis_counter_generation), sizeof(struct page_counter),
+		5 * sizeof(unsigned long));
+	for_each_possible_cpu(cpu)
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu steps=%lu capped=%lu\n", cpu,
+			READ_ONCE(per_cpu(cis_counter_entries, cpu)), READ_ONCE(per_cpu(cis_counter_calls, cpu)),
+			READ_ONCE(per_cpu(cis_counter_sampled, cpu)), READ_ONCE(per_cpu(cis_counter_steps, cpu)),
+			READ_ONCE(per_cpu(cis_counter_capped, cpu)));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(cis_counter_audit);
 
 void __cis_counter_step(struct cis_counter_ctx *ctx, struct page_counter *counter,
 		u32 stage, u32 depth, unsigned long pages, long usage)
@@ -225,8 +271,12 @@ void __cis_counter_step(struct cis_counter_ctx *ctx, struct page_counter *counte
 	struct cis_counter_sample sample;
 	u32 ordinal = ctx->steps++;
 
-	if (ordinal >= CIS_CC_STEPS && stage != CIS_CC_END)
+	if (ordinal >= CIS_CC_STEPS && stage != CIS_CC_END) {
+		preempt_disable();
+		this_cpu_inc(cis_counter_capped);
+		preempt_enable();
 		return;
+	}
 	preempt_disable();
 	if (this_cpu_read(cis_in_trace)) {
 		this_cpu_inc(cis_skipped);
@@ -234,9 +284,13 @@ void __cis_counter_step(struct cis_counter_ctx *ctx, struct page_counter *counte
 		return;
 	}
 	this_cpu_write(cis_in_trace, true);
+	this_cpu_inc(cis_counter_steps);
 	sample = (struct cis_counter_sample) {
 		.start_ns = ctx->start_ns, .time_ns = ktime_get_ns(),
 		.leaf = ctx->leaf, .counter = counter, .parent = counter->parent,
+		.leaf_generation = READ_ONCE(ctx->leaf->cis_generation),
+		.generation = READ_ONCE(counter->cis_generation),
+		.parent_generation = counter->parent ? READ_ONCE(counter->parent->cis_generation) : 0,
 		.pages = pages, .usage = usage, .limit = READ_ONCE(counter->max),
 		.op = ctx->op, .stage = stage, .depth = depth, .ordinal = ordinal,
 		.sample_shift = min(counter_shift, 16U),
@@ -252,16 +306,20 @@ void __cis_counter_start(struct cis_counter_ctx *ctx, struct page_counter *leaf,
 	unsigned long n;
 
 	preempt_disable();
+	this_cpu_inc(cis_counter_entries);
 	if (this_cpu_read(cis_in_trace) || in_interrupt()) {
 		this_cpu_inc(cis_skipped);
 		preempt_enable();
 		return;
 	}
 	n = this_cpu_inc_return(cis_counter_calls);
-	preempt_enable();
-	if (n & ((1UL << min(counter_shift, 16U)) - 1))
+	if (n & ((1UL << min(counter_shift, 16U)) - 1)) {
+		preempt_enable();
 		return;
+	}
+	this_cpu_inc(cis_counter_sampled);
 	*ctx = (struct cis_counter_ctx) { .start_ns = ktime_get_ns(), .leaf = leaf, .op = op };
+	preempt_enable();
 	__cis_counter_step(ctx, leaf, CIS_CC_BEGIN, 0, 0, 0);
 }
 #endif

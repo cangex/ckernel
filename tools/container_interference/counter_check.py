@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-"""Fixed VM truth checker. Truth never upgrades production E1 candidates."""
+"""Independent native-call truth. A lifetime claim must be in captured records."""
 from owner_report import fields
 
 
@@ -33,14 +33,22 @@ def check(report, logs, shared=True, failure=False, identities=None):
                 defects.append('wrong_container_identity')
             observed={s['address'] for s in c['steps'] if s['stage'] in ('usage_add','usage_sub')}
             if observed != {t['leaf'], t['parent']}: defects.append('wrong_actual_hierarchy')
+            if 'leaf_generation' in t:
+                if c.get('leaf_generation') != t['leaf_generation'] or not t['leaf_generation']:
+                    defects.append('wrong_leaf_generation')
+                for step in c['steps']:
+                    expected_generation = t['leaf_generation'] if step['address']==t['leaf'] else t['parent_generation']
+                    if step.get('object_generation') != expected_generation:
+                        defects.append('wrong_step_generation')
             if failure and c['failure_address'] != t['failed']: defects.append('wrong_failure_ancestor')
             matched += 1
     extra=[c for c in fixture_calls if not any(t['leaf']==c['leaf_address'] and c['actor'][2] & 0xffffffff == t['host_pid'] and
             t['begin_ns']<=c['interval_ns'][0]<=c['interval_ns'][1]<=t['end_ns'] for t in truth)]
     if extra: defects.append('outside_truth_call')
     fixture_addresses=fixture_leaves | {r['parent'] for r in truth}
-    candidates=[c for c in report['address_candidates'] if c['address'] in fixture_addresses and c['field']=='usage']
+    candidates=[c for c in report['address_candidates']+report.get('shared_objects',[])
+                if c['address'] in fixture_addresses and c['field']=='usage']
     if bool(candidates) != shared: defects.append('shared_private_candidate_mismatch')
     return dict(status='FAIL' if defects else 'PASS', defects=sorted(set(defects)), truth_operations=len(truth),
                 eligible_calls=eligible, matched_calls=matched, candidate_addresses=len(candidates),
-                scope='sample_shift=0 fixed-lifetime fixture; no general lifetime or cache-line contention proof')
+                scope='sample_shift=0 fixture, generations checked when supplied; no cache-line contention proof')

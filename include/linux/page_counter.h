@@ -36,7 +36,14 @@ struct page_counter {
 	unsigned long high;
 	unsigned long max;
 	struct page_counter *parent;
+#ifdef CONFIG_CIS_OBSERVE_COUNTER
+	u64 cis_generation;
+#endif
 } ____cacheline_internodealigned_in_smp;
+
+#ifdef CONFIG_CIS_OBSERVE_COUNTER
+void cis_counter_init(struct page_counter *counter);
+#endif
 
 #if BITS_PER_LONG == 32
 #define PAGE_COUNTER_MAX LONG_MAX
@@ -50,6 +57,9 @@ static inline void page_counter_init(struct page_counter *counter,
 	atomic_long_set(&counter->usage, 0);
 	counter->max = PAGE_COUNTER_MAX;
 	counter->parent = parent;
+#ifdef CONFIG_CIS_OBSERVE_COUNTER
+	cis_counter_init(counter);
+#endif
 }
 
 static inline unsigned long page_counter_read(struct page_counter *counter)

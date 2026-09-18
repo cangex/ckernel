@@ -143,6 +143,9 @@ int counter_step(struct bpf_raw_tracepoint_args *ctx)
 	e.base.cpu = bpf_get_smp_processor_id();
 	e.base.object = (u64)BPF_CORE_READ(sample, counter);
 	e.leaf = (u64)BPF_CORE_READ(sample, leaf); e.parent = (u64)BPF_CORE_READ(sample, parent);
+	e.leaf_generation = BPF_CORE_READ(sample, leaf_generation);
+	e.object_generation = BPF_CORE_READ(sample, generation);
+	e.parent_generation = BPF_CORE_READ(sample, parent_generation);
 	e.pages = BPF_CORE_READ(sample, pages); e.limit = BPF_CORE_READ(sample, limit);
 	e.usage = BPF_CORE_READ(sample, usage); e.operation = BPF_CORE_READ(sample, op);
 	e.depth = BPF_CORE_READ(sample, depth); e.ordinal = BPF_CORE_READ(sample, ordinal);

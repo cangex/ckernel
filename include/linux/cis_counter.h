@@ -16,6 +16,7 @@ struct cis_counter_ctx {
 };
 struct cis_counter_sample {
 	u64 start_ns, time_ns;
+	u64 leaf_generation, generation, parent_generation;
 	struct page_counter *leaf, *counter, *parent;
 	unsigned long pages, limit;
 	long usage;
@@ -23,7 +24,8 @@ struct cis_counter_sample {
 	unsigned long skipped;
 };
 #ifdef CONFIG_CIS_OBSERVE_COUNTER
-bool cis_counter_enabled(void);
+#include <linux/tracepoint-defs.h>
+DECLARE_TRACEPOINT(cis_counter_step);
 void __cis_counter_start(struct cis_counter_ctx *, struct page_counter *, u32);
 void __cis_counter_step(struct cis_counter_ctx *, struct page_counter *, u32, u32,
 		       unsigned long, long);
@@ -31,7 +33,7 @@ static inline void cis_counter_start(struct cis_counter_ctx *ctx,
 		struct page_counter *leaf, u32 op)
 {
 	ctx->start_ns = 0;
-	if (cis_counter_enabled())
+	if (tracepoint_enabled(cis_counter_step))
 		__cis_counter_start(ctx, leaf, op);
 }
 static inline void cis_counter_step(struct cis_counter_ctx *ctx,

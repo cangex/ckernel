@@ -41,7 +41,7 @@ COLLECTORS = {
                     maps=COMMON_MAPS + ['targets', 'stacks', 'pending'], relation='counter_updates',
                     clock='monotonic_wall_ns', contexts=['synchronous_task'],
                     object_kinds=['page_counter_usage', 'children_min_usage', 'children_low_usage'],
-                    source_filter='independent sampled calls with first 64 steps; actual traversal, no synthetic ancestor walk; object lifetime unknown'),
+                    source_filter='independent sampled calls with first 64 steps; actual traversal, no synthetic ancestor walk; protocol 2 native init generation, legacy or zero generation unknown'),
 }
 
 

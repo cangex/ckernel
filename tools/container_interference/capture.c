@@ -109,12 +109,14 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 		char d[1100];
 		r=cis_registry_lookup(ctx,e->id,e->generation);
 		if(!r) {ctx->unknown++;return;}
-		snprintf(d,sizeof(d),"protocol=1 sample_time_ns=%llu call_ns=%llu tid=%llu task_start=%llu cpu=%u leaf=0x%llx object=0x%llx parent=0x%llx operation=%u stage=%u depth=%u ordinal=%u pages=%llu usage=%lld limit_snapshot=%llu sample_shift=%u stack_id=%d",
+		snprintf(d,sizeof(d),"protocol=2 sample_time_ns=%llu call_ns=%llu tid=%llu task_start=%llu cpu=%u leaf=0x%llx object=0x%llx parent=0x%llx operation=%u stage=%u depth=%u ordinal=%u pages=%llu usage=%lld limit_snapshot=%llu sample_shift=%u stack_id=%d leaf_generation=%llu object_generation=%llu parent_generation=%llu",
 			(unsigned long long)e->time_ns,(unsigned long long)e->sequence_ns,
 			(unsigned long long)e->tid,(unsigned long long)v->task_start,e->cpu,
 			(unsigned long long)v->leaf,(unsigned long long)e->object,(unsigned long long)v->parent,
 			v->operation,v->stage,v->depth,v->ordinal,(unsigned long long)v->pages,
-			(long long)v->usage,(unsigned long long)v->limit,v->sample_shift,e->stack_id);
+			(long long)v->usage,(unsigned long long)v->limit,v->sample_shift,e->stack_id,
+			(unsigned long long)v->leaf_generation,(unsigned long long)v->object_generation,
+			(unsigned long long)v->parent_generation);
 		cis_report(ctx,"COUNTER",r,d);return;
 	}
 	if(size>=sizeof(struct cis_owner_event) && size<=sizeof(struct cis_owner_event)+7 && e->type==CIS_OWNER_EVENT) {

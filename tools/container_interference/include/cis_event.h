@@ -44,6 +44,7 @@ struct cis_attempt { __u64 start_ns, epoch, id, generation; };
 struct cis_counter_event {
 	struct cis_event base;
 	__u64 leaf, parent, task_start, pages, limit;
+	__u64 leaf_generation, object_generation, parent_generation;
 	__s64 usage;
 	__u32 operation, stage, depth, ordinal, sample_shift, reserved;
 };
