@@ -22,5 +22,6 @@
 /net_backlog_workload
 /block_workload
 /diagnosis_workload
+/joint_workload
 __pycache__/
 *.pyc
