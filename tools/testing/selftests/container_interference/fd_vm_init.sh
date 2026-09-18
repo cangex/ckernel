@@ -22,6 +22,7 @@ if ! (mkdir -p /container-root/dev &&
     poweroff -f
     exit 91
 fi
+if test -f /cis-fd-lifecycle; then export CIS_FD_SUITE=lifecycle; fi
 /usr/bin/python3 /profile/fd_vm.py
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"
