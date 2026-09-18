@@ -100,7 +100,8 @@ class ControllerTests(unittest.TestCase):
             pointer=dict(session_id='7',directory=directory,state='FAULTED')
             record=dict(session_id='7',boot_id='one',worker_pid=2147483647,
                         state='FAULTED',result=None,finalized=False,objects_absent=False,
-                        inventory=dict(maps=[3],programs=[4]))
+                        inventory=dict(maps=[3],programs=[4]),
+                        collector_bundle={'large_source_manifest':'x'*session.MAX_PACKET})
             c.global_journal.write_text(json.dumps(pointer))
             path=Path(directory)/'7.json';path.write_text(json.dumps(record))
             with patch('session.subprocess.run',return_value=Mock(returncode=1)):
@@ -113,7 +114,10 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue(result['objects_absent'] and result['finalized'])
             self.assertFalse(c.faulted)
             self.assertEqual(result['result'],'FAILED')
-            self.assertEqual(json.loads(path.read_text()),result)
+            saved=json.loads(path.read_text())
+            self.assertEqual(session.compact_record(saved),result)
+            self.assertEqual(saved['collector_bundle'],record['collector_bundle'])
+            self.assertLess(len(session.encoded(dict(ok=True,data=result))),session.MAX_PACKET)
             self.assertGreater(result['recovery_checked_ns'],0)
 
     def test_inventory_not_armed_until_durable_callback(self):

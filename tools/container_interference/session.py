@@ -696,7 +696,7 @@ class Controller:
             atomic(self.global_journal, dict(pointer, state='IDLE'))
             self.history[record['session_id']] = record
             self.faulted = False
-            return record
+            return compact_record(record)
         if op == 'cancel':
             return compact_record(self.cancel(req['session']))
         if op in ('status', 'report'):
