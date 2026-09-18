@@ -18,6 +18,9 @@ test -f "$base/container-root/workload"
 test ! -e "$base/profile/p1-admission.json"
 test "$(df -PB1 / | awk 'NR==2 {print $4}')" -gt 4294967296
 test "$(df -PB1 "$parent" | awk 'NR==2 {print $4}')" -gt 4294967296
+# The staged checkout may contain a header from an older kernel build.
+make -C "$source/tools/container_interference" VMLINUX_BTF="$btf" -B bpf/vmlinux.h
+sha256sum "$btf" "$source/tools/container_interference/bpf/vmlinux.h"
 make -C "$source/tools/container_interference" VMLINUX_BTF="$btf"
 make -C "$source/tools/container_interference" check-python
 make -C "$source/tools/testing/selftests/container_interference" LDFLAGS=-static
