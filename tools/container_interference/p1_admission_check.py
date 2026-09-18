@@ -82,6 +82,20 @@ def evaluate(source, artifacts):
         # subset into the broad P1 lifecycle/resource acceptance checks.
         from runtime_evidence import analyze as runtime_analyze
         runtime = runtime_analyze(text, source)
+        from identity_evidence import analyze as identity_analyze
+        identity = identity_analyze(extract(text), source)
+        details['identity_runtime'].setdefault('controlled_migration_evidence', []).append(
+            dict(artifact_sha256=sha, **identity))
+        if identity['status'] == 'FAIL':
+            checks['identity_runtime'] = 'FAIL'
+        from kernel_resource_audit import analyze_session
+        files = extract(text)
+        for record in found:
+            sid = str(record['session_id'])
+            streams = [body for path,body in files.items() if path.endswith('/records/'+sid+'.jsonl')]
+            audit = analyze_session(record, streams[0] if len(streams)==1 else '')
+            details['total_memory_cost'].setdefault('object_inventory_evidence', []).append(
+                dict(artifact_sha256=sha, **audit))
         for check in ('lifecycle_runtime', 'resource_failure_runtime'):
             details[check].setdefault('bounded_runtime_evidence', []).append(
                 dict(artifact_sha256=sha, **runtime))
@@ -122,8 +136,8 @@ def evaluate(source, artifacts):
         details['window_latency_contract']=dict(artifact_sha256=entry['sha256'],
              protocol=summary['cost_protocol'],results=results,
              scope='frozen engineering tail target, not a production service SLO')
-    # This first reader intentionally cannot approve resources, identity or
-    # window latency from functional markers or process RSS alone.
+    # Bounded identity/object observations do not complete the larger runtime
+    # contracts; process RSS and enumerated objects do not prove all resources.
     result = dict(schema='cis-p1-admission-v2', source=source, checks=checks,
                   phase_complete=all(x == 'PASS' for x in checks.values()),
                   evidence_index_sha256=digest(index), evidence_index=index, details=details,

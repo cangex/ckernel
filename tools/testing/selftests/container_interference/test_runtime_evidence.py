@@ -40,5 +40,17 @@ class RuntimeEvidence(unittest.TestCase):
         with self.assertRaises(ValueError):
             analyze(self.log()+'\nCIS_FILE /tmp/records/1.json\n{}',{'worker_sha256':'a'})
 
+    def test_fd_limit_needs_readback_not_only_partial_label(self):
+        rows=[]
+        for value in range(4,25):
+            rec=dict(session_id=value,nonce='fdLimit%d'%value,result='PARTIAL',objects_absent=True,
+                     receipt={'reason':'PREPARE'},source_identity={'worker_sha256':'a'})
+            rows += ['CIS_FILE /tmp/records/%d.json'%value,json.dumps(rec),
+                     'CIS_FILE /tmp/records/%d.jsonl'%value,
+                     json.dumps(dict(session_id=value,kind='fault_injection',detail='stage=fd_limit requested=%d soft=%d hard=%d'%(value,value,value)))]
+        text='\n'.join(rows+['CIS_FILE /tmp/trailer.txt','CIS_PROFILE_VM_EXIT=0'])
+        self.assertEqual(analyze(text,{'worker_sha256':'a'})['subchecks']['real_fd_exhaustion']['status'],'PASS')
+        self.assertEqual(analyze(text.replace('soft=4 ','soft=99 ',1),{'worker_sha256':'a'})['subchecks']['real_fd_exhaustion']['status'],'FAIL')
+
 
 if __name__=='__main__':unittest.main()

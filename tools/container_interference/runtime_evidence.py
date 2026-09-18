@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 """Read bounded runtime subclaims without promoting them to full acceptance."""
 import json
+import re
 from pathlib import PurePosixPath
 
 from session_check import extract
@@ -63,8 +64,18 @@ def analyze(text, source):
 
     check('boundary_failures', ['stage'+stage.replace('_','') for stage in STAGES], injected,
           'eight injected boundaries, not allocator-internal exhaustive faults')
-    check('real_fd_exhaustion', ['fdLimit%d'%i for i in range(4,25)],
-          lambda r: r.get('result') in ('PARTIAL','COMPLETE') and r.get('objects_absent') is True and bool(r.get('receipt')),
+    def fd_exhaustion(record):
+        if record.get('result') not in ('PARTIAL','COMPLETE') or record.get('objects_absent') is not True or not record.get('receipt'):
+            return False
+        streams=[body for path,body in files.items() if path.endswith('/records/'+str(record['session_id'])+'.jsonl')]
+        if len(streams)!=1:return False
+        events=[json.loads(line) for line in streams[0].splitlines() if line.startswith('{')]
+        if any(str(e.get('session_id'))!=str(record['session_id']) for e in events):return False
+        limits=[dict(re.findall(r'(\w+)=([^ ;]+)',e.get('detail',''))) for e in events if e.get('kind')=='fault_injection' and 'stage=fd_limit ' in e.get('detail','')]
+        value=record['nonce'][len('fdLimit'):]
+        return len(limits)==1 and all(limits[0].get(k)==value for k in ('requested','soft','hard'))
+
+    check('real_fd_exhaustion', ['fdLimit%d'%i for i in range(4,25)], fd_exhaustion,
           'predeclared RLIMIT_NOFILE 4..24 sweep; not all resource failures')
     return dict(schema='cis-runtime-subclaims-v1', subchecks=checks,
                 raw_clean_exit=clean_exit, full_lifecycle_complete=False,

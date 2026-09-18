@@ -72,6 +72,14 @@ int main(int argc,char **argv)
 		if(*tail || value<4 || value>24 || setrlimit(RLIMIT_NOFILE,&nofile)) {
 			err=1; reason="FD_LIMIT_INJECTION"; goto drain;
 		}
+		{
+			struct rlimit actual;
+			char detail[160];
+			if(getrlimit(RLIMIT_NOFILE,&actual)) { err=1; reason="FD_LIMIT_READBACK"; goto drain; }
+			snprintf(detail,sizeof(detail),"stage=fd_limit requested=%lu soft=%llu hard=%llu",
+				value,(unsigned long long)actual.rlim_cur,(unsigned long long)actual.rlim_max);
+			cis_report(ctx,"fault_injection",NULL,detail);
+		}
 	}
 	for(i=8;i<argc;i++) {
 		unsigned long long id,gen; int fd,n=0; char role; struct cis_root *r;

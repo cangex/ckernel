@@ -31,13 +31,20 @@ def run():
                stdout=controller_log, stderr=controller_log)
     child = None
     log = None
+    audit = (out/'identity-requests.jsonl').open('x')
+    sequence = 0
 
     def call(op, **fields):
+        nonlocal sequence
         with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as channel:
             channel.settimeout(2)
             channel.connect(endpoint)
-            channel.send(json.dumps(dict(version=1, op=op, **fields)).encode())
+            message=dict(version=1, op=op, **fields)
+            before=time.monotonic_ns()
+            channel.send(json.dumps(message).encode())
             result = json.loads(channel.recv(8192))
+            sequence += 1
+            audit.write(json.dumps(dict(sequence=sequence,before_ns=before,after_ns=time.monotonic_ns(),request=message,response=result))+'\n')
             if not result['ok']: raise RuntimeError(result['error'])
             return result['data']
 
@@ -104,6 +111,7 @@ def run():
         assert new != ta
         report = dict(dynamic_descendant=True, overlap_rejected=True, migration=counts,
                       moved_begin_ns=moved_begin, moved_end_ns=moved_end,
+                      session_id=sid, previous_b=tb, boundary_margin_ns=1_000_000, migrated_pids=pids,
                       deleted_registration_rejected=True, recreated_registration=new, previous_registration=ta,
                       limits='one controlled migration; boundary samples retained as ambiguous; not universal identity proof')
         (out/'identity-result.json').write_text(json.dumps(report))
@@ -115,6 +123,7 @@ def run():
             call('stop'); daemon.wait(timeout=10)
         if log is not None: log.close()
         controller_log.close()
+        audit.close()
 
 
 if __name__ == '__main__': run()
