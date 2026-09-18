@@ -16,6 +16,7 @@
 #include <linux/fs.h>
 
 #include <linux/atomic.h>
+#include <linux/cis_observe.h>
 
 /*
  * The default fd array needs to be at least BITS_PER_LONG,
@@ -71,6 +72,33 @@ struct files_struct {
 };
 
 struct file_operations;
+
+/* Only the selected files_struct adapter is instrumented, not all spinlocks.
+ * WAIT is an acquisition attempt. A blocker requires a closed overlapping
+ * acquire/release interval; this event alone does not prove contention. */
+static inline void cis_files_event(struct files_struct *files, unsigned int phase)
+{
+#ifdef CONFIG_CIS_OBSERVE_FD
+	cis_lock_event(&files->file_lock, CIS_FDLOCK, phase, NULL, 0);
+#endif
+}
+
+static inline void files_lock(struct files_struct *files)
+	__acquires(&files->file_lock)
+{
+	cis_files_event(files, CIS_WAIT);
+	spin_lock(&files->file_lock);
+	cis_files_event(files, CIS_ACQUIRE);
+}
+
+static inline void files_unlock(struct files_struct *files)
+	__releases(&files->file_lock)
+{
+	/* End before the actual unlock: subsequent handoff cannot overstate hold. */
+	cis_files_event(files, CIS_RELEASE_BEGIN);
+	spin_unlock(&files->file_lock);
+}
+
 struct vfsmount;
 struct dentry;
 

@@ -65,7 +65,7 @@ struct cis_recursion_sample {
 };
 struct cis_recursion_diag {
 	unsigned long sync_skipped, irq_skipped;
-	unsigned long by_phase[3][CIS_DIAG_PHASES];
+	unsigned long by_phase[CIS_RESOURCE_END][CIS_DIAG_PHASES];
 	void *outer_object;
 	unsigned int outer_kind, outer_phase;
 	struct cis_recursion_sample samples[CIS_DIAG_SAMPLES];
@@ -87,7 +87,7 @@ static void cis_note_recursion(void *object, unsigned int kind,
 		d->irq_skipped++;
 	else
 		d->sync_skipped++;
-	if (kind < 3 && phase < CIS_DIAG_PHASES)
+	if (kind < CIS_RESOURCE_END && phase < CIS_DIAG_PHASES)
 		d->by_phase[kind][phase]++;
 	s->object = (unsigned long)object;
 	s->outer_object = (unsigned long)d->outer_object;
@@ -120,7 +120,7 @@ static int cis_diag_show(struct seq_file *m, void *unused)
 		seq_printf(m, "cpu=%d skipped=%lu sync=%lu irq=%lu filtered=%lu\n", cpu,
 			   per_cpu(cis_skipped, cpu), READ_ONCE(d->sync_skipped), READ_ONCE(d->irq_skipped),
 			   per_cpu(cis_gate_filtered, cpu));
-		for (kind = 0; kind < 3; kind++)
+		for (kind = 0; kind < CIS_RESOURCE_END; kind++)
 			for (phase = 0; phase < CIS_DIAG_PHASES; phase++)
 				if (READ_ONCE(d->by_phase[kind][phase]))
 					seq_printf(m, "phase cpu=%d kind=%d phase=%d count=%lu\n",

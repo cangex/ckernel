@@ -3056,3 +3056,15 @@ config CIS_OBSERVE
 	  ownership boundaries. An administrator may enable short diagnostic
 	  windows. This does not change locking semantics or provide arbitrary
 	  spinlock ownership. Tracing entry cost must be measured separately.
+
+config CIS_OBSERVE_FD
+	bool "Observe files_struct lock acquisition and lifetime boundaries"
+	depends on CIS_OBSERVE && SMP && !PREEMPT_RT
+	default n
+	help
+	  Add disabled-by-default events around the files_struct file_lock
+	  operations, initialization and retirement in this source tree.
+	  Acquisition attempts are not measured spin cycles. Pre-window owners
+	  without observed acquisition remain unknown. Ordinary independent
+	  containers do not share this lock. This is a diagnostic adapter and
+	  does not change descriptor sharing or the locking algorithm.

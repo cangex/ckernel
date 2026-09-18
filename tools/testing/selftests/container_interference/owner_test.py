@@ -19,6 +19,24 @@ def event(t, phase, who, obj=100, epoch=10, flags=0, **extra):
 
 
 class OwnerTests(unittest.TestCase):
+    def test_unknown_kind_never_renamed_lockref(self):
+        r=[event(1,3,1,resource=99),event(2,2,2,resource=99),
+           event(3,4,1,resource=99),event(4,3,2,resource=99)]
+        result=owner.analyze(r)
+        self.assertFalse(result['edges'])
+        self.assertEqual(result['unsupported_resource_events'],4)
+
+    def test_fd_lock_same_process_not_cross_container(self):
+        r=[event(1,3,1),event(2,2,2),event(3,4,1),event(4,3,2)]
+        for row,thread in zip(r,(1,2,1,2)):
+            values=owner.fields(row['detail'])
+            values.update(resource=3,actor_id=7,actor_tid=(42<<32)|thread)
+            row['detail']=' '.join('%s=%s'%item for item in values.items())
+        edge=owner.analyze(r)['edges'][0]
+        self.assertEqual(edge['resource'],'files_struct_lock')
+        self.assertEqual(edge['relation'],'container_internal')
+        self.assertEqual(edge['process_scope'],'same_tgid')
+
     def test_distinct_profile_sessions_never_join(self):
         first=event(1,3,1); first['session_id']=1
         second=event(2,2,2); second['session_id']=2

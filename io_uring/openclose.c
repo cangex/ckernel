@@ -229,27 +229,27 @@ int io_close(struct io_kiocb *req, unsigned int issue_flags)
 		goto err;
 	}
 
-	spin_lock(&files->file_lock);
+	files_lock(files);
 	fdt = files_fdtable(files);
 	if (close->fd >= fdt->max_fds) {
-		spin_unlock(&files->file_lock);
+		files_unlock(files);
 		goto err;
 	}
 	file = rcu_dereference_protected(fdt->fd[close->fd],
 			lockdep_is_held(&files->file_lock));
 	if (!file || io_is_uring_fops(file)) {
-		spin_unlock(&files->file_lock);
+		files_unlock(files);
 		goto err;
 	}
 
 	/* if the file has a flush method, be safe and punt to async */
 	if (file->f_op->flush && (issue_flags & IO_URING_F_NONBLOCK)) {
-		spin_unlock(&files->file_lock);
+		files_unlock(files);
 		return -EAGAIN;
 	}
 
 	file = __close_fd_get_file(close->fd);
-	spin_unlock(&files->file_lock);
+	files_unlock(files);
 	if (!file)
 		goto err;
 

@@ -349,6 +349,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 	__u32 phase=ctx->args[2];
 	COUNT(s,received);
 	COUNT(s,owner_entries);
+	if (key.kind < 1 || key.kind > 3) { COUNT(s,rejected); return 0; }
 	if(s) {
 		if(!s->owner_seen) {s->owner_seen=1;s->owner_skip_base=raw_skipped;}
 		s->owner_skipped=raw_skipped-s->owner_skip_base;
@@ -357,7 +358,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 	w=bpf_map_lookup_elem(&watched,&key);
 	if(w && !live_watch(w,now)) { bpf_map_delete_elem(&watched,&key); w=NULL; }
 	if(!w && phase!=2) return 0;
-	if(w && key.kind==2 && w->events>64 && phase!=1 && phase!=8) return 0;
+	if(w && key.kind>=2 && w->events>64 && phase!=1 && phase!=8) return 0;
 	identity(task,&actor);
 	if(phase==2 && allowed(&actor,CIS_DIAG_OWNER,now)) {
 		struct cis_target *t=bpf_map_lookup_elem(&targets,&actor.id);
@@ -378,7 +379,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 	}
 	if(w) {
 		COUNT(s,owner_watch_events);
-		if(key.kind==2 && phase!=1 && phase!=8) {
+		if(key.kind>=2 && phase!=1 && phase!=8) {
 			__u64 seq;
 			/* A bounded prefix, not dropped records in an allegedly complete window. */
 			if(w->events>64) return 0;

@@ -6,6 +6,8 @@ import json
 import re
 from collections import defaultdict
 
+RESOURCES = {1: 'mutex', 2: 'lockref', 3: 'files_struct_lock'}
+
 
 def fields(detail):
     return {k: int(v, 0) for k, v in re.findall(r"(\w+)=(-?0x[0-9a-fA-F]+|-?\d+)", detail)}
@@ -21,6 +23,7 @@ def analyze(records):
         raise ValueError('owner records from distinct sessions must not be joined')
     groups = defaultdict(list)
     stacks, symbols = {}, {}
+    unsupported_resources = 0
     for r in records:
         if r.get("kind") not in ("stack", "stack_symbols"):
             continue
@@ -38,6 +41,9 @@ def analyze(records):
         if r.get("kind") != "OWNER":
             continue
         e = fields(r["detail"])
+        if e.get('resource') not in RESOURCES:
+            unsupported_resources += 1
+            continue
         loss |= bool(e.get("skipped", 0))
         groups[(e["resource"], e["object"], e["epoch"])].append(e)
     edges, incomplete, snapshots, resets, aborted = [], 0, 0, 0, 0
@@ -109,10 +115,13 @@ def analyze(records):
                     if right > left:
                         sched.append({"begin_ns": left, "end_ns": right, "ns": right-left,
                                       "reason": "preempted" if flags & 1 else "sleeping" if flags & 2 else "runnable_deschedule"})
-                edges.append({"resource": "mutex" if key[0] == 1 else "lockref", "object": hex(key[1]),
+                edges.append({"resource": RESOURCES[key[0]], "object": hex(key[1]),
                               "epoch": key[2], "waiter": waiter, "holder": holder,
                               "relation": "container_internal" if waiter[:2] == holder[:2] else "cross_container",
                               "relation_type": "holder_waiter", "causal": False,
+                              "process_scope": ("UNKNOWN" if not (waiter[2] >> 32) or not (holder[2] >> 32)
+                                                else "same_tgid" if (waiter[2] >> 32) == (holder[2] >> 32)
+                                                else "different_tgid"),
                               "attempt_ns": attempt, "outcome": outcome, "result": result,
                               "begin_ns": lo, "end_ns": hi, "overlap_ns": hi-lo,
                               "wait_begin_ns": begin, "wait_end_ns": end, "stack_id": stack,
@@ -126,7 +135,8 @@ def analyze(records):
             "aborted_attempts": aborted, "legacy_protocol": legacy,
             "bounded_prefix_limits": sum(e["phase"]==11 for events in groups.values() for e in events),
             "lifecycle_boundaries": resets, "loss_or_recursion_gap": loss,
-            "scope": "explicit non-RT mutex / lockref fallback observations only; escape and missing intervals unknown"}
+            "unsupported_resource_events": unsupported_resources,
+            "scope": "explicit non-RT mutex, lockref fallback and configured files_struct adapter; missing intervals unknown"}
 
 
 def read_records(path):

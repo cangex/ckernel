@@ -4,7 +4,8 @@
 #include <linux/types.h>
 struct mutex;
 struct task_struct;
-enum cis_resource { CIS_MUTEX = 1, CIS_LOCKREF = 2 };
+enum cis_resource { CIS_MUTEX = 1, CIS_LOCKREF = 2, CIS_FDLOCK = 3,
+	CIS_RESOURCE_END };
 enum cis_phase { CIS_RESET = 1, CIS_WAIT, CIS_ACQUIRE,
 	CIS_RELEASE_BEGIN, CIS_RELEASE_END, CIS_SNAPSHOT,
 	CIS_ESCAPE, CIS_RETIRE,

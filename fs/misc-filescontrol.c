@@ -36,10 +36,10 @@ void misc_fd_remove(struct files_struct *files)
 	if (files == &init_files)
 		return;
 
-	spin_lock(&files->file_lock);
+	files_lock(files);
 	put_misc_cg(files->misc_cg);
 	files->misc_cg = NULL;
-	spin_unlock(&files->file_lock);
+	files_unlock(files);
 }
 
 int misc_fd_dup_fds(struct files_struct *newf)
@@ -49,9 +49,9 @@ int misc_fd_dup_fds(struct files_struct *newf)
 	if (newf == &init_files)
 		return 0;
 
-	spin_lock(&newf->file_lock);
+	files_lock(newf);
 	err = misc_fd_alloc_fd(newf, file_cg_count_fds(newf));
-	spin_unlock(&newf->file_lock);
+	files_unlock(newf);
 	return err;
 }
 

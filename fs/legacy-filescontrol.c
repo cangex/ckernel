@@ -123,7 +123,7 @@ static int files_cgroup_can_attach(struct cgroup_taskset *tset)
 	from_css = &files_cgroup_from_files(files)->css;
 	from_res = css_res_open_handles(from_css);
 
-	spin_lock(&files->file_lock);
+	files_lock(files);
 	num_files = file_cg_count_fds(files);
 	page_counter_uncharge(from_res, num_files);
 
@@ -137,7 +137,7 @@ static int files_cgroup_can_attach(struct cgroup_taskset *tset)
 		task->files->files_cgroup = css_fcg(to_css);
 		can_attach = true;
 	}
-	spin_unlock(&files->file_lock);
+	files_unlock(files);
 	task_unlock(task);
 	return can_attach ? 0 : -ENOSPC;
 }
@@ -199,9 +199,9 @@ int files_cgroup_dup_fds(struct files_struct *newf)
 
 	if (!files_cgroup_enabled())
 		return 0;
-	spin_lock(&newf->file_lock);
+	files_lock(newf);
 	err = files_cgroup_alloc_fd(newf, file_cg_count_fds(newf));
-	spin_unlock(&newf->file_lock);
+	files_unlock(newf);
 	return err;
 }
 
@@ -327,9 +327,9 @@ void files_cgroup_remove(struct files_struct *files)
 		return;
 
 	task_lock(tsk);
-	spin_lock(&files->file_lock);
+	files_lock(files);
 	fcg = files_cgroup_from_files(files);
 	css_put(&fcg->css);
-	spin_unlock(&files->file_lock);
+	files_unlock(files);
 	task_unlock(tsk);
 }
