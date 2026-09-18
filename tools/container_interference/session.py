@@ -43,6 +43,7 @@ from process_budget import ProcessBudget
 from child_usage import ChildProcesses, reaped_cpu_ns as reaped_child_cpu_ns
 from schedule import Schedule
 import survey
+import prototype_admission
 
 
 def now():
@@ -74,6 +75,21 @@ def host_admin(pid=None):
     pid = pid or os.getpid()
     return (os.stat('/proc/%d/ns/user' % pid).st_ino == os.stat('/proc/1/ns/user').st_ino
             and os.stat('/proc/%d/ns/cgroup' % pid).st_ino == os.stat('/proc/1/ns/cgroup').st_ino)
+
+
+def source_manifest(args, boot):
+    return {'protocol': VERSION, 'boot_id': boot,
+            'controller_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            'worker_sha256': hashlib.sha256(Path(args.worker).read_bytes()).hexdigest(),
+            'residue_sha256': hashlib.sha256(Path(args.residue).read_bytes()).hexdigest(),
+            'bpf_sha256': hashlib.sha256(Path(args.bpf).read_bytes()).hexdigest(),
+            'support_sha256': digest({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
+                for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py',
+                             'child_usage.py', 'prototype_admission.py')}),
+            'kernel_release': os.uname().release,
+            'kernel_notes_sha256': hashlib.sha256(Path('/sys/kernel/notes').read_bytes()).hexdigest(),
+            'kernel_cmdline_sha256': hashlib.sha256(Path('/proc/cmdline').read_bytes()).hexdigest(),
+            'memory_total_complete': False}
 
 
 def atomic(path, value):
@@ -171,17 +187,18 @@ class Controller:
         self.stopping = False
         self.boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
         self.serial = secrets.randbits(48)
-        self.manifest = {'protocol': VERSION, 'boot_id': self.boot,
-                         'controller_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                         'worker_sha256': hashlib.sha256(Path(args.worker).read_bytes()).hexdigest(),
-                         'residue_sha256': hashlib.sha256(Path(args.residue).read_bytes()).hexdigest(),
-                         'bpf_sha256': hashlib.sha256(Path(args.bpf).read_bytes()).hexdigest(),
-                         'support_sha256': digest({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
-                            for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py', 'child_usage.py')}),
-                         'kernel_release': os.uname().release,
-                         'kernel_notes_sha256': hashlib.sha256(Path('/sys/kernel/notes').read_bytes()).hexdigest(),
-                         'kernel_cmdline_sha256': hashlib.sha256(Path('/proc/cmdline').read_bytes()).hexdigest(),
-                         'memory_total_complete': False}
+        self.manifest = source_manifest(args, self.boot)
+        self.admission_policy = getattr(args, 'admission_policy', 'strict')
+        self.prototype_permit = None
+        self.prototype_sessions_started = 0
+        if self.admission_policy == 'prototype':
+            if not args.prototype_permit or args.p1_acceptance:
+                raise ValueError('prototype requires its own permit, not a P1 receipt')
+            self.prototype_environment = prototype_admission.environment()
+            self.prototype_permit, self.prototype_digest = prototype_admission.load(
+                args.prototype_permit, self.manifest, self.prototype_environment, now())
+        elif getattr(args, 'prototype_permit', None):
+            raise ValueError('prototype permit cannot enable strict mode')
         # Unfinished journals are not guessed safe from a recycled PID or path.
         for file in self.directory.glob('*.json'):
             if not file.stem.isdecimal():
@@ -200,6 +217,10 @@ class Controller:
         meta_file = self.metadata / 'state.json'
         if meta_file.exists():
             saved = json.loads(meta_file.read_text())
+            if saved.get('boot_id') == self.boot:
+                self.prototype_sessions_started = saved.get('prototype_sessions_started', 0)
+                if type(self.prototype_sessions_started) is not int or self.prototype_sessions_started < 0:
+                    raise ValueError('invalid prototype session ledger')
             self.schedule = Schedule(saved['plan'], now) if saved.get('plan') else None
             if self.schedule and saved.get('boot_id') == self.boot:
                 self.schedule.last_admit_ns = saved.get('last_admit_ns')
@@ -229,6 +250,7 @@ class Controller:
         atomic(self.metadata/'state.json', dict(plan=self.schedule.plan if self.schedule else None,
                survey_epoch=self.survey_epoch, nonce_epoch=self.nonce_epoch,
                boot_id=self.boot, last_admit_ns=self.schedule.last_admit_ns if self.schedule else None,
+               prototype_sessions_started=getattr(self, 'prototype_sessions_started', 0),
                restart_policy='paused; explicit register and admission required'))
 
     def submit_io(self, name, function, callback):
@@ -391,6 +413,10 @@ class Controller:
                 if saved['request_hash'] != fingerprint:
                     raise ValueError('nonce reused with different request')
                 return saved
+        if getattr(self, 'admission_policy', 'strict') == 'prototype':
+            prototype_admission.admit(self.prototype_permit, self.manifest,
+                self.prototype_environment, now(), len(self.roots), self.prototype_sessions_started,
+                request.get('window_ms', WINDOW_MS))
         if self.faulted or self.active or self.admission or self.io:
             raise OSError(errno.EBUSY, 'FAULTED or active/draining session')
         self.retire_history()
@@ -415,6 +441,9 @@ class Controller:
         record = dict(self.manifest, session_id=sid, nonce=request['nonce'], request_hash=fingerprint,
                       state='PREPARE', result=None, requested_ns=now(), collector=request['collector'],
                       finalized=False,
+                      admission_policy=getattr(self, 'admission_policy', 'strict'),
+                      prototype_permit_sha256=getattr(self, 'prototype_digest', None),
+                      performance_certification='NOT_ACCEPTED',
                       window_ms=request.get('window_ms', WINDOW_MS), targets=request['targets'],
                       inventory=None, receipt=None, cancellation_requested=False,
                       nonce_epoch=request.get('nonce_epoch'), retention_managed=bool(self.schedule),
@@ -431,6 +460,8 @@ class Controller:
         record['config_hash'] = hashlib.sha256(encoded({'request': request, 'manifest': self.manifest,
                                                        'identities': record['owner_identities']})).hexdigest()
         self.history[sid] = record
+        if getattr(self, 'admission_policy', 'strict') == 'prototype':
+            self.prototype_sessions_started += 1
         # No worker exists during file I/O. Retain the host admission slot so a
         # cancellation or slow disk cannot race a second start or target removal.
         self.admission = dict(record=record, request=dict(request), roots=roots,
@@ -447,7 +478,7 @@ class Controller:
             time.sleep(.5)
         elif injection == 'admission_full':
             raise OSError(errno.ENOSPC, 'injected admission filesystem full')
-        if self.schedule:
+        if self.schedule or getattr(self, 'admission_policy', 'strict') == 'prototype':
             self.save_metadata()
         self.persist(snapshot)
         with ExitStack() as cleanup:
@@ -554,6 +585,8 @@ class Controller:
                 'register', 'unregister', 'schedule_configure', 'schedule_enable', 'survey_epoch', 'recover'):
             raise OSError(errno.EBUSY, 'drain admission and its IO before changing controller metadata')
         if op == 'register':
+            if getattr(self, 'admission_policy', 'strict') == 'prototype' and len(self.roots) >= prototype_admission.LIMITS['registered_roots']:
+                raise ValueError('prototype root capacity exhausted')
             return self.register(req['path'])
         if op == 'unregister':
             key = req['target']
@@ -583,6 +616,12 @@ class Controller:
         if op == 'schedule_enable':
             if not self.schedule or self.faulted or self.active:
                 raise OSError(errno.EBUSY, 'configure and clear faults before enabling')
+            if getattr(self, 'admission_policy', 'strict') == 'prototype':
+                prototype_admission.admit(self.prototype_permit, self.manifest,
+                    self.prototype_environment, now(), len(self.roots), self.prototype_sessions_started, self.schedule.plan['window_ms'])
+                self.schedule.enable()
+                return dict(enabled=True, admission_policy='prototype', performance_certification='NOT_ACCEPTED',
+                            prototype_permit_sha256=self.prototype_digest, next_ns=self.schedule.next_ns)
             path = getattr(self.args, 'p1_acceptance', None)
             if not path:
                 raise ValueError('P1 acceptance missing; periodic collection stays disabled')
@@ -661,6 +700,8 @@ class Controller:
                 return compact_record(record) if op == 'status' else record
             return {'state': 'FAULTED' if self.faulted else self.active['record']['state'] if self.active else
                              'PREPARE' if self.admission else 'IDLE',
+                    'admission_policy': getattr(self, 'admission_policy', 'strict'),
+                    'performance_certification': 'NOT_ACCEPTED',
                     'roots': len(self.roots), 'sessions': list(self.history), 'continuous_metrics_scans': 0,
                     'boundary_root_reads': self.boundary_reads, 'psi_triggers': 0,
                     'nonce_epoch': self.nonce_epoch, 'periodic_enabled': bool(self.schedule and self.schedule.enabled)}
@@ -895,6 +936,14 @@ class Controller:
     def periodic_tick(self):
         if not self.schedule or self.stopping:
             return
+        if getattr(self, 'admission_policy', 'strict') == 'prototype':
+            try:
+                prototype_admission.admit(self.prototype_permit, self.manifest,
+                    self.prototype_environment, now(), len(self.roots), self.prototype_sessions_started, self.schedule.plan['window_ms'])
+            except (ValueError, PermissionError) as error:
+                self.schedule.pause()
+                self.schedule.recent.append(dict(time_ns=now(), reason=str(error)))
+                return
         reason = 'faulted' if self.faulted else 'active_or_draining' if self.active or self.admission or self.io else None
         proposal = self.schedule.poll(reason)
         if proposal is None:
@@ -994,6 +1043,8 @@ def main():
     parser.add_argument('--residue', default=str(HERE/'session-residue'))
     parser.add_argument('--test-faults', action='store_true')
     parser.add_argument('--p1-acceptance', help='root-owned receipt matching current source and passed P1 checks')
+    parser.add_argument('--admission-policy', choices=('strict', 'prototype'), default='strict')
+    parser.add_argument('--prototype-permit', help='expiring disposable-VM experiment permit, never P1 acceptance')
     parser.add_argument('command', choices=('daemon', 'request'))
     parser.add_argument('json', nargs='?')
     args = parser.parse_args()

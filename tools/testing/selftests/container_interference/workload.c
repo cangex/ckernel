@@ -225,9 +225,11 @@ int main(int argc, char **argv)
     if (!strcmp(argv[1],"dentry")) return dentry_fixture(argc,argv);
     if (!strcmp(argv[1],"async-fixture")) return async_fixture(argc,argv);
     unsigned seconds = argc > 2 ? strtoul(argv[2], NULL, 10) : 2;
-    if (!seconds || seconds > 300) return 4;
+    if (!seconds || seconds > 600) return 4;
     uint64_t start = argc>3?strtoull(argv[3],NULL,10):cis_now_ns();
     uint64_t end = start + seconds * 1000000000ULL, ops = 0;
+    printf("CIS_READY mode=%s start_ns=%" PRIu64 " ready_ns=%" PRIu64 "\n",argv[1],start,cis_now_ns());
+    fflush(stdout);
     int warmed = (!strcmp(argv[1],"open-loop") ? argc>5 && !strcmp(argv[5],"warm4096") :
                   !strcmp(argv[1],"throughput") && argc>4 && !strcmp(argv[4],"warm4096"));
     if(warmed) {
