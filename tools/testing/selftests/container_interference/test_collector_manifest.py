@@ -7,6 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'container_interference'))
 import collector_manifest as cm
+import collector_audit
 import relations
 from periodic_plan import digest
 
@@ -35,13 +36,22 @@ class CollectorContract(unittest.TestCase):
 
     def test_bundle_is_content_bound(self):
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp)/'bpf.o'; p.write_bytes(b'old')
+            p = Path(tmp)/'cis.bpf.o'
+            for name in cm.COLLECTORS: cm.object_path(p, name).write_bytes(b'old')
             old = digest(cm.bundle_manifest(p))
-            p.write_bytes(b'new')
+            cm.object_path(p, 'owner').write_bytes(b'new')
             self.assertNotEqual(old, digest(cm.bundle_manifest(p)))
         cm.contract('ip')['maps'].append('wrong')
         self.assertNotIn('wrong', cm.contract('ip')['maps'])
         with self.assertRaises(ValueError): cm.contract('tcp')
+
+    def test_missing_scope_not_zero(self):
+        row = dict(collector='ip', session_id='1', inventory=self.inventory('ip'))
+        out = collector_audit.audit(row, b'')
+        self.assertEqual(out['status'], 'BLOCKED')
+        self.assertIsNone(out['counters']['terminal_scope']['unknown'])
+        self.assertIsNone(out['population_coverage'])
+        with self.assertRaises(ValueError): collector_audit.audit(row, b'{"session_id":"2"}')
 
 
 class RelationContract(unittest.TestCase):

@@ -84,7 +84,7 @@ def source_manifest(args, boot):
             'controller_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'worker_sha256': hashlib.sha256(Path(args.worker).read_bytes()).hexdigest(),
             'residue_sha256': hashlib.sha256(Path(args.residue).read_bytes()).hexdigest(),
-            'bpf_sha256': hashlib.sha256(Path(args.bpf).read_bytes()).hexdigest(),
+            'bpf_sha256': digest(bundle), 'bpf_binding': 'collector_bundle_v1',
             'support_sha256': digest({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
                 for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py',
                              'child_usage.py', 'prototype_admission.py', 'collector_manifest.py')}),
@@ -517,7 +517,7 @@ class Controller:
                 return
             parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             command = [self.args.worker, str(child.fileno()), str(output), record['session_id'], request['collector'],
-                       str(record['window_ms']), self.args.bpf,
+                       str(record['window_ms']), str(collector_manifest.object_path(self.args.bpf, request['collector'])),
                        request.get('inject', 'none') if request.get('inject', '').startswith(('fd_limit_', 'fail_')) or
                        request.get('inject') == 'after_prepare' else 'none']
             command += ['%s:%d:%d:%d' % ('t' if root['session_target'] else 'i', root['fd'],

@@ -8,7 +8,8 @@ CFLAGS += -Wall -Wextra -Werror
 LDLIBS += -lbpf -lelf -lz
 CORE = registry.c counters.c baseline.c budget.c report.c capture.c symbols.c fast.c
 HEADERS = $(wildcard include/*.h)
-all: cisd cisctl session-worker session-residue bpf/cis.bpf.o
+BPF_OBJECTS = $(addprefix bpf/,$(addsuffix .bpf.o,cis ip owner sched reclaim))
+all: cisd cisctl session-worker session-residue $(BPF_OBJECTS)
 session-residue: cleanup.c
 	$(CC) $(CFLAGS) $(LDFLAGS) cleanup.c -o $@ $(LDLIBS)
 session-worker: session_worker.c $(CORE) $(HEADERS)
@@ -20,10 +21,10 @@ cisctl: cisctl.c include/cis.h
 bpf/vmlinux.h:
 	$(BPFTOOL) btf dump file $(VMLINUX_BTF) format c > $@.tmp
 	mv $@.tmp $@
-bpf/cis.bpf.o: bpf/cis.bpf.c bpf/vmlinux.h include/cis_event.h
+bpf/%.bpf.o: bpf/%.bpf.c bpf/cis.bpf.c bpf/vmlinux.h include/cis_event.h
 	$(CLANG) -O2 -g -target bpf -D__TARGET_ARCH_arm64 -Wall -Werror -c $< -o $@
 clean:
-	rm -f cisd cisctl session-worker session-residue bpf/cis.bpf.o bpf/vmlinux.h bpf/vmlinux.h.tmp
+	rm -f cisd cisctl session-worker session-residue $(BPF_OBJECTS) bpf/vmlinux.h bpf/vmlinux.h.tmp
 check-python:
 	$(PYTHON) -m unittest discover -s ../testing/selftests/container_interference -p 'test_*.py'
 	$(PYTHON) ../testing/selftests/container_interference/owner_test.py

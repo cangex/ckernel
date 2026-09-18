@@ -4,17 +4,29 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 #include "../include/cis_event.h"
+#ifndef CIS_PROFILE
+#define CIS_PROFILE 0
+#endif
 char LICENSE[] SEC("license") = "GPL";
 struct session_window { __u64 session_id, start_ns, end_ns; };
 struct { __uint(type,BPF_MAP_TYPE_ARRAY); __uint(max_entries,1); __type(key,__u32); __type(value,struct session_window); } session_window SEC(".maps");
 #define COUNT(s, field) do { if (s) __sync_fetch_and_add(&(s)->field, 1); } while (0)
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u64); __type(value,struct cis_identity); } roots SEC(".maps");
+#if CIS_PROFILE != 1
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,2); __type(key,__u64); __type(value,struct cis_target); } targets SEC(".maps");
+#endif
 struct { __uint(type,BPF_MAP_TYPE_PERF_EVENT_ARRAY); __uint(max_entries,512); __type(key,__u32); __type(value,__u32); } events SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(key,__u32); __type(value,struct cis_bpf_stats); } stats SEC(".maps");
+#if CIS_PROFILE == 0 || CIS_PROFILE == 4
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
+#endif
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4
 struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,CIS_STACKS); __type(key,__u32); __type(value,__u64[CIS_STACK_DEPTH]); } stacks SEC(".maps");
+#endif
+#if CIS_PROFILE == 0
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_work_state); } work_items SEC(".maps");
+#endif
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,struct cis_object_key); __type(value,struct cis_owner_record); } holders SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_owner_task); } holder_tasks SEC(".maps");
@@ -28,6 +40,7 @@ static __always_inline void owner_emit(void *ctx,struct cis_owner_event *e)
 	if(bpf_perf_event_output(ctx,&events,BPF_F_CURRENT_CPU,e,sizeof(*e))) COUNT(s,lost);
 	else COUNT(s,emitted);
 }
+#endif
 
 static __always_inline struct cis_bpf_stats *statistics(void)
 {
@@ -67,6 +80,7 @@ static __always_inline int identity(struct task_struct *task,struct cis_identity
 	return 0;
 }
 
+#if CIS_PROFILE != 1
 static __always_inline int allowed(struct cis_identity *id,__u32 kind,__u64 now)
 {
 	struct cis_target *t=bpf_map_lookup_elem(&targets,&id->id);
@@ -79,6 +93,7 @@ static __always_inline int same_window(struct cis_event *e,__u32 kind,__u64 now)
 	return t && t->generation==e->generation && t->deadline_ns>now &&
 	       e->time_ns>=t->start_ns && (t->kind&kind);
 }
+#endif
 
 static __always_inline void emit(void *ctx,struct cis_event *e)
 {
@@ -87,6 +102,7 @@ static __always_inline void emit(void *ctx,struct cis_event *e)
 	else COUNT(s,emitted);
 }
 
+#if CIS_PROFILE == 0 || CIS_PROFILE == 1
 SEC("perf_event")
 int sample_ip(struct bpf_perf_event_data *ctx)
 {
@@ -107,7 +123,9 @@ int sample_ip(struct bpf_perf_event_data *ctx)
 	e.type=CIS_IP; e.cpu=bpf_get_smp_processor_id(); e.stack_id=-1;
 	emit(ctx,&e); return 0;
 }
+#endif
 
+#if CIS_PROFILE == 0 || CIS_PROFILE == 3
 SEC("raw_tp/sched_stat_wait")
 int sched_wait(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -123,7 +141,9 @@ int sched_wait(struct bpf_raw_tracepoint_args *ctx)
 	e.duration_ns=ctx->args[1]; e.cpu=bpf_get_smp_processor_id(); e.type=CIS_SCHED_WAIT; e.stack_id=-1;
 	emit(ctx,&e); return 0;
 }
+#endif
 
+#if CIS_PROFILE == 0 || CIS_PROFILE == 4
 static __always_inline int begin(void *ctx,__u64 object,__u32 type,__u32 kind,__u32 flags)
 {
 	struct cis_identity id={0};
@@ -175,10 +195,12 @@ static __always_inline int finish(void *ctx,__u64 object,__u32 type,__u32 kind,_
 	return 0;
 }
 
+#if CIS_PROFILE == 0
 SEC("raw_tp/contention_begin")
 int lock_begin(struct bpf_raw_tracepoint_args *ctx) { return begin(ctx,ctx->args[0],CIS_LOCK_WAIT,CIS_DIAG_LOCK,ctx->args[1]); }
 SEC("raw_tp/contention_end")
 int lock_end(struct bpf_raw_tracepoint_args *ctx) { return finish(ctx,ctx->args[0],CIS_LOCK_WAIT,CIS_DIAG_LOCK,ctx->args[1]); }
+#endif
 SEC("raw_tp/mm_vmscan_direct_reclaim_begin")
 int reclaim_begin(struct bpf_raw_tracepoint_args *ctx) { return begin(ctx,0,CIS_RECLAIM,CIS_DIAG_RECLAIM,0); }
 SEC("raw_tp/mm_vmscan_direct_reclaim_end")
@@ -188,7 +210,9 @@ SEC("raw_tp/mm_vmscan_memcg_reclaim_begin")
 int memcg_begin(struct bpf_raw_tracepoint_args *ctx) { return begin(ctx,0,CIS_MEMCG_RECLAIM,CIS_DIAG_RECLAIM,0); }
 SEC("raw_tp/mm_vmscan_memcg_reclaim_end")
 int memcg_end(struct bpf_raw_tracepoint_args *ctx) { return finish(ctx,0,CIS_MEMCG_RECLAIM,CIS_DIAG_RECLAIM,0); }
+#endif
 
+#if CIS_PROFILE == 0
 SEC("raw_tp/workqueue_queue_work")
 int work_queue(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -296,6 +320,8 @@ int work_cancel_end(struct pt_regs *ctx)
 	bpf_map_delete_elem(&pending,&key); return 0;
 }
 
+#endif
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2
 static __always_inline int live_watch(struct cis_watch *w,__u64 now)
 {
 	struct cis_target *t;
@@ -435,3 +461,4 @@ int owner_switch(struct bpf_raw_tracepoint_args *ctx)
 	owner_schedule(ctx,(void*)ctx->args[2],10,0);
 	return 0;
 }
+#endif

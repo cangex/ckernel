@@ -34,7 +34,7 @@ def contract(name):
     if name not in COLLECTORS:
         raise ValueError('unsupported collector')
     value = deepcopy(COLLECTORS[name])
-    value.update(schema=SCHEMA, name=name, event_abi=1, bundle='cis.bpf.o',
+    value.update(schema=SCHEMA, name=name, event_abi=1, bundle=name+'.bpf.o',
                  configuration='fixed OLK ARM64 non-RT; runtime capability check required',
                  limits=dict(window_ms=2000, targets=2, registered_roots=4,
                              entry_rate_per_s=200000, output_bytes=16 << 20,
@@ -49,8 +49,13 @@ def contract(name):
 
 def bundle_manifest(bpf_path):
     return dict(schema='cis-collector-bundle-v1',
-                objects={'cis.bpf.o': hashlib.sha256(Path(bpf_path).read_bytes()).hexdigest()},
+                objects={name+'.bpf.o': hashlib.sha256(object_path(bpf_path,name).read_bytes()).hexdigest()
+                         for name in COLLECTORS},
                 collectors={name: contract(name) for name in COLLECTORS})
+
+
+def object_path(anchor, name):
+    return Path(anchor).parent / contract(name)['bundle']
 
 
 def validate_inventory(name, inventory):

@@ -648,12 +648,26 @@ void cis_capture_stop(struct cis_context *ctx)
 			char detail[256];
 			__u64 received=0,emitted=0,rejected=0;
 			__u64 owner_entries=0,sched_entries=0,target_waits=0,watch_events=0;
+			__u64 unknown=0,overdepth=0,unmatched=0,nested=0,expired=0,irq_context=0;
 			for(i=0;i<c->possible_cpus;i++) {lost_count+=c->cpu_stats[i].lost;skipped+=c->cpu_stats[i].owner_skipped;}
 			snprintf(detail,sizeof(detail),"lost=%llu owner_skipped=%llu",(unsigned long long)lost_count,(unsigned long long)skipped);
 			cis_report(ctx,"terminal_coverage",NULL,detail);
 			for(i=0;i<c->possible_cpus;i++) {received+=c->cpu_stats[i].received;emitted+=c->cpu_stats[i].emitted;rejected+=c->cpu_stats[i].rejected;}
 			snprintf(detail,sizeof(detail),"received=%llu emitted=%llu rejected=%llu",(unsigned long long)received,(unsigned long long)emitted,(unsigned long long)rejected);
 			cis_report(ctx,"terminal_counters",NULL,detail);
+			for(i=0;i<c->possible_cpus;i++) {
+				unknown+=c->cpu_stats[i].unknown;
+				overdepth+=c->cpu_stats[i].overdepth;
+				unmatched+=c->cpu_stats[i].unmatched;
+				nested+=c->cpu_stats[i].nested;
+				expired+=c->cpu_stats[i].expired;
+				irq_context+=c->cpu_stats[i].irq_context;
+			}
+			snprintf(detail,sizeof(detail),"unknown=%llu overdepth=%llu unmatched=%llu nested=%llu expired=%llu irq_context=%llu counters_overlap=1",
+				(unsigned long long)unknown,(unsigned long long)overdepth,
+				(unsigned long long)unmatched,(unsigned long long)nested,
+				(unsigned long long)expired,(unsigned long long)irq_context);
+			cis_report(ctx,"terminal_scope",NULL,detail);
 			for(i=0;i<c->possible_cpus;i++) {
 				owner_entries+=c->cpu_stats[i].owner_entries;
 				sched_entries+=c->cpu_stats[i].owner_sched_entries;
