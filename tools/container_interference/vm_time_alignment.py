@@ -32,7 +32,7 @@ def align(samples, guest_ns, drift_ppm):
                 causal_attribution=False, limits='conditional on stated drift bound; finite transport interval is not an exact offset')
 
 
-def sched_delta(before, after):
+def sched_delta(before, after, schedstats_enabled=None):
     if before.get('pid') != after.get('pid') or before.get('start_ticks') != after.get('start_ticks'):
         raise ValueError('QEMU task identity changed')
     if before['end_ns'] > after['begin_ns']:
@@ -40,6 +40,9 @@ def sched_delta(before, after):
     values = [b-a for a,b in zip(before['schedstat'],after['schedstat'])]
     if len(values)!=3 or any(x<0 for x in values):
         raise ValueError('schedstat reset or absent')
-    return dict(runtime_ns=values[0], runnable_wait_ns=values[1], timeslices=values[2],
+    return dict(runtime_ns=values[0], runnable_wait_ns=values[1] if schedstats_enabled is True else None,
+                timeslices=values[2] if schedstats_enabled is True else None,
+                reported_wait_delta_ns=values[1], reported_timeslice_delta=values[2],
+                wait_counter_status='AVAILABLE' if schedstats_enabled is True else 'UNKNOWN',
                 encompassing_host_interval_ns=[before['begin_ns'],after['end_ns']],
-                event_timing_known=False, limits='cumulative wait is not a per-request event or a holder attribution')
+                event_timing_known=False, limits='disabled/unverified schedstats cannot prove zero wait; cumulative wait is not a per-request event or a holder attribution')

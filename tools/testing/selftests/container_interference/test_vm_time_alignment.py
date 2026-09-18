@@ -33,7 +33,9 @@ class ClockBounds(unittest.TestCase):
     def test_task_identity_and_ticks(self):
         a=dict(pid=1,start_ticks=2,begin_ns=0,end_ns=1,schedstat=[5,5,1])
         b=dict(pid=1,start_ticks=2,begin_ns=2,end_ns=3,schedstat=[15,10,3])
-        self.assertEqual(sched_delta(a,b)['runnable_wait_ns'],5)
+        self.assertEqual(sched_delta(a,b,True)['runnable_wait_ns'],5)
+        self.assertIsNone(sched_delta(a,b,False)['runnable_wait_ns'])
+        self.assertEqual(sched_delta(a,b)['wait_counter_status'],'UNKNOWN')
         with self.assertRaises(ValueError):sched_delta(a,dict(b,start_ticks=3))
 
 
