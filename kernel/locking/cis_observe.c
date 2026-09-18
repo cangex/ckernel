@@ -588,6 +588,8 @@ out:
 	preempt_enable();
 }
 EXPORT_SYMBOL_GPL(__cis_net_skb_release);
+EXPORT_TRACEPOINT_SYMBOL_GPL(cis_net_state);
+EXPORT_TRACEPOINT_SYMBOL_GPL(cis_net_skb_release);
 #endif
 
 void __cis_mutex_wait(struct mutex *lock)
