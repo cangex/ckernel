@@ -151,8 +151,11 @@ def markdown(report):
         if item['kind']=='observed_holder_waiter':
             w,h=item['waiter'],item['holder']
             relation='容器内部' if item['relation']=='container_internal' else '跨容器'
-            lines.append('- %s关系：`%s:%s` 的线程（宿主TID）`%s` 等待 `%s` 对象 `%s`；与 `%s:%s` 的线程（宿主TID）`%s` 持有该对象的区间重合 %.3f ms。'%(
-                relation,w[0],w[1],w[2]&0xffffffff,item['resource'],item['object'],h[0],h[1],h[2]&0xffffffff,item['overlap_ns']/1e6))
+            action='申请获取' if item.get('wait_metric')=='acquisition_attempt_wall_interval' else '等待'
+            lines.append('- %s关系：`%s:%s` 的线程（宿主TID）`%s` %s `%s` 对象 `%s`；与 `%s:%s` 的线程（宿主TID）`%s` 持有该对象的区间重合 %.3f ms。'%(
+                relation,w[0],w[1],w[2]&0xffffffff,action,item['resource'],item['object'],h[0],h[1],h[2]&0xffffffff,item['overlap_ns']/1e6))
+            if action=='申请获取':
+                lines.append('  这是锁获取尝试的墙钟区间，可能包含加锁前调度和观测开销，不等同于纯自旋或全部阻塞时间。')
             chain=item.get('waiter_stack_leaf_to_root')
             lines.append('  等待栈（叶到根）：`%s`。'%(' → '.join(chain) if chain else '未完成符号解析，原始地址见JSON'))
             if item['holder_offcpu']:

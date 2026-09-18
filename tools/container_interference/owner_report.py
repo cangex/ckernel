@@ -119,6 +119,7 @@ def analyze(records):
                               "epoch": key[2], "waiter": waiter, "holder": holder,
                               "relation": "container_internal" if waiter[:2] == holder[:2] else "cross_container",
                               "relation_type": "holder_waiter", "causal": False,
+                              "wait_metric": "acquisition_attempt_wall_interval" if key[0] == 3 else "observed_wait_wall_interval",
                               "process_scope": ("UNKNOWN" if not (waiter[2] >> 32) or not (holder[2] >> 32)
                                                 else "same_tgid" if (waiter[2] >> 32) == (holder[2] >> 32)
                                                 else "different_tgid"),
@@ -130,7 +131,9 @@ def analyze(records):
                               "holder_offcpu": sched,
                               "offcpu_coverage": "observed lower bound; nested held objects or map eviction may leave gaps",
                               "level": "INCOMPLETE" if loss or legacy else "E2",
-                              "meaning": "observed exclusive ownership overlaps observed wait; not total wait or CPU burn"})
+                              "meaning": ("FD acquisition attempt overlaps observed ownership; may include pre-lock scheduling and instrumentation"
+                                          if key[0] == 3 else
+                                          "observed exclusive ownership overlaps observed wait; not total wait or CPU burn")})
     return {"version": 2, "edges": edges, "incomplete_intervals": incomplete, "point_snapshots": snapshots,
             "aborted_attempts": aborted, "legacy_protocol": legacy,
             "bounded_prefix_limits": sum(e["phase"]==11 for events in groups.values() for e in events),

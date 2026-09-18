@@ -36,6 +36,7 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual(edge['resource'],'files_struct_lock')
         self.assertEqual(edge['relation'],'container_internal')
         self.assertEqual(edge['process_scope'],'same_tgid')
+        self.assertEqual(edge['wait_metric'],'acquisition_attempt_wall_interval')
 
     def test_distinct_profile_sessions_never_join(self):
         first=event(1,3,1); first['session_id']=1
