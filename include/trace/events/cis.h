@@ -13,11 +13,21 @@ void cis_fd_observe_unregister(void);
 TRACE_EVENT(cis_counter_step,
 	TP_PROTO(const struct cis_counter_sample *sample),
 	TP_ARGS(sample),
-	TP_STRUCT__entry(__field(struct cis_counter_sample, sample)),
-	TP_fast_assign(__entry->sample = *sample;),
+	TP_STRUCT__entry(
+		__field(void *, leaf)
+		__field(void *, counter)
+		__field(unsigned int, op)
+		__field(unsigned int, stage)
+		__field(unsigned int, ordinal)
+	),
+	TP_fast_assign(
+		__entry->leaf = sample->leaf; __entry->counter = sample->counter;
+		__entry->op = sample->op; __entry->stage = sample->stage;
+		__entry->ordinal = sample->ordinal;
+	),
 	TP_printk("leaf=%p counter=%p op=%u stage=%u ordinal=%u",
-		__entry->sample.leaf, __entry->sample.counter, __entry->sample.op,
-		__entry->sample.stage, __entry->sample.ordinal)
+		__entry->leaf, __entry->counter, __entry->op,
+		__entry->stage, __entry->ordinal)
 );
 TRACE_EVENT_FN(cis_lock_state,
 	TP_PROTO(void *object, unsigned int kind, unsigned int phase,
