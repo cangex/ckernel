@@ -31,6 +31,7 @@ def run(suite='basic'):
     plan=dict(schema='cis-fd-plan-v1',cases=['threads','private','native'] if suite=='basic' else ['cross','reuse'],repetitions=3,roots=2,
               window_ms=2000,operations_per_thread=16,fixture_hold_us=100,
               suite=suite,reuse_generations=4,
+              reuse_allocator='fixture helper allocates on worker CPU then restores management affinity; not a cost test',
               scope='selected FD adapter bridge; full X1 acceptance incomplete',performance_certification='NOT_ACCEPTED')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-fd.sock';log=(out/'controller.log').open('x')
@@ -56,10 +57,12 @@ def run(suite='basic'):
             time.sleep(.02 if field=='window' else .1)
         raise TimeoutError(sid)
 
-    def launch(label,index,threads,native,start):
+    def launch(label,index,threads,native,start,local=False):
         handle=(out/('%s-%d.log'%(label,index))).open('x');handles.append(handle)
+        child_env=dict(os.environ)
+        if local: child_env['CIS_FD_ALLOCATE_LOCAL']='1'
         child=subprocess.Popen(['/session_launch',str(root/('root%d'%index)),str(index*2),'/fd_workload',
-             str(threads),str(index*2),str(start),str(native)],stdout=handle,stderr=handle)
+             str(threads),str(index*2),str(start),str(native)],stdout=handle,stderr=handle,env=child_env)
         children.append(child);return child
 
     def launch_cross(label,start):
@@ -95,7 +98,7 @@ def run(suite='basic'):
                     if case=='cross': start=max(start,time.monotonic_ns()+600_000_000)
                     before=time.monotonic_ns()
                     running=([launch_cross(part,start)] if case=='cross' else
-                             [launch(part,i,1 if case=='private' else 2,int(case=='native'),start) for i in range(2)])
+                             [launch(part,i,1 if case=='private' else 2,int(case=='native'),start,local=case=='reuse') for i in range(2)])
                     for child in running: assert child.wait(timeout=10)==0
                     boundaries.append(dict(generation=generation,start_ns=before,end_ns=time.monotonic_ns()))
                     names += [part+'-%d.log'%i for i in range(2)]

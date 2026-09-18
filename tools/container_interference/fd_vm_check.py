@@ -54,6 +54,8 @@ def verify(serial, output):
                 if not previous<=group['start_ns']<group['end_ns']<=row['window']['end_ns']:
                     errors.append('group_window_'+label)
                 previous=group['end_ns']
+            if kind=='reuse' and any('helper_affinity_restored=1' not in files[prefix+name] for name in names):
+                errors.append('reuse_allocation_setup_'+label)
         if truth['status']!='PASS': errors.append('truth_'+label)
         if scope['status']!='PASS': errors.append('scope_'+label)
         cases.append(dict(label=label,session_id=sid,truth=truth,scope=scope['status']))
