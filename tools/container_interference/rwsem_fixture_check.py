@@ -23,7 +23,7 @@ def check(report, jobs, logs, identities, case, window):
     for job in jobs:
         r=truth(logs[job['log']]); args=job['arguments']; actor=identities[job['actor_index']]
         if (r['token']!=job['token'] or r['slot']!=args.get('slot',0) or r['mode']!=args.get('mode',0) or
-            r['hold_ms']!=args.get('hold',0) or bool(r['reset'])!=bool(args.get('reset',False)):
+            r['hold_ms']!=args.get('hold',0) or bool(r['reset'])!=bool(args.get('reset',False))):
             errors.append('fixture_arguments')
         r['identity']=[actor['id'],actor['generation']]
         (resets if r['reset'] else operations).append(r)
