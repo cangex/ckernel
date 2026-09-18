@@ -20,6 +20,7 @@
 #endif
 #define CREATE_TRACE_POINTS
 #include <linux/cis_observe.h>
+#undef CREATE_TRACE_POINTS
 #include <linux/cis_rwsem.h>
 
 static DEFINE_PER_CPU(bool, cis_in_trace);
