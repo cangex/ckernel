@@ -11,7 +11,9 @@ mount -t debugfs none /sys/kernel/debug
 echo '+cpu +memory +pids +cpuset' > /sys/fs/cgroup/cgroup.subtree_control
 echo 1 > /proc/sys/kernel/sched_schedstats
 touch /cis-disposable-vm
-if test -f /profile/x0-expiry; then
+if test -f /profile/x0-crashes; then
+    /usr/bin/python3 /profile/collector_control_vm.py --crashes
+elif test -f /profile/x0-expiry; then
     /usr/bin/python3 /profile/collector_control_vm.py --expiry
 elif test -f /profile/x0-fault; then
     /usr/bin/python3 /profile/collector_control_vm.py --fault

@@ -690,7 +690,8 @@ class Controller:
             checked = subprocess.run([self.args.residue] + commands, capture_output=True, timeout=1)
             if checked.returncode:
                 raise OSError(errno.EBUSY, 'object inventory absent not proved')
-            record.update(state='IDLE', result='FAILED', recovery='administrator_checked_pid_absent_and_inventory_absent')
+            record.update(state='IDLE', result='FAILED', objects_absent=True, finalized=True,
+                          recovery_checked_ns=now(), recovery='administrator_checked_pid_absent_and_inventory_absent')
             atomic(path, record)
             atomic(self.global_journal, dict(pointer, state='IDLE'))
             self.history[record['session_id']] = record

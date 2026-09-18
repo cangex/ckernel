@@ -20,7 +20,7 @@ import prototype_admission as admission
 from session import source_manifest
 
 
-def run(expiry=False, fault=False):
+def run(expiry=False, fault=False, crashes=False):
     os.umask(0o077)
     env = admission.environment(); admission.check_environment(env)
     os.sched_setaffinity(0, {7})
@@ -38,13 +38,14 @@ def run(expiry=False, fault=False):
     source = source_manifest(args, env['boot_id'])
     permit = admission.create(source, env, time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit, indent=2))
-    (out/'plan.json').write_text(json.dumps(dict(schema='cis-x0-plan-v1', expiry=expiry, fault=fault,
+    (out/'plan.json').write_text(json.dumps(dict(schema='cis-x0-plan-v1', expiry=expiry, fault=fault, crashes=crashes,
         interval_s=60, no_fake_clock=True, source=source), indent=2))
     endpoint = '/run/cis-x0.sock'
     command = ['/usr/bin/python3', '/profile/session.py', '--socket', endpoint,
                '--directory', str(out/'records'), '--worker', args.worker, '--residue', args.residue,
                '--bpf', args.bpf, '--admission-policy', 'prototype', '--prototype-permit', str(out/'permit.json'), 'daemon']
     log = (out/'controller.log').open('x'); audit = (out/'requests.jsonl').open('x')
+    signals = (out/'signals.jsonl').open('x')
     daemon = None; checks = []; children = []; sequence = 0
 
     def request(op, rejected=False, **fields):
@@ -90,9 +91,56 @@ def run(expiry=False, fault=False):
         checks.append(dict(name=name, status='PASS', time_ns=time.monotonic_ns(), **data))
         (out/'checks.json').write_text(json.dumps(checks, indent=2))
 
+    def window(sid):
+        limit=time.monotonic()+10
+        while time.monotonic()<limit:
+            row=request('status',session=sid)
+            if row.get('window') and time.monotonic_ns()>=row['window']['start_ns']: return row
+            if row.get('finalized'): raise RuntimeError(row)
+            time.sleep(.01)
+        raise TimeoutError('capture window')
+
+    def inject(pid, sig, sid, role):
+        ticks=int(Path('/proc/%d/stat'%pid).read_text().rsplit(')',1)[1].split()[19])
+        before=time.monotonic_ns();os.kill(pid,sig)
+        signals.write(json.dumps(dict(pid=pid,start_ticks=ticks,signal=int(sig),session=sid,role=role,
+                                      before_ns=before,after_ns=time.monotonic_ns()))+'\n');signals.flush()
+
     try:
         daemon = start_daemon(); targets = add_targets()
-        if expiry:
+        if crashes:
+            for name in collector_manifest.COLLECTORS:
+                sid=request('start',collector=name,targets=targets,nonce='kill'+name)['session_id']
+                row=window(sid);inject(row['worker_pid'],signal.SIGKILL,sid,'worker')
+                full=finish(sid);assert full['result']=='FAILED'
+                note('worker_kill_'+name,session=sid)
+            sid=request('start',collector='ip',targets=targets,nonce='stoppedworker')['session_id']
+            row=window(sid);inject(row['worker_pid'],signal.SIGSTOP,sid,'worker')
+            finish(sid,'FAULTED');recovered=request('recover')
+            assert recovered['objects_absent'] and recovered['result']=='FAILED'
+            note('stopped_worker_faulted_then_verified',session=sid)
+            sid=request('start',collector='ip',targets=targets,nonce='stoppedcontroller')['session_id']
+            window(sid);inject(daemon.pid,signal.SIGSTOP,sid,'controller')
+            try: time.sleep(2.5)
+            finally: inject(daemon.pid,signal.SIGCONT,sid,'controller')
+            full=finish(sid);assert full['result']=='COMPLETE'
+            note('stopped_controller_worker_deadline',session=sid)
+            for both in (False,True):
+                name='both_crash' if both else 'controller_crash'
+                sid=request('start',collector='ip',targets=targets,nonce=name)['session_id']
+                row=window(sid);worker=row['worker_pid']
+                if both: inject(worker,signal.SIGKILL,sid,'worker')
+                inject(daemon.pid,signal.SIGKILL,sid,'controller');daemon.wait(timeout=10)
+                limit=time.monotonic()+10
+                while Path('/proc/%d'%worker).exists() and time.monotonic()<limit: time.sleep(.02)
+                assert not Path('/proc/%d'%worker).exists(),'orphan not reaped; do not bypass recovery guard'
+                daemon=start_daemon();assert request('status')['state']=='FAULTED'
+                request('start',rejected=True,collector='ip',targets=targets,nonce='blocked'+name)
+                recovered=request('recover')
+                assert recovered['objects_absent'] and recovered['finalized'] and recovered['result']=='FAILED'
+                assert request('status')['prototype_sessions_started']==len(checks)+1
+                targets=add_targets();note(name+'_faulted_then_verified',session=sid)
+        elif expiry:
             request('schedule_configure', plan=dict(interval_s=60, jitter_ms=0))
             epoch = request('status')['nonce_epoch']
             # Keep paused: expiry is tested without consuming any collection slots.
@@ -158,7 +206,7 @@ def run(expiry=False, fault=False):
             assert request('status')['prototype_sessions_started'] == before_count+1
             note('real_missed_slots_not_replayed')
         result = dict(schema='cis-x0-result-v1', status='PASS', checks=checks, source=source,
-                      performance_certification='NOT_ACCEPTED', expiry_test=expiry, failed_cleanup_test=fault)
+                      performance_certification='NOT_ACCEPTED', expiry_test=expiry, failed_cleanup_test=fault, crashes_test=crashes)
         (out/'result.json').write_text(json.dumps(result, indent=2))
         print('CIS_X0_RESULT '+json.dumps(result), flush=True)
     finally:
@@ -168,10 +216,11 @@ def run(expiry=False, fault=False):
                 daemon.terminate()
                 try: daemon.wait(timeout=10)
                 except subprocess.TimeoutExpired: daemon.kill(); daemon.wait()
-        audit.close(); log.close()
+        signals.close();audit.close(); log.close()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(); group = parser.add_mutually_exclusive_group()
     group.add_argument('--expiry', action='store_true'); group.add_argument('--fault', action='store_true')
-    args = parser.parse_args(); run(args.expiry, args.fault)
+    group.add_argument('--crashes', action='store_true')
+    args = parser.parse_args(); run(args.expiry, args.fault,args.crashes)

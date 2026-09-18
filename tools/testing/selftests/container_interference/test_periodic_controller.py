@@ -92,6 +92,30 @@ class ControllerTests(unittest.TestCase):
             release.set()
             c.executor.shutdown()
 
+    def test_verified_recovery_is_final_but_not_complete_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c=self.controller();c.boot='one';c.faulted=True
+            c.args=type('Args',(),{'residue':'/test/residue'})()
+            c.global_journal=Path(directory)/'journal.json'
+            pointer=dict(session_id='7',directory=directory,state='FAULTED')
+            record=dict(session_id='7',boot_id='one',worker_pid=2147483647,
+                        state='FAULTED',result=None,finalized=False,objects_absent=False,
+                        inventory=dict(maps=[3],programs=[4]))
+            c.global_journal.write_text(json.dumps(pointer))
+            path=Path(directory)/'7.json';path.write_text(json.dumps(record))
+            with patch('session.subprocess.run',return_value=Mock(returncode=1)):
+                with self.assertRaisesRegex(OSError,'absent not proved'):
+                    c.request(dict(version=1,op='recover'))
+            self.assertEqual(json.loads(path.read_text()),record)
+            with patch('session.subprocess.run',return_value=Mock(returncode=0)) as verifier:
+                result=c.request(dict(version=1,op='recover'))
+            self.assertEqual(verifier.call_args.args[0],['/test/residue','m:3','p:4'])
+            self.assertTrue(result['objects_absent'] and result['finalized'])
+            self.assertFalse(c.faulted)
+            self.assertEqual(result['result'],'FAILED')
+            self.assertEqual(json.loads(path.read_text()),result)
+            self.assertGreater(result['recovery_checked_ns'],0)
+
     def test_inventory_not_armed_until_durable_callback(self):
         c = self.controller()
         c.active = dict(record=dict(session_id='1', state='ARMED', targets=[], window_ms=2000,

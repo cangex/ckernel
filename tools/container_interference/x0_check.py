@@ -14,6 +14,9 @@ from prototype_admission import SOURCE_KEYS
 CONTROL = {'selective_load_ip', 'selective_load_owner', 'selective_load_sched', 'selective_load_reclaim',
            'pause_drain_and_shared_manual_budget', 'restart_paused_nonce_and_budget_preserved',
            'unregister_removes_future_target', 'real_missed_slots_not_replayed'}
+CRASHES = {'worker_kill_'+name for name in ('ip','owner','sched','reclaim','sync')} | {
+    'stopped_worker_faulted_then_verified','stopped_controller_worker_deadline',
+    'controller_crash_faulted_then_verified','both_crash_faulted_then_verified'}
 
 
 def check(text):
@@ -24,7 +27,7 @@ def check(text):
     if plan.get('schema') != 'cis-x0-plan-v1' or result.get('schema') != 'cis-x0-result-v1':
         raise ValueError('unsupported X0 result protocol')
     checks = result['checks']
-    expected = ({'real_permit_expiry'} if plan['expiry'] else
+    expected = (CRASHES if plan.get('crashes') else {'real_permit_expiry'} if plan['expiry'] else
                 {'failed_verification_blocks_admission'} if plan['fault'] else CONTROL)
     defects = []
     if set(row['name'] for row in checks) != expected or len(checks) != len(expected): defects.append('incomplete_check_set')
@@ -53,7 +56,18 @@ def check(text):
         raw = files.get(prefix+'records/'+str(row['session_id'])+'.jsonl', '').encode()
         # Absence of new scope counters in older cohorts stays BLOCKED.
         scope.append(dict(session=row['session_id'], **scope_audit(row, raw)))
-    if plan['expiry']:
+    if plan.get('crashes'):
+        actions=[json.loads(line) for line in files[prefix+'signals.jsonl'].splitlines() if line.startswith('{')]
+        if len(records)!=len(CRASHES) or not actions: defects.append('crash_audit_incomplete')
+        if {row.get('role') for row in actions}!={'worker','controller'}: defects.append('crash_roles')
+        for row in records:
+            if not row.get('objects_absent') or not row.get('finalized'): defects.append('crash_cleanup_not_final')
+            expected_result='COMPLETE' if row['nonce']=='stoppedcontroller' else 'FAILED'
+            if row['result']!=expected_result: defects.append('crash_result')
+            if not any(str(a['session'])==str(row['session_id']) and a['start_ticks']>0 and
+                       a['before_ns']<=a['after_ns'] for a in actions): defects.append('missing_signal_action')
+        if len(ops('recover'))!=3 or len(ops('start',False))<2: defects.append('crash_recovery_requests')
+    elif plan['expiry']:
         if records or permit['expires_ns']-permit['created_ns'] != 1200*10**9:
             defects.append('expiry_contract')
         for operation in ('start', 'schedule_enable'):
