@@ -104,7 +104,8 @@ def analyze(record, raw):
                             for r in rows if r['object'] and (r['stage']==17 or r['stage']==20 and first['operation']==1 and last['count']==1)]))
     result=dict(schema='cis-allocator-report-v1',quality=base['quality'],scope_audit=audit(record,raw),
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),
-        analysis_source_sha256=dict(base['analysis_source_sha256'],**{'allocator_report.py':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}),
+        analysis_source_sha256=dict(base['analysis_source_sha256'],**{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            for name in ('allocator_report.py','allocator_lifetime.py')}),
         calls=calls,excluded=dict(excluded),performance_certification='NOT_ACCEPTED',
         partition_priority=PRIORITY+['unclassified'],
         limits=['phase wall time includes observer and preemption, not atomic or spin cycles',

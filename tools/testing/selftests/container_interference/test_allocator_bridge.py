@@ -26,3 +26,8 @@ class AllocatorBridge(unittest.TestCase):
         logs=self.logs(); logs[0]='\n'.join(logs[0].splitlines()[1:])
         self.assertEqual(check_work(dict(start_ns=0,end_ns=100),logs)['status'],'FAIL')
         self.assertEqual(check_work(dict(start_ns=0,end_ns=50),self.logs())['status'],'FAIL')
+
+    def test_lifetime_failure_is_not_hidden_by_good_stage_counts(self):
+        report=self.report(); report['lifetimes']={'status':'FAIL'}
+        self.assertIn('release_quality',check_work(dict(start_ns=0,end_ns=100),self.logs(),report,
+            [dict(id=1,generation=1),dict(id=2,generation=1)])['errors'])

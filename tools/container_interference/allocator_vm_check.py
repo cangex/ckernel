@@ -40,6 +40,8 @@ def check_work(window,logs,report=None,identities=None):
                 stage_kinds=sorted({p['kind'] for c in calls for p in c['phases']})))
     if report is not None and (report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS'):
         errors.append('capture_quality')
+    if report is not None and report.get('lifetimes',{}).get('status')=='FAIL':
+        errors.append('release_quality')
     return dict(status='FAIL' if errors else 'PASS',errors=errors,operations=operations,participants=participants,
                 recall=None,performance_certification='NOT_ACCEPTED')
 
