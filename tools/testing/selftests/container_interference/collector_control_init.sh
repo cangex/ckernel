@@ -27,5 +27,6 @@ find /tmp/prototype-evidence -type f | sort | while read -r f; do
     cat "$f"
     echo
 done
+echo CIS_FILES_END
 sync
 poweroff -f

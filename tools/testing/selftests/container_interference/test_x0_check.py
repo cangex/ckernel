@@ -8,9 +8,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]/'container_interferen
 from prototype_admission import SOURCE_KEYS
 from x0_check import check
 from collector_control_vm import crash_nonce
+from session_check import extract
 
 
 class X0RawCheck(unittest.TestCase):
+    def test_qmp_shutdown_not_a_signal_artifact(self):
+        for boundary in ('CIS_FILES_END','[   22.794937][  T249] reboot: Power down'):
+            text='CIS_FILE /signals.jsonl\n{"role":"worker"}\n'+boundary+'\n{"event":"SHUTDOWN"}\n'
+            self.assertEqual(json.loads(extract(text)['/signals.jsonl']),{'role':'worker'})
+
     def test_crash_requests_pass_nonce_admission(self):
         for name in ('both_crash','controller_crash','blockedboth_crash','blockedcontroller_crash'):
             self.assertTrue(crash_nonce(name).isalnum())

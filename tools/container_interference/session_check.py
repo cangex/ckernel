@@ -13,7 +13,11 @@ from session_quality import assess
 def extract(text):
     files={};current=None
     for line in text.splitlines():
-        if line.startswith('CIS_FILE '):
+        if line == 'CIS_FILES_END' or re.fullmatch(r'\[\s*[\d.]+\]\s*(?:\[\s*T\d+\]\s*)?reboot: Power down', line):
+            # Old guests lack an end sentinel. Their final poweroff line is
+            # followed by QMP JSON, not by more artifact content.
+            current=None
+        elif line.startswith('CIS_FILE '):
             current=line.split(' ',1)[1]
             if current in files:raise ValueError('duplicate raw artifact path: '+current)
             files[current]=[]
