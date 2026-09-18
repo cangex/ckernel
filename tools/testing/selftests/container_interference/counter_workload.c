@@ -15,6 +15,7 @@ int main(int argc, char **argv)
 {
 	struct cis_counter_test_request r = {0};
 	unsigned int i, count;
+	int spin_ms;
 	unsigned long long start;
 	struct timespec deadline;
 	int fd;
@@ -29,7 +30,9 @@ int main(int argc, char **argv)
 		close(fd);
 		return 0;
 	}
-	if (argc != 8) return 2;
+	if (argc != 8 && argc != 9) return 2;
+	spin_ms = argc == 9 ? atoi(argv[8]) : 0;
+	if (spin_ms < 0 || spin_ms > 3) return 2;
 	r.slot = atoi(argv[1]); r.leaf = atoi(argv[2]); r.operation = atoi(argv[3]);
 	r.pages = strtoull(argv[4], NULL, 10); count = atoi(argv[5]);
 	start = strtoull(argv[6], NULL, 10);
@@ -39,6 +42,16 @@ int main(int argc, char **argv)
 	deadline.tv_sec = start / 1000000000ULL; deadline.tv_nsec = start % 1000000000ULL;
 	while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL) == EINTR) { }
 	for (i = 0; i < count; i++) {
+		if (spin_ms) {
+			struct timespec now;
+			unsigned long long until, t;
+			if (clock_gettime(CLOCK_MONOTONIC, &now)) return 7;
+			until = now.tv_sec * 1000000000ULL + now.tv_nsec + spin_ms * 1000000ULL;
+			do {
+				if (clock_gettime(CLOCK_MONOTONIC, &now)) return 7;
+				t = now.tv_sec * 1000000000ULL + now.tv_nsec;
+			} while (t < until);
+		}
 		if (atoi(argv[7])) {
 			cpu_set_t mask;
 			CPU_ZERO(&mask); CPU_SET(i % 2 ? 2 : 3, &mask);

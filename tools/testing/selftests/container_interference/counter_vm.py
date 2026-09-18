@@ -13,8 +13,9 @@ from session import source_manifest
 from source_switches import observe
 from counter_report import analyze
 from counter_check import check
+from counter_source_audit import observe as counter_sources, delta
 
-CASES = ['sameLeaf', 'sameAncestor', 'private', 'limitFailure', 'frequency', 'migration']
+CASES = ['sameLeaf', 'sameAncestor', 'private', 'limitFailure', 'frequency', 'migration', 'reuse', 'privateCpu']
 
 
 def run():
@@ -32,7 +33,8 @@ def run():
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
     plan=dict(cases=CASES,repetitions=3,window_ms=2000,roots=2,sample_shift=0,
               operations_per_worker=16,frequency_first_worker=8,
-              scope='X2 actual updates and rollback; stable fixture only, not native object lifetime or contention cause')
+              lifetime_protocol=2,private_cpu=0,private_spin_ms=3,
+              scope='X2 actual updates, rollback and reinitialization generation; not cache-line contention cause')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-counter.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -58,14 +60,15 @@ def run():
         raise TimeoutError(sid)
 
     def launch(label,case,index,start,count=None):
-        slot=index+2 if case=='private' else 1 if case in ('sameAncestor','limitFailure') else 0
+        slot=index+2 if case in ('private','privateCpu') else 1 if case in ('sameAncestor','limitFailure') else 0
         leaf=index if case in ('sameAncestor','limitFailure') else 0
         pages=64 if case=='limitFailure' else 1
         operation=0 if case=='sameLeaf' else 1
         n=count if count is not None else 8 if case=='frequency' and index==0 else 16
         handle=(out/(label+'-%d.log'%index)).open('x'); handles.append(handle)
-        child=subprocess.Popen(['/session_launch',str(root/('root%d'%index)),str(index),'/counter_workload',
-            str(slot),str(leaf),str(operation),str(pages),str(n),str(start),str(int(case=='migration'))],stdout=handle,stderr=handle)
+        child=subprocess.Popen(['/session_launch',str(root/('root%d'%index)),str(0 if case=='privateCpu' else index),'/counter_workload',
+            str(slot),str(leaf),str(operation),str(pages),str(n),str(start),str(int(case=='migration')),
+            str(3 if case=='privateCpu' else 0)],stdout=handle,stderr=handle)
         children.append(child); return child
 
     try:
@@ -83,17 +86,27 @@ def run():
         for repeat in range(3):
             for case in CASES:
                 label=case+str(repeat)
+                source_before=counter_sources()
                 sid=request('start',collector='counter',targets=targets,nonce=label,window_ms=2000)['session_id']
                 window=wait(sid,'window')['window']; active=observe('counter')
                 start=max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000)
-                running=[launch(label,case,i,start) for i in range(2)]
-                for p in running: assert p.wait(timeout=10)==0
+                if case=='reuse':
+                    first=launch(label,case,0,start); assert first.wait(timeout=10)==0
+                    reset=subprocess.run(['/container-root/counter_workload','--reset','0'],capture_output=True,text=True,check=True)
+                    (out/(label+'-reset.log')).write_text(reset.stdout)
+                    second=launch(label,case,1,time.monotonic_ns()+100_000_000)
+                    assert second.wait(timeout=10)==0
+                else:
+                    running=[launch(label,case,i,start) for i in range(2)]
+                    for p in running: assert p.wait(timeout=10)==0
                 assert time.monotonic_ns()<window['end_ns'],'fixture outside window'
                 row=wait(sid,'finalized'); idle=observe(None)
-                (out/(label+'-boundaries.json')).write_text(json.dumps(dict(active_sources=active,idle_sources=idle,targets=targets),indent=2))
+                source_after=counter_sources(); source_delta=delta(source_before,source_after,0)
+                (out/(label+'-boundaries.json')).write_text(json.dumps(dict(active_sources=active,idle_sources=idle,targets=targets,
+                    source_before=source_before,source_after=source_after,source_delta=source_delta),indent=2))
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 report=analyze(record,(out/'records'/(sid+'.jsonl')).read_bytes())
-                truth=check(report,[(out/(label+'-%d.log'%i)).read_text() for i in range(2)],case!='private',case=='limitFailure',
+                truth=check(report,[(out/(label+'-%d.log'%i)).read_text() for i in range(2)],case not in ('private','privateCpu','reuse'),case=='limitFailure',
                             [record['root_identities'][key] for key in targets])
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 (out/(label+'-truth.json')).write_text(json.dumps(truth,indent=2))
