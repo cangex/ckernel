@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: GPL-2.0
 """Frozen bounded owner cases and six real periodic slots, no cost certification."""
 import argparse
+import fcntl
 import json
 import os
 from pathlib import Path
 import socket
+import struct
 import subprocess
 import time
 from types import SimpleNamespace
@@ -44,6 +46,8 @@ def run(specialists=False, bridge=False, costs=False):
     if costs:
         plan=dict(pairs=3,modes=['off','ip','owner','sched','reclaim'],workloads=['throughput','open-loop'],
                   seconds=4,window_ms=2000,role_rotation=True,performance_certification='NOT_ACCEPTED')
+        plan['off_boundary']='controller remains idle, no active probes; not absent-CIS baseline'
+        plan['status_poll_ms']=100
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-prototype.sock'
     command=['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -94,7 +98,7 @@ def run(specialists=False, bridge=False, costs=False):
                 results.append(dict(nonce=full['nonce'],session_id=sid,quality=report['quality'],
                                     findings=report['finding_count'],result=full['result']))
                 return full,report
-            time.sleep(.02)
+            time.sleep(.1)
         raise TimeoutError(sid)
 
     def launch(label,i,command,cpu=None):
@@ -118,7 +122,19 @@ def run(specialists=False, bridge=False, costs=False):
                     args=['dentry','0',str(start),'private' if label.endswith('Private') else 'shared']
                 elif label=='unregisteredHolder':args=['fixture','0',str(start),'shared']
                 else:args=['file-private' if label.endswith('Private') else 'throughput','3',str(start)]
-                running=[launch(label,i,args) for i in range(2)]
+                # The fixed ARM64 generic ioctl encoding is _IOW('C',10,u32).
+                # Keep the fixture trace callback absent at both source barriers.
+                if label.startswith('dentry'):
+                    with open('/dev/cis-fixture','rb',buffering=0) as fixture:
+                        fcntl.ioctl(fixture,0x4004430a,struct.pack('I',1))
+                        try:
+                            running=[launch(label,i,args) for i in range(2)]
+                            for child in running:assert child.wait(timeout=20)==0
+                        finally:
+                            fcntl.ioctl(fixture,0x4004430a,struct.pack('I',0))
+                    assert time.monotonic_ns()<start+2_000_000_000,'fixture overran capture; cannot use terminal quality'
+                else:
+                    running=[launch(label,i,args) for i in range(2)]
                 row,report=finish(sid)
                 for child in running:assert child.wait(timeout=20)==0
                 assert report['quality']['status']=='PASS',report['quality']

@@ -54,3 +54,46 @@ The debugfs v3 snapshot is used as a raw-tracepoint unregister grace-period
 barrier, not as proof of generic BPF callback recursion coverage. Its skip
 counter covers the custom owner producer only. Generic tracepoint entry or
 recursion losses not measured by these counters remain a coverage limitation.
+
+Operator workflow (disposable VM only)
+-------------------------------------
+
+Run the following in the prepared guest as its administrator. The first
+command checks the guest fingerprint; do not create its marker on the host.
+No command below changes a workload quota or performs automatic mitigation::
+
+  cd /profile
+  python3 prototype_admission.py --worker /profile/session-worker \
+    --residue /profile/session-residue --bpf /profile/cis.bpf.o \
+    --output /run/prototype-permit.json
+  python3 session.py --bpf /profile/cis.bpf.o --admission-policy prototype \
+    --prototype-permit /run/prototype-permit.json daemon
+
+From another shell, register an existing container root and keep the returned
+``id:generation``. Never substitute a PID or guess a generation::
+
+  python3 session.py request '{"version":1,"op":"register","path":"/sys/fs/cgroup/CONTAINER"}'
+  python3 session.py request '{"version":1,"op":"schedule_configure","plan":{"interval_s":60,"jitter_ms":0}}'
+  python3 session.py request '{"version":1,"op":"schedule_enable"}'
+  python3 session.py request '{"version":1,"op":"schedule_status"}'
+
+For a manual specialist, pause periodic admission, wait until status is IDLE,
+and use a fresh alphanumeric nonce. Owner, sched and reclaim share the same
+single active/cleanup slot and capacity protections. A candidate is not a
+guaranteed future observation::
+
+  python3 session.py request '{"version":1,"op":"schedule_pause"}'
+  python3 session.py request '{"version":1,"op":"status"}'
+  python3 session.py request '{"version":1,"op":"start","collector":"owner","targets":["ID:GENERATION"],"nonce":"manual1","window_ms":2000}'
+
+Wait for the returned session to finalize before interpreting its files::
+
+  python3 session.py request '{"version":1,"op":"status","session":"SESSION"}'
+  python3 explain.py --record /run/cis-profile/SESSION.json \
+    --events /run/cis-profile/SESSION.jsonl --output /run/REPORT
+  python3 session.py request '{"version":1,"op":"stop"}'
+
+Reports retain missing evidence and costs. ``diagnosis_plan.py`` supplies
+manual recommendations only. Automatic specialist routing is not enabled.
+The manual IP path also collects boundary counters; a valid throttling
+counter does not require enough IP samples to declare a valid hotspot.

@@ -33,4 +33,5 @@ struct cis_fixture_attempt {
 	__u64 object, tid, cgroup_id, begin_ns, end_ns, acquired_ns;
 };
 #define CIS_FIXTURE_ATTEMPT _IOWR('C',9,struct cis_fixture_attempt)
+#define CIS_FIXTURE_DENTRY_DELAY _IOW('C',10,__u32)
 #endif

@@ -106,6 +106,12 @@ def explain(record, raw):
                 cause='quota event observed; external container not identified'))
     if not events:
         unknown.append(dict(reason='no_raw_events'))
+    try:
+        analysis_boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    except OSError:
+        analysis_boot=None
+    explained=time.monotonic_ns()
+    same_clock=analysis_boot is not None and analysis_boot==record.get('boot_id')
     result = dict(schema='cis-explanation-v1', session_id=sid, collector=record.get('collector'),
         source=record.get('source_identity'), raw_sha256=hashlib.sha256(raw).hexdigest(),
         window=record.get('window'), admission_policy=record.get('admission_policy', 'strict'),
@@ -114,7 +120,8 @@ def explain(record, raw):
         omitted_findings=max(0,len(findings)-MAX_FINDINGS), unknown_count=len(unknown),
         raw_counts=dict(Counter(e.get('kind', 'unknown') for e in events)),
         performance_certification='NOT_ACCEPTED', total_interference_ns=None,
-        explained_at_ns=time.monotonic_ns(),
+        explained_at_ns=explained,analysis_boot_id=analysis_boot,same_clock_as_capture=same_clock,
+        explanation_lag_ns=(explained-record['window']['end_ns']) if same_clock and record.get('window') else None,
         resources=dict(worker=record.get('receipt'),process_budget=record.get('process_cpu_budget'),
                        combined_rss_peak_bytes=record.get('combined_rss_peak_bytes'),
                        kernel_inventory=[fields(e['detail']) for e in events if e.get('kind')=='kernel_memory_inventory'],

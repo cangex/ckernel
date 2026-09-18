@@ -158,6 +158,27 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 	struct mutex *lock;
 	(void)file;
 	if(!capable(CAP_SYS_ADMIN)) return -EPERM;
+	if(cmd==CIS_FIXTURE_DENTRY_DELAY) {
+		u32 enable;
+		int ret=0;
+		if(copy_from_user(&enable,(void __user*)arg,sizeof(enable))) return -EFAULT;
+		if(enable>1) return -EINVAL;
+		down_write(&fixture_lifetime);
+#ifdef CONFIG_CIS_OBSERVE
+		if(enable && !enable_dentry_delay) {
+			ret=register_trace_cis_lock_state(dentry_delay,NULL);
+			if(!ret) enable_dentry_delay=true;
+		} else if(!enable && enable_dentry_delay) {
+			unregister_trace_cis_lock_state(dentry_delay,NULL);
+			tracepoint_synchronize_unregister();
+			enable_dentry_delay=false;
+		}
+#else
+		ret=-EOPNOTSUPP;
+#endif
+		up_write(&fixture_lifetime);
+		return ret;
+	}
 	if(cmd==CIS_FIXTURE_ATTEMPT) {
 		struct cis_fixture_attempt a;
 		if(copy_from_user(&a,(void __user*)arg,sizeof(a))) return -EFAULT;
@@ -200,7 +221,13 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 		a.end_ns=ktime_get_ns();
 		return copy_to_user((void __user*)arg,&a,sizeof(a))?-EFAULT:0;
 	}
-	if(cmd==CIS_FIXTURE_DENTRY) return dentry_ioctl(arg);
+	if(cmd==CIS_FIXTURE_DENTRY) {
+		long ret;
+		down_read(&fixture_lifetime);
+		ret=dentry_ioctl(arg);
+		up_read(&fixture_lifetime);
+		return ret;
+	}
 	if(cmd==CIS_FIXTURE_STORM) {
 		struct cis_fixture_storm storm;
 		u32 i;

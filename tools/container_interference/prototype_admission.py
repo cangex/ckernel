@@ -90,3 +90,24 @@ def admit(value, manifest, env, time_ns, root_count, sessions, window_ms):
     validate(value, manifest, env, time_ns)
     if root_count > LIMITS['registered_roots'] or sessions >= LIMITS['sessions'] or window_ms > LIMITS['window_ms']:
         raise ValueError('prototype experiment capacity exhausted')
+
+
+if __name__=='__main__':
+    import argparse
+    import time
+    from session import source_manifest
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--worker',required=True)
+    parser.add_argument('--residue',required=True)
+    parser.add_argument('--bpf',required=True)
+    parser.add_argument('--output',required=True)
+    args=parser.parse_args()
+    if os.geteuid()!=0:raise PermissionError('administrator required')
+    env=environment()
+    value=create(source_manifest(args,env['boot_id']),env,time.monotonic_ns())
+    fd=os.open(args.output,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'w') as output:
+        json.dump(value,output,indent=2)
+        output.write('\n')
+        output.flush();os.fsync(output.fileno())
+    print('prototype permit created; P1 remains NOT_ACCEPTED')
