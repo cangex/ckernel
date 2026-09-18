@@ -43,4 +43,11 @@ struct cis_fixture_sync {
 	__u64 begin_ns, acquired_ns, release_begin_ns, released_ns;
 };
 #define CIS_FIXTURE_SYNC _IOWR('C',11,struct cis_fixture_sync)
+
+struct cis_fixture_fd {
+	__u32 hold_us, reserved;
+	__u64 object, files, tid, tgid, cgroup_id;
+	__u64 begin_ns, acquired_ns, release_begin_ns, released_ns;
+};
+#define CIS_FIXTURE_FD _IOWR('C',12,struct cis_fixture_fd)
 #endif

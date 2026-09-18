@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+"""FD adapter bridge: container-internal threads vs independent tables, n=3."""
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import time
+from types import SimpleNamespace
+
+import prototype_admission
+from session import source_manifest
+from explain import explain
+from fd_check import check
+from collector_audit import audit as scope_audit
+
+
+def run():
+    os.umask(0o077);os.sched_setaffinity(0,{7})
+    env=prototype_admission.environment();prototype_admission.check_environment(env)
+    out=Path('/tmp/fd-evidence');out.mkdir(mode=0o700)
+    root=Path('/sys/fs/cgroup/cis-fd');root.mkdir()
+    (root/'management').mkdir();(root/'management/cgroup.procs').write_text(str(os.getpid()))
+    (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
+    args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
+    source=source_manifest(args,env['boot_id'])
+    permit=prototype_admission.create(source,env,time.monotonic_ns())
+    (out/'permit.json').write_text(json.dumps(permit,indent=2))
+    plan=dict(schema='cis-fd-plan-v1',cases=['threads','private','native'],repetitions=3,roots=2,
+              window_ms=2000,operations_per_thread=16,fixture_hold_us=100,
+              scope='selected FD adapter bridge; full X1 acceptance incomplete',performance_certification='NOT_ACCEPTED')
+    (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    endpoint='/run/cis-fd.sock';log=(out/'controller.log').open('x')
+    daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
+        '--worker',args.worker,'--residue',args.residue,'--bpf',args.bpf,'--admission-policy','prototype',
+        '--prototype-permit',str(out/'permit.json'),'daemon'],stdout=log,stderr=log)
+    audit=(out/'requests.jsonl').open('x');children=[];handles=[];results=[]
+
+    def request(op,**fields):
+        before=time.monotonic_ns();req=dict(version=1,op=op,**fields)
+        with socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET) as sock:
+            sock.settimeout(15);sock.connect(endpoint);sock.send(json.dumps(req).encode());reply=json.loads(sock.recv(8192))
+        audit.write(json.dumps(dict(before_ns=before,after_ns=time.monotonic_ns(),request=req,response=reply))+'\n');audit.flush()
+        if not reply['ok']: raise RuntimeError(reply)
+        return reply['data']
+
+    def wait_record(sid,field):
+        limit=time.monotonic()+20
+        while time.monotonic()<limit:
+            row=request('status',session=sid)
+            if row.get(field): return row
+            if row.get('finalized'): raise RuntimeError(row)
+            time.sleep(.02 if field=='window' else .1)
+        raise TimeoutError(sid)
+
+    def launch(label,index,threads,native,start):
+        handle=(out/('%s-%d.log'%(label,index))).open('x');handles.append(handle)
+        child=subprocess.Popen(['/session_launch',str(root/('root%d'%index)),str(index*2),'/fd_workload',
+             str(threads),str(index*2),str(start),str(native)],stdout=handle,stderr=handle)
+        children.append(child);return child
+
+    try:
+        deadline=time.monotonic()+10
+        while not Path(endpoint).exists():
+            if daemon.poll() is not None or time.monotonic()>deadline: raise RuntimeError('controller readiness')
+            time.sleep(.02)
+        targets=[]
+        for i in range(2):
+            path=root/('root%d'%i);path.mkdir();targets.append(request('register',path=str(path))['target'])
+        for native in (0,1):
+            start=time.monotonic_ns()+400_000_000
+            running=[launch('off%d'%native,i,2,native,start) for i in range(2)]
+            for child in running: assert child.wait(timeout=10)==0
+        for repeat in range(3):
+            for case in plan['cases']:
+                label=case+str(repeat)
+                sid=request('start',collector='owner',targets=targets,nonce=label,window_ms=2000)['session_id']
+                window=wait_record(sid,'window')['window'];start=max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000)
+                running=[launch(label,i,1 if case=='private' else 2,int(case=='native'),start) for i in range(2)]
+                for child in running: assert child.wait(timeout=10)==0
+                assert time.monotonic_ns()<window['end_ns'],'workload overran measured window'
+                row=wait_record(sid,'finalized');assert row['state']=='IDLE' and row.get('objects_absent'),row
+                record=json.loads((out/'records'/(sid+'.json')).read_text())
+                raw=(out/'records'/(sid+'.jsonl')).read_bytes()
+                report=explain(record,raw);scope=scope_audit(record,raw)
+                truth=check(report,[(out/('%s-%d.log'%(label,i))).read_text() for i in range(2)],case)
+                (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
+                (out/(label+'-truth.json')).write_text(json.dumps(truth,indent=2))
+                (out/(label+'-scope.json')).write_text(json.dumps(scope,indent=2))
+                results.append(dict(label=label,session_id=sid,truth=truth,scope=scope['status']))
+                (out/'partial.json').write_text(json.dumps(results,indent=2))
+                assert truth['status']=='PASS' and scope['status']=='PASS',(truth,scope)
+        result=dict(status='PASS',source=source,plan=plan,cases=results,
+                    unverified=['explicit CLONE_FILES cross-container bridge','address reuse runtime','full rwsem reader set'],
+                    performance_certification='NOT_ACCEPTED')
+        (out/'result.json').write_text(json.dumps(result,indent=2));print('CIS_FD_RESULT '+json.dumps(result),flush=True)
+    finally:
+        for child in children:
+            if child.poll() is None: child.terminate()
+        for child in children:
+            try: child.wait(timeout=5)
+            except subprocess.TimeoutExpired: child.kill();child.wait()
+        for handle in handles: handle.close()
+        if daemon.poll() is None: daemon.terminate()
+        try: daemon.wait(timeout=15)
+        except subprocess.TimeoutExpired: daemon.kill();daemon.wait()
+        audit.close();log.close()
+
+
+if __name__=='__main__': run()

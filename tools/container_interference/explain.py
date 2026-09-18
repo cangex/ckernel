@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import time
 
-from owner_report import analyze as owner_analyze, fields
+from owner_report import analyze as owner_analyze, fields, RESOURCES
 from session_quality import assess
 from attribution import classify
 from diagnosis_plan import recommend
@@ -61,7 +61,7 @@ def explain(record, raw):
     known = {(v['id'], v['generation']) for v in identities.values()}
     owner = None
     if record.get('collector') == 'owner':
-        if any(fields(e['detail']).get('resource') not in (1, 2) for e in events if e.get('kind') == 'OWNER'):
+        if any(fields(e['detail']).get('resource') not in RESOURCES for e in events if e.get('kind') == 'OWNER'):
             raise ValueError('unsupported owner resource protocol')
         owner = owner_analyze(events)
         unknown_actors=sum(not all(fields(e['detail']).get(k,0) for k in ('actor_id','actor_generation'))

@@ -15,6 +15,7 @@
 #include <linux/rwsem.h>
 #include <linux/spinlock.h>
 #include <linux/file.h>
+#include <linux/fdtable.h>
 #include <linux/dcache.h>
 #include <linux/percpu.h>
 #include <linux/cis_observe.h>
@@ -40,6 +41,35 @@ static u64 storm_counter;
 static spinlock_t sync_spin[2];
 static struct rw_semaphore sync_rwsem[2];
 static u64 sync_generation[2][2]={{1,1},{1,1}};
+
+static long fd_ioctl(unsigned long arg)
+{
+#ifdef CONFIG_CIS_OBSERVE_FD
+	struct cis_fixture_fd q;
+	struct files_struct *files = current->files;
+	if (copy_from_user(&q, (void __user *)arg, sizeof(q)))
+		return -EFAULT;
+	if (!files || !q.hold_us || q.hold_us > 100 || q.reserved)
+		return -EINVAL;
+	q.object = (unsigned long)&files->file_lock;
+	q.files = (unsigned long)files;
+	q.tid = task_pid_nr(current);
+	q.tgid = task_tgid_nr(current);
+	rcu_read_lock();
+	q.cgroup_id = cgroup_id(task_dfl_cgroup(current));
+	rcu_read_unlock();
+	q.begin_ns = ktime_get_ns();
+	files_lock(files);
+	q.acquired_ns = ktime_get_ns();
+	udelay(q.hold_us);
+	q.release_begin_ns = ktime_get_ns();
+	files_unlock(files);
+	q.released_ns = ktime_get_ns();
+	return copy_to_user((void __user *)arg, &q, sizeof(q)) ? -EFAULT : 0;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
 
 static long sync_ioctl(unsigned long arg)
 {
@@ -206,6 +236,7 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 	struct mutex *lock;
 	(void)file;
 	if(!capable(CAP_SYS_ADMIN)) return -EPERM;
+	if(cmd==CIS_FIXTURE_FD) return fd_ioctl(arg);
 	if(cmd==CIS_FIXTURE_SYNC) return sync_ioctl(arg);
 	if(cmd==CIS_FIXTURE_DENTRY_DELAY) {
 		u32 enable;

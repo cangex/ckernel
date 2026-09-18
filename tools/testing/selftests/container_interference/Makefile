@@ -3,13 +3,14 @@ CC ?= cc
 CFLAGS ?= -O2 -g
 CFLAGS += -Wall -Wextra -Werror
 LDLIBS += -pthread
-TEST_GEN_PROGS := workload baseline identity fleet entry_workload entry_storm session_launch sync_workload
+TEST_GEN_PROGS := workload baseline identity fleet entry_workload entry_storm session_launch sync_workload fd_workload
 TEST_GEN_PROGS_EXTENDED := logic_test budget_test metrics_test fast_test recursion_snapshot_test
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $< common.c -o $@ $(LDLIBS)
 sync_workload: fixture/uapi.h
+fd_workload: fixture/uapi.h
 run_tests: all
 	./logic_test
 	./budget_test
