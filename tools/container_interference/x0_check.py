@@ -32,7 +32,8 @@ def check(text):
     if collectors is not None and (len(collectors)!=len(set(collectors)) or
             set(collectors) not in ({'ip','owner','sched','reclaim','sync','fd'},
                                    {'ip','owner','sched','reclaim','sync','fd','counter'},
-                                   {'ip','owner','sched','reclaim','sync','fd','counter','allocator','net'})):
+                                   {'ip','owner','sched','reclaim','sync','fd','counter','allocator','net'},
+                                   {'ip','owner','sched','reclaim','sync','fd','counter','allocator','net','block'})):
         raise ValueError('unexpected control cohort collectors')
     controls=(CONTROL-{'selective_load_'+name for name in ('ip','owner','sched','reclaim')} |
               {'selective_load_'+name for name in collectors}) if collectors is not None else CONTROL

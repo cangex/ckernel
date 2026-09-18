@@ -59,7 +59,17 @@ def run(args):
     if args.label in ('x4-net','x4-backlog'):
         command[-1] += ' cis_observe.net_shift=0'
     if args.label == 'x4-backlog': command[-1] += ' cis_net_test=backlog'
-    manifest = dict(command=command, image_sha256=sha(image), initrd_sha256=sha(initrd),
+    disks=[]
+    if args.label == 'x5-block':
+        for i in range(2):
+            path=initrd.parent/(stamp+'-disk%d.raw'%i)
+            fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR|os.O_NOFOLLOW,0o600)
+            try: os.ftruncate(fd,16<<20)
+            finally: os.close(fd)
+            disks.append(dict(path=str(path),bytes=16<<20,before_sha256=sha(path)))
+            command += ['-drive','file=%s,format=raw,if=none,id=cis%d,cache=writeback,aio=threads'%(path,i),
+                        '-device','virtio-blk-device,drive=cis%d'%i]
+    manifest = dict(command=command, disposable_disks=disks,image_sha256=sha(image), initrd_sha256=sha(initrd),
                     host_cpus=cpu_map, manager_cpu=112, host_exclusive=False, scope='isolated_KVM_only',
                     timeout_s=args.timeout, source_head=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(),
                     source_dirty=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True))
@@ -113,6 +123,6 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     for name in ('image','image-sha256','initrd','evidence'): parser.add_argument('--'+name,required=True)
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x2-counter','x2-memcg','x3-allocator','x3-fixture','x4-net','x4-backlog'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x2-counter','x2-memcg','x3-allocator','x3-fixture','x4-net','x4-backlog','x5-block'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     raise SystemExit(run(parser.parse_args()))

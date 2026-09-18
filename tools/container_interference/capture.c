@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 19
+#define CIS_DIAGNOSTIC_LINKS 26
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -106,6 +106,20 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	char detail[768];
 	const char *symbol;
 	(void)cpu;
+	if(size>=sizeof(struct cis_block_event) && size<=sizeof(struct cis_block_event)+7 && e->type==CIS_BLOCK_EVENT) {
+		struct cis_block_event *v=data;
+		char d[1400];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 sample_time_ns=%llu request=0x%llx episode_ns=%llu submitter_tid=%llu submitter_start=%llu queue=0x%llx bio=0x%llx phase=%u dev_major=%u dev_minor=%u remaining=%u completed=%u operation=%u multi_bio=%u context=%u status=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu cpu=%u stack_id=%d",
+			(unsigned long long)e->time_ns,(unsigned long long)e->object,(unsigned long long)e->sequence_ns,
+			(unsigned long long)e->tid,(unsigned long long)v->submitter_start,(unsigned long long)v->queue,
+			(unsigned long long)v->bio,v->phase,v->dev_major,v->dev_minor,v->remaining,v->completed,
+			v->operation,v->multi_bio,v->context,v->status,(unsigned long long)v->actor_tid,
+			(unsigned long long)v->actor_start,(unsigned long long)v->actor_id,(unsigned long long)v->actor_generation,
+			e->cpu,e->stack_id);
+		cis_report(ctx,"BLOCK",r,d);return;
+	}
 	if(size>=sizeof(struct cis_net_event) && size<=sizeof(struct cis_net_event)+7 && e->type==CIS_NET_EVENT) {
 		struct cis_net_event *v=data;
 		char d[1100];
@@ -241,8 +255,8 @@ static int attach(struct capture *c,const char *name,struct bpf_link **slot)
 
 static int configure_links(struct capture *c,unsigned int kinds)
 {
-	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end","owner_state","owner_switch","counter_step","alloc_step","alloc_release","net_state","net_release"};
-	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4,16,16,32,64,64,128,128};
+	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end","owner_state","owner_switch","counter_step","alloc_step","alloc_release","net_state","net_release","block_start","block_insert","block_issue","block_requeue","block_complete","block_merge","block_remap"};
+	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4,16,16,32,64,64,128,128,256,256,256,256,256,256,256};
 	_Static_assert(sizeof(names)/sizeof(names[0]) == CIS_DIAGNOSTIC_LINKS, "link names");
 	_Static_assert(sizeof(masks)/sizeof(masks[0]) == CIS_DIAGNOSTIC_LINKS, "link masks");
 	unsigned int i;

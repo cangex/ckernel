@@ -86,7 +86,15 @@ int main(void) {
     assert(cis_profile_program(9, "net_state"));
     assert(cis_profile_program(9, "net_release"));
     assert(!cis_profile_program(9, "alloc_release"));
-    assert(!cis_profile_map(10, "roots"));
+    assert(cis_profile_map(10, "roots"));
+    assert(cis_profile_map(10, "block_watched"));
+    assert(!cis_profile_map(10, "net_watched"));
+    assert(!cis_profile_map(10, "holders"));
+    assert(cis_profile_program(10, "block_start"));
+    assert(cis_profile_program(10, "block_complete"));
+    assert(cis_profile_program(10, "block_merge"));
+    assert(!cis_profile_program(10, "net_state"));
+    assert(!cis_profile_map(11, "roots"));
     return 0;
 }
 '''

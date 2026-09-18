@@ -62,3 +62,28 @@ window edges before the report can claim corresponding relationships.
 Synthetic tests are parser counterexamples, not a substitute for live I/O.
 This document freezes the first source contract; X5 is not implemented or
 accepted merely because these tracepoints exist.
+Prototype implementation
+------------------------
+
+``block.bpf.o`` opens at most 256 watches at native ``block_io_start`` for
+registered targets. It retains the submitting task identity and records the
+actual completion executor separately, never attributing interrupt work to the
+interrupted container. Seven native raw tracepoints cover insert, issue,
+requeue, partial/final data completion, merge transfer and remap. All producers
+are detached at the normal bounded session boundary, with native source-state
+and per-program recursion-miss audits before object destruction.
+
+The report groups by request address and observed submission epoch within one
+boot/session, not by a bare pointer. Completed byte counts and requeue intervals
+are checked separately. Merge, remap, additional bios and unclosed windows retain
+explicit uncertainty. No device co-residence is promoted to a holder edge.
+
+The isolated X5 cohort creates two new 16 MiB virtual-disk files with exclusive
+creation; it never opens a host block device. Two container actors execute eight
+verified direct I/O operations each at disjoint offsets. Shared/private devices,
+OFF/ON order and three rounds are frozen before runtime. Independent verification
+requires each syscall bracket to match one complete native request episode,
+correct device, submitter, operation and byte count. Parser counterexamples cover
+partial completion, requeue, merge, remap, pointer reuse and IRQ identity.
+This is a lifecycle prototype, not saturated-device causality or performance
+acceptance; pre-request tag waits and device-internal scheduling remain unknown.

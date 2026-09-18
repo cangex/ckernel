@@ -67,7 +67,7 @@ def worker_roots(registry, targets, collector):
     if len(registry) > MAX_ROOTS or any(key not in registry for key in targets):
         raise ValueError('invalid identity registry')
     keys = list(targets)
-    if collector in ('owner','fd','net'):
+    if collector in ('owner','fd','net','block'):
         keys += sorted(set(registry) - set(targets))
     return {key: dict(registry[key], session_target=key in targets) for key in keys}
 
@@ -455,7 +455,7 @@ class Controller:
                       root_identities={key: {field: self.roots[key][field] for field in ('id', 'generation')}
                                        for key in request['targets']},
                       owner_identities={key: {field: root[field] for field in ('id', 'generation', 'session_target')}
-                                        for key, root in identities.items()} if request['collector'] in ('owner','fd','net') else {},
+                                        for key, root in identities.items()} if request['collector'] in ('owner','fd','net','block') else {},
                       identity_count=len(identities), identity_protocol=2,
                       source_identity={key: self.manifest[key] for key in ('controller_sha256', 'worker_sha256',
                                        'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256',

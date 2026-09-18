@@ -53,6 +53,11 @@ COLLECTORS = {
                 contexts=['task_actor','irq_executor_unknown'],
                 object_kinds=['native_tcp_socket_cookie','observed_backlog_skb_episode'],
                 source_filter='boot-frozen native cookie selection; target opens 64 socket watches; 256 skb and service records; release entry not completion; packet origin and unobserved holders unknown'),
+    'block': dict(profile=10,programs=['block_start','block_insert','block_issue','block_requeue','block_complete','block_merge','block_remap'],
+                  maps=COMMON_MAPS+['targets','stacks','block_watched'],relation='block_request_episodes',
+                  clock='monotonic_wall_ns',contexts=['submission_task','completion_executor_separate'],
+                  object_kinds=['observed_blk_mq_request_episode','queue_and_device'],
+                  source_filter='native block_io_start opens 256 bounded watches; all registered target starts, no inference from bare request address; partial completion, merge and remap explicit; no unique blocking tenant claim'),
 }
 
 
