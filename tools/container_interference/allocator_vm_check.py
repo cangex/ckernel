@@ -10,6 +10,7 @@ from owner_report import fields
 from session_check import extract
 from source_switches import validate
 from prototype_admission import SOURCE_KEYS
+from allocator_source_audit import delta as source_delta
 
 ORDER=['off0','allocator0','allocator1','off1','off2','allocator2']
 
@@ -18,8 +19,9 @@ def check_work(window,logs,report=None,identities=None):
     errors=[]; operations=[]; participants=[]
     if len(logs)!=2: raise ValueError('two actors required')
     for index,log in enumerate(logs):
+        pids=[fields(line).get('host_pid',0) for line in log.splitlines() if line.startswith('CIS_SESSION_CONTAINER ')]
         rows=[fields(line) for line in log.splitlines() if line.startswith('CIS_ALLOC_OP ')]
-        if ([r['index'] for r in rows]!=list(range(8)) or
+        if (len(pids)!=1 or not pids[0] or [r['index'] for r in rows]!=list(range(8)) or
                 any(r['success']!=1 or r['split_regions']!=128 or
                     not window['start_ns']<=r['begin_ns']<r['end_ns']<=window['end_ns'] for r in rows)):
             errors.append('workload_'+str(index))
@@ -27,7 +29,9 @@ def check_work(window,logs,report=None,identities=None):
         if report is not None:
             identity=identities[index]
             calls=[c for c in report['calls'] if c['actor'][:2]==[identity['id'],identity['generation']]
+                   and len(pids)==1 and c['actor'][2] & 0xffffffff == pids[0]
                    and any(r['begin_ns']<=c['interval_ns'][0]<=c['interval_ns'][1]<=r['end_ns'] for r in rows)]
+            if any(c['sample_shift']!=6 for c in calls): errors.append('sampling_rule_'+str(index))
             if not calls: errors.append('no_in_operation_allocation_'+str(index))
             if calls and not any(any('mt_alloc' in f or 'mas_' in f for f in c['stack_leaf_to_root']) for c in calls):
                 errors.append('no_maple_stack_'+str(index))
@@ -69,8 +73,11 @@ def verify(serial,output):
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
         result=check_work(ev['window'],logs,report,identities)
+        audit=source_delta(ev['source_before'],ev['source_after'])
+        if label.startswith('off') and any(audit['totals'].values()): errors.append('off_not_quiet_'+label)
+        if label.startswith('allocator') and audit['totals']['sampled']==0: errors.append('source_not_sampled_'+label)
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
-        states.append(dict(label=label,result=result))
+        states.append(dict(label=label,result=result,source_audit=audit))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
         serial_sha256=hashlib.sha256(raw).hexdigest(),scope='ordinary VMA bridge only',
         x3_status='INCOMPLETE',performance_certification='NOT_ACCEPTED')

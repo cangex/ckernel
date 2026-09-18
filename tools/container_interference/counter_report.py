@@ -134,6 +134,7 @@ def analyze(record, raw):
               for (address, generation, field), actors in sorted(participants.items())
               if generation and len({a[:2] for a in actors}) > 1]
     return dict(schema='cis-counter-report-v1', quality=base['quality'], scope_audit=audit(record, raw),
+                object_scope=dict(boot_id=record.get('boot_id'),session_id=record.get('session_id')),
                 source=base['source'], raw_sha256=hashlib.sha256(raw).hexdigest(),
                 analysis_source_sha256=dict(base['analysis_source_sha256'], **{
                     'counter_report.py': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}),

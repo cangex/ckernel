@@ -119,3 +119,55 @@ The Linux fixture, ordinary bridge and control replays all PASS. The two
 verification JSON files are byte-identical to the local independent replay.
 Logs are in x2-final-audit-20260918 under the evidence root. Dedicated VMs
 have exited; root free space remains 6.2GiB. No old evidence was removed.
+
+2026-09-19 native generation cohort
+----------------------------------
+
+Kernel 6ddf08151 and tools 3529b9315 add initialization generations and a
+source-side audit. Image and all 1702 configured modules compile. Image::
+
+  b7db5df7be5b8e891a0ec1c2c0e55a5bdf2fe2c35a1153708f8d1a2c780b609a
+
+Evidence under /root/cis-20260916-232524/evidence::
+
+  x2-generation-build-20260919
+  x2-generation-runtime-20260919-2
+  x2-generation-memcg-20260919
+
+Independent replay of x2-counter-20260919-002913.log passes 24 windows:
+the original six cases plus address reinitialization and private counters
+sharing a CPU, each n=3. All 1392 eligible complete native calls match
+independent ioctl truth. Reinitialized identical addresses have distinct
+generations and no false shared-object edge. Private CPU competition does
+not fabricate a common counter. These remain update relationships, not
+proof of cache-line contention or a counter lock owner.
+
+The raw source snapshots expose 9946 entries/selected calls across the
+fixture cohort (shift=0); this includes unregistered contexts, not just
+the 1392 truth calls. Source and BPF populations must not be equated.
+Controller/worker CAPTURING CPU ranges 10.99007--23.20182ms; maximum combined
+process RSS is 36810752 bytes. No process budget violation is recorded.
+These are not complete observer CPU or kernel-memory costs.
+
+x0-control-20260919-003126.log passes 11 independent control checks and
+9 sessions. Ordinary bridge x2-memcg-20260919-003756.log passes six OFF/ON
+states and 192 successful memory operations at default shift=6. Maximum
+CAPTURING process CPU is 9.36123ms and RSS is 31150080 bytes. Per-operation
+latencies and resource snapshots remain descriptive, not a P99 claim.
+
+pahole on the old/new frozen ARM64 builds reports page_counter size 192
+bytes in both: cis_generation occupies eight formerly padding bytes at
+offset 168. This does not establish identical layout cost for all other
+configurations or eliminate initialization/time costs. Modules are rebuilt
+against the new header; no host kernel is replaced.
+
+The first launch on September 19 failed before VM boot because the host
+runner allowed only the prior day's scratch root. The failed log remains
+x2-generation-runtime-20260919; 3529b9315 adds only the exact new dedicated
+root, not unrestricted paths. The successful cohort is a new directory.
+
+Native generation and private-CPU negative coverage are now RUNTIME_PASS
+for this cohort. Selected-ancestor live aggregation, high-rate budget
+coverage, full observer costs and conditional hardware evidence remain
+open. X2 as a whole is still INCOMPLETE. X3 implementation/build work is
+separate; this cohort does not accept X3--X7.
