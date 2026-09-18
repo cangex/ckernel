@@ -3085,3 +3085,13 @@ config CIS_COUNTER_TEST
 	help
 	  Expose root-only fixed test counters through /dev/cis-counter-test.
 	  Only enable in a disposable test VM, never in production.
+
+config CIS_OBSERVE_ALLOC
+	bool "Sample selected SLUB cache allocation stages"
+	depends on CIS_OBSERVE && SLUB && !SLUB_TINY
+	default n
+	help
+	  Add an independent disabled tracepoint for bounded samples of one
+	  boot-selected cache. Stage wall time includes observation and
+	  preemption; it is not spin cycles or proof of a blocking container.
+	  Cache algorithms, GFP handling and accounting remain unchanged.

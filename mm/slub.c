@@ -41,6 +41,7 @@
 #include <kunit/test.h>
 #include <kunit/test-bug.h>
 #include <linux/sort.h>
+#include <linux/cis_alloc.h>
 
 #include <linux/debugfs.h>
 #include <trace/events/kmem.h>
@@ -222,6 +223,7 @@ struct partial_context {
 	gfp_t flags;
 	unsigned int orig_size;
 	void *object;
+	struct cis_alloc_ctx *cis;
 };
 
 static inline bool kmem_cache_debug(struct kmem_cache *s)
@@ -2289,7 +2291,9 @@ static struct slab *get_partial_node(struct kmem_cache *s,
 	if (!n || !n->nr_partial)
 		return NULL;
 
+	cis_alloc_step(pc->cis, CIS_CA_NODE_WAIT, NULL, &n->list_lock, NUMA_NO_NODE, 0);
 	spin_lock_irqsave(&n->list_lock, flags);
+	cis_alloc_step(pc->cis, CIS_CA_NODE_HELD, NULL, &n->list_lock, NUMA_NO_NODE, 0);
 	list_for_each_entry_safe(slab, slab2, &n->partial, slab_list) {
 		if (!pfmemalloc_match(slab, pc->flags))
 			continue;
@@ -2325,6 +2329,8 @@ static struct slab *get_partial_node(struct kmem_cache *s,
 
 	}
 	spin_unlock_irqrestore(&n->list_lock, flags);
+	cis_alloc_step(pc->cis, CIS_CA_NODE_DONE, partial, &n->list_lock,
+		partial ? slab_nid(partial) : NUMA_NO_NODE, !!partial);
 	return partial;
 }
 
@@ -3075,7 +3081,8 @@ static inline void *freeze_slab(struct kmem_cache *s, struct slab *slab)
  * already disabled (which is the case for bulk allocation).
  */
 static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
-			  unsigned long addr, struct kmem_cache_cpu *c, unsigned int orig_size)
+			  unsigned long addr, struct kmem_cache_cpu *c, unsigned int orig_size,
+			  struct cis_alloc_ctx *cis)
 {
 	void *freelist;
 	struct slab *slab;
@@ -3084,6 +3091,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
 	bool try_thisnode = true;
 
 	stat(s, ALLOC_SLOWPATH);
+	pc.cis = cis;
 
 reread_slab:
 
@@ -3195,6 +3203,7 @@ new_slab:
 			freelist = get_freelist(s, slab);
 			VM_BUG_ON(!freelist);
 			stat(s, CPU_PARTIAL_ALLOC);
+			cis_alloc_step(cis, CIS_CA_CPU_PARTIAL, slab, NULL, slab_nid(slab), 1);
 			goto load_freelist;
 		}
 
@@ -3224,7 +3233,10 @@ new_objects:
 		pc.flags = GFP_NOWAIT | __GFP_THISNODE;
 
 	pc.orig_size = orig_size;
+	cis_alloc_step(cis, CIS_CA_PARTIAL_BEGIN, NULL, NULL, node, 0);
 	slab = get_partial(s, node, &pc);
+	cis_alloc_step(cis, CIS_CA_PARTIAL_END, slab, NULL,
+		slab ? slab_nid(slab) : NUMA_NO_NODE, !!slab);
 	if (slab) {
 		if (kmem_cache_debug(s)) {
 			freelist = pc.object;
@@ -3244,7 +3256,10 @@ new_objects:
 	}
 
 	slub_put_cpu_ptr(s->cpu_slab);
+	cis_alloc_step(cis, CIS_CA_NEW_BEGIN, NULL, NULL, node, 0);
 	slab = new_slab(s, pc.flags, node);
+	cis_alloc_step(cis, CIS_CA_NEW_END, slab, NULL,
+		slab ? slab_nid(slab) : NUMA_NO_NODE, !!slab);
 	c = slub_get_cpu_ptr(s->cpu_slab);
 
 	if (unlikely(!slab)) {
@@ -3321,7 +3336,8 @@ retry_load_slab:
  * pointer.
  */
 static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
-			  unsigned long addr, struct kmem_cache_cpu *c, unsigned int orig_size)
+			  unsigned long addr, struct kmem_cache_cpu *c, unsigned int orig_size,
+			  struct cis_alloc_ctx *cis)
 {
 	void *p;
 
@@ -3334,7 +3350,7 @@ static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
 	c = slub_get_cpu_ptr(s->cpu_slab);
 #endif
 
-	p = ___slab_alloc(s, gfpflags, node, addr, c, orig_size);
+	p = ___slab_alloc(s, gfpflags, node, addr, c, orig_size, cis);
 #ifdef CONFIG_PREEMPT_COUNT
 	slub_put_cpu_ptr(s->cpu_slab);
 #endif
@@ -3342,7 +3358,8 @@ static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
 }
 
 static __always_inline void *__slab_alloc_node(struct kmem_cache *s,
-		gfp_t gfpflags, int node, unsigned long addr, size_t orig_size)
+		gfp_t gfpflags, int node, unsigned long addr, size_t orig_size,
+		struct cis_alloc_ctx *cis)
 {
 	struct kmem_cache_cpu *c;
 	struct slab *slab;
@@ -3387,7 +3404,9 @@ redo:
 
 	if (!USE_LOCKLESS_FAST_PATH() ||
 	    unlikely(!object || !slab || !node_match(slab, node))) {
-		object = __slab_alloc(s, gfpflags, node, addr, c, orig_size);
+		cis_alloc_step(cis, CIS_CA_SLOW_BEGIN, NULL, NULL, node, 0);
+		object = __slab_alloc(s, gfpflags, node, addr, c, orig_size, cis);
+		cis_alloc_step(cis, CIS_CA_SLOW_END, object, NULL, node, !!object);
 	} else {
 		void *next_object = get_freepointer_safe(s, object);
 
@@ -3411,13 +3430,15 @@ redo:
 		}
 		prefetch_freepointer(s, next_object);
 		stat(s, ALLOC_FASTPATH);
+		cis_alloc_step(cis, CIS_CA_CPU_FAST, object, NULL, slab_nid(slab), 1);
 	}
 
 	return object;
 }
 #else /* CONFIG_SLUB_TINY */
 static void *__slab_alloc_node(struct kmem_cache *s,
-		gfp_t gfpflags, int node, unsigned long addr, size_t orig_size)
+		gfp_t gfpflags, int node, unsigned long addr, size_t orig_size,
+		struct cis_alloc_ctx *cis)
 {
 	struct partial_context pc;
 	struct slab *slab;
@@ -3425,6 +3446,7 @@ static void *__slab_alloc_node(struct kmem_cache *s,
 
 	pc.flags = gfpflags;
 	pc.orig_size = orig_size;
+	pc.cis = cis;
 	slab = get_partial(s, node, &pc);
 
 	if (slab)
@@ -3470,16 +3492,25 @@ static __fastpath_inline void *slab_alloc_node(struct kmem_cache *s, struct list
 	void *object;
 	struct obj_cgroup *objcg = NULL;
 	bool init = false;
+	struct cis_alloc_ctx cis;
+
+	cis_alloc_start(&cis, s, s->name, gfpflags, node, 1, 1);
+	cis_alloc_step(&cis, CIS_CA_PRE_BEGIN, NULL, NULL, node, 0);
 
 	s = slab_pre_alloc_hook(s, lru, &objcg, 1, gfpflags);
-	if (!s)
+	cis_alloc_step(&cis, CIS_CA_PRE_END, NULL, NULL, node, !!s);
+	if (!s) {
+		cis_alloc_step(&cis, CIS_CA_END, NULL, NULL, node, 0);
 		return NULL;
+	}
 
 	object = kfence_alloc(s, orig_size, gfpflags);
-	if (unlikely(object))
+	if (unlikely(object)) {
+		cis_alloc_step(&cis, CIS_CA_KFENCE, object, NULL, node, 1);
 		goto out;
+	}
 
-	object = __slab_alloc_node(s, gfpflags, node, addr, orig_size);
+	object = __slab_alloc_node(s, gfpflags, node, addr, orig_size, &cis);
 
 	maybe_wipe_obj_freeptr(s, object);
 	init = slab_want_init_on_alloc(gfpflags, s);
@@ -3489,7 +3520,10 @@ out:
 	 * When init equals 'true', like for kzalloc() family, only
 	 * @orig_size bytes might be zeroed instead of s->object_size
 	 */
+	cis_alloc_step(&cis, CIS_CA_POST_BEGIN, object, NULL, node, !!object);
 	slab_post_alloc_hook(s, objcg, gfpflags, 1, &object, init, orig_size);
+	cis_alloc_step(&cis, CIS_CA_POST_END, object, NULL, node, !!object);
+	cis_alloc_step(&cis, CIS_CA_END, object, NULL, node, !!object);
 
 	return object;
 }
@@ -3943,7 +3977,8 @@ EXPORT_SYMBOL(kmem_cache_free_bulk);
 
 #ifndef CONFIG_SLUB_TINY
 static inline int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags,
-			size_t size, void **p, struct obj_cgroup *objcg)
+			size_t size, void **p, struct obj_cgroup *objcg,
+			struct cis_alloc_ctx *cis)
 {
 	struct kmem_cache_cpu *c;
 	unsigned long irqflags;
@@ -3962,6 +3997,7 @@ static inline int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags,
 
 		if (unlikely(object)) {
 			p[i] = object;
+			cis_alloc_step(cis, CIS_CA_KFENCE, object, NULL, NUMA_NO_NODE, i + 1);
 			continue;
 		}
 
@@ -3982,10 +4018,13 @@ static inline int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags,
 			 * Invoking slow path likely have side-effect
 			 * of re-populating per CPU c->freelist
 			 */
+			cis_alloc_step(cis, CIS_CA_SLOW_BEGIN, NULL, NULL, NUMA_NO_NODE, i);
 			p[i] = ___slab_alloc(s, flags, NUMA_NO_NODE,
-					    _RET_IP_, c, s->object_size);
+					    _RET_IP_, c, s->object_size, cis);
+			cis_alloc_step(cis, CIS_CA_SLOW_END, p[i], NULL, NUMA_NO_NODE, !!p[i]);
 			if (unlikely(!p[i]))
 				goto error;
+			cis_alloc_step(cis, CIS_CA_BULK_ITEM, p[i], NULL, NUMA_NO_NODE, i + 1);
 
 			c = this_cpu_ptr(s->cpu_slab);
 			maybe_wipe_obj_freeptr(s, p[i]);
@@ -3997,6 +4036,8 @@ static inline int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags,
 		c->freelist = get_freepointer(s, object);
 		p[i] = object;
 		maybe_wipe_obj_freeptr(s, p[i]);
+		cis_alloc_step(cis, CIS_CA_CPU_FAST, p[i], NULL, NUMA_NO_NODE, i + 1);
+		cis_alloc_step(cis, CIS_CA_BULK_ITEM, p[i], NULL, NUMA_NO_NODE, i + 1);
 	}
 	c->tid = next_tid(c->tid);
 	local_unlock_irqrestore(&s->cpu_slab->lock, irqflags);
@@ -4006,6 +4047,7 @@ static inline int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags,
 
 error:
 	slub_put_cpu_ptr(s->cpu_slab);
+	cis_alloc_step(cis, CIS_CA_BULK_ROLLBACK, NULL, NULL, NUMA_NO_NODE, i);
 	slab_post_alloc_hook(s, objcg, flags, i, p, false, s->object_size);
 	kmem_cache_free_bulk(s, i, p);
 	return 0;
@@ -4013,7 +4055,8 @@ error:
 }
 #else /* CONFIG_SLUB_TINY */
 static int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags,
-			size_t size, void **p, struct obj_cgroup *objcg)
+			size_t size, void **p, struct obj_cgroup *objcg,
+			struct cis_alloc_ctx *cis)
 {
 	int i;
 
@@ -4026,7 +4069,7 @@ static int __kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags,
 		}
 
 		p[i] = __slab_alloc_node(s, flags, NUMA_NO_NODE,
-					 _RET_IP_, s->object_size);
+					 _RET_IP_, s->object_size, cis);
 		if (unlikely(!p[i]))
 			goto error;
 
@@ -4048,24 +4091,33 @@ int kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 {
 	int i;
 	struct obj_cgroup *objcg = NULL;
+	struct cis_alloc_ctx cis;
 
 	if (!size)
 		return 0;
+	cis_alloc_start(&cis, s, s->name, flags, NUMA_NO_NODE, size, 2);
+	cis_alloc_step(&cis, CIS_CA_PRE_BEGIN, NULL, NULL, NUMA_NO_NODE, 0);
 
 	/* memcg and kmem_cache debug support */
 	s = slab_pre_alloc_hook(s, NULL, &objcg, size, flags);
-	if (unlikely(!s))
+	cis_alloc_step(&cis, CIS_CA_PRE_END, NULL, NULL, NUMA_NO_NODE, !!s);
+	if (unlikely(!s)) {
+		cis_alloc_step(&cis, CIS_CA_END, NULL, NULL, NUMA_NO_NODE, 0);
 		return 0;
+	}
 
-	i = __kmem_cache_alloc_bulk(s, flags, size, p, objcg);
+	i = __kmem_cache_alloc_bulk(s, flags, size, p, objcg, &cis);
 
 	/*
 	 * memcg and kmem_cache debug support and memory initialization.
 	 * Done outside of the IRQ disabled fastpath loop.
 	 */
+	cis_alloc_step(&cis, CIS_CA_POST_BEGIN, NULL, NULL, NUMA_NO_NODE, i);
 	if (i != 0)
 		slab_post_alloc_hook(s, objcg, flags, size, p,
 			slab_want_init_on_alloc(flags, s), s->object_size);
+	cis_alloc_step(&cis, CIS_CA_POST_END, NULL, NULL, NUMA_NO_NODE, i);
+	cis_alloc_step(&cis, CIS_CA_END, NULL, NULL, NUMA_NO_NODE, i);
 	return i;
 }
 EXPORT_SYMBOL(kmem_cache_alloc_bulk);

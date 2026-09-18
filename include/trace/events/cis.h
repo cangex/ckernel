@@ -5,11 +5,27 @@
 #define _TRACE_CIS_H
 #include <linux/tracepoint.h>
 #include <linux/cis_counter.h>
+#include <linux/cis_alloc.h>
 struct task_struct;
 int cis_observe_register(void);
 void cis_observe_unregister(void);
 int cis_fd_observe_register(void);
 void cis_fd_observe_unregister(void);
+TRACE_EVENT(cis_alloc_step,
+	TP_PROTO(const struct cis_alloc_sample *sample),
+	TP_ARGS(sample),
+	TP_STRUCT__entry(
+		__field(void *, cache)
+		__field(unsigned int, stage)
+		__field(unsigned int, ordinal)
+	),
+	TP_fast_assign(
+		__entry->cache = sample->cache; __entry->stage = sample->stage;
+		__entry->ordinal = sample->ordinal;
+	),
+	TP_printk("cache=%p stage=%u ordinal=%u", __entry->cache,
+		__entry->stage, __entry->ordinal)
+);
 TRACE_EVENT(cis_counter_step,
 	TP_PROTO(const struct cis_counter_sample *sample),
 	TP_ARGS(sample),

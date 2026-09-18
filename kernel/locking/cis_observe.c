@@ -56,7 +56,7 @@ void cis_fd_observe_unregister(void) { }
 static bool cis_trace_active(void)
 {
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
-	       trace_cis_counter_step_enabled();
+	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled();
 }
 
 static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
@@ -159,15 +159,18 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=2 owner=%u fd=%u counter=%u\n",
+	seq_printf(m, "version=3 owner=%u fd=%u counter=%u allocator=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
-		   trace_cis_counter_step_enabled());
+		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
 
 #ifdef CONFIG_CIS_OBSERVE_COUNTER
 static const struct file_operations cis_counter_audit_fops;
+#endif
+#ifdef CONFIG_CIS_OBSERVE_ALLOC
+static const struct file_operations cis_alloc_audit_fops;
 #endif
 
 static int __init cis_diag_init(void)
@@ -176,6 +179,9 @@ static int __init cis_diag_init(void)
 	debugfs_create_file("cis_sources", 0400, NULL, NULL, &cis_sources_fops);
 #ifdef CONFIG_CIS_OBSERVE_COUNTER
 	debugfs_create_file("cis_counter_audit", 0400, NULL, NULL, &cis_counter_audit_fops);
+#endif
+#ifdef CONFIG_CIS_OBSERVE_ALLOC
+	debugfs_create_file("cis_alloc_audit", 0400, NULL, NULL, &cis_alloc_audit_fops);
 #endif
 	return 0;
 }
@@ -321,6 +327,92 @@ void __cis_counter_start(struct cis_counter_ctx *ctx, struct page_counter *leaf,
 	*ctx = (struct cis_counter_ctx) { .start_ns = ktime_get_ns(), .leaf = leaf, .op = op };
 	preempt_enable();
 	__cis_counter_step(ctx, leaf, CIS_CC_BEGIN, 0, 0, 0);
+}
+#endif
+
+#ifdef CONFIG_CIS_OBSERVE_ALLOC
+static char alloc_cache[64] = "maple_node";
+module_param_string(alloc_cache, alloc_cache, sizeof(alloc_cache), 0400);
+MODULE_PARM_DESC(alloc_cache, "Exact SLUB cache name admitted for short allocation diagnostics");
+static unsigned int alloc_shift = 6;
+module_param(alloc_shift, uint, 0400);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_entries);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_eligible);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_selected);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_steps);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_capped);
+
+static int cis_alloc_audit_show(struct seq_file *m, void *unused)
+{
+	int cpu;
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+	seq_printf(m, "version=1 active=%u shift=%u cache=%s snapshot=non_atomic bytes_per_cpu=%zu\n",
+		trace_cis_alloc_step_enabled(), min(alloc_shift, 16U), alloc_cache,
+		5 * sizeof(unsigned long));
+	for_each_possible_cpu(cpu)
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu steps=%lu capped=%lu\n", cpu,
+			READ_ONCE(per_cpu(cis_alloc_entries, cpu)), READ_ONCE(per_cpu(cis_alloc_eligible, cpu)),
+			READ_ONCE(per_cpu(cis_alloc_selected, cpu)), READ_ONCE(per_cpu(cis_alloc_steps, cpu)),
+			READ_ONCE(per_cpu(cis_alloc_capped, cpu)));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(cis_alloc_audit);
+
+void __cis_alloc_step(struct cis_alloc_ctx *ctx, u32 stage, void *object,
+		void *resource, int node, unsigned long count)
+{
+	struct cis_alloc_sample sample;
+	u32 ordinal = ctx->steps++;
+	preempt_disable();
+	if (ordinal >= CIS_CA_STEPS && stage != CIS_CA_END) {
+		this_cpu_inc(cis_alloc_capped);
+		goto out;
+	}
+	if (this_cpu_read(cis_in_trace) || in_interrupt()) {
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	this_cpu_write(cis_in_trace, true);
+	this_cpu_inc(cis_alloc_steps);
+	sample = (struct cis_alloc_sample) {
+		.start_ns = ctx->start_ns, .time_ns = ktime_get_ns(), .cache = ctx->cache,
+		.object = object, .resource = resource, .gfp = ctx->gfp,
+		.requested = ctx->requested, .count = count, .operation = ctx->operation,
+		.stage = stage, .ordinal = ordinal, .sample_shift = min(alloc_shift, 16U),
+		.requested_node = ctx->requested_node,
+		.observed_node = (stage == CIS_CA_CPU_FAST || stage == CIS_CA_CPU_PARTIAL ||
+			stage == CIS_CA_PARTIAL_END || stage == CIS_CA_NODE_DONE ||
+			stage == CIS_CA_NEW_END) ? node : -1,
+	};
+	trace_cis_alloc_step(&sample);
+	this_cpu_write(cis_in_trace, false);
+out:
+	preempt_enable();
+}
+
+void __cis_alloc_start(struct cis_alloc_ctx *ctx, struct kmem_cache *cache,
+		const char *name, unsigned long gfp, int node, unsigned long requested, u32 operation)
+{
+	unsigned long n;
+	preempt_disable();
+	this_cpu_inc(cis_alloc_entries);
+	if (this_cpu_read(cis_in_trace) || in_interrupt()) {
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	if (!name || strcmp(name, alloc_cache))
+		goto out;
+	n = this_cpu_inc_return(cis_alloc_eligible);
+	if (n & ((1UL << min(alloc_shift, 16U)) - 1))
+		goto out;
+	this_cpu_inc(cis_alloc_selected);
+	*ctx = (struct cis_alloc_ctx) { .start_ns = ktime_get_ns(), .cache = cache,
+		.gfp = gfp, .requested = requested, .operation = operation, .requested_node = node };
+out:
+	preempt_enable();
+	if (ctx->start_ns)
+		__cis_alloc_step(ctx, CIS_CA_BEGIN, NULL, NULL, node, 0);
 }
 #endif
 
