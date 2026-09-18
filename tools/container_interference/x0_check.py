@@ -30,7 +30,8 @@ def check(text):
     checks = result['checks']
     collectors=plan.get('collectors')
     if collectors is not None and (len(collectors)!=len(set(collectors)) or
-            set(collectors)!={'ip','owner','sched','reclaim','sync','fd'}):
+            set(collectors) not in ({'ip','owner','sched','reclaim','sync','fd'},
+                                   {'ip','owner','sched','reclaim','sync','fd','counter'})):
         raise ValueError('unexpected control cohort collectors')
     controls=(CONTROL-{'selective_load_'+name for name in ('ip','owner','sched','reclaim')} |
               {'selective_load_'+name for name in collectors}) if collectors is not None else CONTROL
