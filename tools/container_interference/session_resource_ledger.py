@@ -13,6 +13,7 @@ import re
 
 from session_check import extract
 from p1_admission_check import records, source_identity
+from kernel_resource_audit import analyze_session
 
 
 def analyze(text):
@@ -52,6 +53,7 @@ def analyze(text):
                          memory=dict(combined_rss_sampled_peak_bytes=record.get('combined_rss_peak_bytes'),
                                      worker_maxrss_kib=receipt.get('maxrss_kib'), inventories=inventories,
                                      total_upper_bound_bytes=None, total_complete=False),
+                         kernel_object_audit=analyze_session(record, logs[0] if len(logs)==1 else ''),
                          owner_entry_stages=stages, quality_errors=errors))
     return dict(schema='cis-session-resource-ledger-v1',
                 raw_sha256=hashlib.sha256(text.encode()).hexdigest(), sessions=rows,

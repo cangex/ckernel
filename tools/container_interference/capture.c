@@ -66,14 +66,28 @@ static void memory_inventory(struct capture *c,int pages)
 	unsigned int missing=0;
 	char detail[600];
 	bpf_object__for_each_map(map,c->object) {
+		struct bpf_map_info info={0}; __u32 size=sizeof(info);
+		int valid,info_valid;
 		if (!bpf_map__autocreate(map)) continue;
-		if(fd_memlock(bpf_map__fd(map),&value)) missing++;
+		value=0; valid=!fd_memlock(bpf_map__fd(map),&value);
+		if(!valid) missing++;
 		else maps+=value;
+		info_valid=!bpf_obj_get_info_by_fd(bpf_map__fd(map),&info,&size);
+		snprintf(detail,sizeof(detail),"object_type=map object_id=%u info_valid=%d fdinfo_valid=%d fdinfo_bytes=%llu map_type=%u key_bytes=%u value_bytes=%u max_entries=%u map_flags=%u allocation_upper_bound_known=0",
+			info.id,info_valid,valid,value,info.type,info.key_size,info.value_size,info.max_entries,info.map_flags);
+		cis_report(c->ctx,"kernel_object_inventory",NULL,detail);
 	}
 	bpf_object__for_each_program(program,c->object) {
+		struct bpf_prog_info info={0}; __u32 size=sizeof(info);
+		int valid,info_valid;
 		if (!bpf_program__autoload(program)) continue;
-		if(fd_memlock(bpf_program__fd(program),&value)) missing++;
+		value=0; valid=!fd_memlock(bpf_program__fd(program),&value);
+		if(!valid) missing++;
 		else programs+=value;
+		info_valid=!bpf_obj_get_info_by_fd(bpf_program__fd(program),&info,&size);
+		snprintf(detail,sizeof(detail),"object_type=program object_id=%u info_valid=%d fdinfo_valid=%d fdinfo_bytes=%llu jit_code_bytes=%u xlated_bytes=%u btf_id=%u nr_map_ids=%u allocation_upper_bound_known=0",
+			info.id,info_valid,valid,value,info.jited_prog_len,info.xlated_prog_len,info.btf_id,info.nr_map_ids);
+		cis_report(c->ctx,"kernel_object_inventory",NULL,detail);
 	}
 	snprintf(detail,sizeof(detail),"bpf_maps_fdinfo_bytes=%llu bpf_program_pages_bytes=%llu perf_output_mapping_bytes=%llu ip_mapping_bytes=%llu missing_fdinfo=%u rss_overlap_do_not_sum=1 excludes=jit_aux_btf_perf_objects_psi_workers total_complete=0",
 		maps,programs,(unsigned long long)(pages+1)*4096*c->possible_cpus,
