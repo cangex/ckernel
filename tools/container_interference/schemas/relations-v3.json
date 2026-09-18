@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIS relations v3; relations.validate enforces cross-field evidence invariants",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "model", "evidence", "session_epoch", "object", "participants", "intervals", "unknown", "causal_validation"],
+  "properties": {
+    "schema": {"const": "cis-relations-v3"},
+    "model": {"enum": ["holder_waiter", "shared_updates", "queue_service"]},
+    "evidence": {"enum": ["E0", "E1", "E2", "E3"]},
+    "session_epoch": {"type": "string", "minLength": 1, "maxLength": 128},
+    "object": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "lifetime_epoch", "lifetime_proof"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1, "maxLength": 256},
+        "id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "lifetime_epoch": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+        "lifetime_proof": {"enum": ["observed_create_free", "pinned", "trusted_interval", "unknown"]}
+      }
+    },
+    "participants": {"type": "array", "maxItems": 32, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "container_id", "generation", "task_id"],
+      "properties": {
+        "role": {"enum": ["holder", "waiter", "contributor", "submitter", "executor"]},
+        "container_id": {"type": ["integer", "null"], "minimum": 1},
+        "generation": {"type": ["integer", "null"], "minimum": 1},
+        "task_id": {"type": ["integer", "null"], "minimum": 1}
+      }
+    }},
+    "intervals": {"type": "array", "maxItems": 64, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["phase", "start_ns", "end_ns", "metric", "value"],
+      "properties": {
+        "phase": {"enum": ["queue", "wait", "acquire", "service", "complete", "free"]},
+        "start_ns": {"type": "integer", "minimum": 0},
+        "end_ns": {"type": "integer", "minimum": 0},
+        "metric": {"enum": ["wall_ns", "on_cpu_ns", "cycles"]},
+        "value": {"type": "integer", "minimum": 0}
+      }
+    }},
+    "unknown": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 256}},
+    "causal_validation": {"oneOf": [{"type": "null"}, {
+      "type": "object", "additionalProperties": false,
+      "required": ["artifact_sha256", "controlled_intervention"],
+      "properties": {"artifact_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "controlled_intervention": {"const": true}}
+    }]}
+  }
+}

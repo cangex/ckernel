@@ -6,6 +6,8 @@ def assess(record):
     receipt = record.get('receipt') or {}
     terminal = receipt.get('terminal') or {}
     missing, defects = [], []
+    if record.get('collector_contract_error'):
+        defects.append('collector_contract')
     counters = ('received', 'emitted', 'rejected', 'lost', 'owner_skipped')
     if terminal.get('valid') is not True:
         missing.append('terminal_counters')

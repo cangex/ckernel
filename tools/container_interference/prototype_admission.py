@@ -8,7 +8,7 @@ import stat
 from periodic_plan import digest
 
 SOURCE_KEYS = ('controller_sha256', 'worker_sha256', 'residue_sha256', 'bpf_sha256',
-               'support_sha256', 'kernel_release', 'kernel_notes_sha256', 'kernel_cmdline_sha256')
+               'support_sha256', 'collector_bundle_sha256', 'kernel_release', 'kernel_notes_sha256', 'kernel_cmdline_sha256')
 LIMITS = dict(registered_roots=4, active_targets=2, window_ms=2000,
               sessions=32, lifetime_s=1200)
 

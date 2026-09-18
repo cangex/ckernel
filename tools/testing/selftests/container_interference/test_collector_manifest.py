@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: GPL-2.0
+import copy
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'container_interference'))
+import collector_manifest as cm
+import relations
+from periodic_plan import digest
+
+
+class CollectorContract(unittest.TestCase):
+    def inventory(self, name):
+        c = cm.contract(name)
+        return dict(schema='cis-loaded-inventory-v1', profile=c['profile'],
+                    maps=list(range(1, len(c['maps'])+1)), map_names=c['maps'],
+                    programs=list(range(101, 101+len(c['programs']))), program_names=c['programs'],
+                    ip_perf_cpus=8 if name == 'ip' else 0)
+
+    def test_exact_load(self):
+        for name in cm.COLLECTORS:
+            self.assertEqual(cm.validate_inventory(name, self.inventory(name)), digest(cm.contract(name)))
+
+    def test_fail_closed_inventory(self):
+        for field, value in [('schema', 'future'), ('profile', 2), ('maps', [1]),
+                             ('map_names', ['roots']), ('program_names', ['sample_ip', 'owner_state']),
+                             ('ip_perf_cpus', 0), ('ip_perf_cpus', True)]:
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                cm.validate_inventory('ip', dict(self.inventory('ip'), **{field: value}))
+        inv = self.inventory('reclaim')
+        inv['programs'][1] = inv['programs'][0]
+        with self.assertRaises(ValueError): cm.validate_inventory('reclaim', inv)
+
+    def test_bundle_is_content_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)/'bpf.o'; p.write_bytes(b'old')
+            old = digest(cm.bundle_manifest(p))
+            p.write_bytes(b'new')
+            self.assertNotEqual(old, digest(cm.bundle_manifest(p)))
+        cm.contract('ip')['maps'].append('wrong')
+        self.assertNotIn('wrong', cm.contract('ip')['maps'])
+        with self.assertRaises(ValueError): cm.contract('tcp')
+
+
+class RelationContract(unittest.TestCase):
+    def relation(self, model='holder_waiter'):
+        roles = dict(holder_waiter=['holder', 'waiter'], shared_updates=['contributor'],
+                     queue_service=['submitter', 'executor'])[model]
+        return dict(schema='cis-relations-v3', model=model, evidence='E2', session_epoch='one',
+                    object=dict(kind='example', id='0x123', lifetime_epoch='create7', lifetime_proof='pinned'),
+                    participants=[dict(role=r, container_id=5+i, generation=1, task_id=123+i) for i,r in enumerate(roles)],
+                    intervals=[dict(phase='wait', start_ns=10, end_ns=30, metric='wall_ns', value=20)],
+                    unknown=[], causal_validation=None)
+
+    def test_three_models(self):
+        for model in relations.MODELS:
+            row = self.relation(model)
+            self.assertEqual(row, relations.validate(row))
+
+    def test_no_counter_holder_or_false_causality(self):
+        row = self.relation('shared_updates'); row['participants'][0]['role'] = 'holder'
+        with self.assertRaises(ValueError): relations.validate(row)
+        row = self.relation(); row['evidence'] = 'E3'
+        with self.assertRaises(ValueError): relations.validate(row)
+        row['causal_validation'] = dict(artifact_sha256='a'*64, controlled_intervention=True)
+        relations.validate(row)
+
+    def test_lifetime_and_unknown(self):
+        row = self.relation(); row['object']['lifetime_proof'] = 'unknown'
+        with self.assertRaises(ValueError): relations.validate(row)
+        row['evidence'] = 'E1'; relations.validate(row)
+        row = self.relation(); row['participants'][0]['container_id'] = None
+        with self.assertRaises(ValueError): relations.validate(row)
+
+    def test_time_and_bounds(self):
+        for metric, value in [('wall_ns', 19), ('on_cpu_ns', 21), ('spin_ns', 20)]:
+            row = self.relation(); row['intervals'][0].update(metric=metric, value=value)
+            with self.assertRaises(ValueError): relations.validate(row)
+        for field,value in [('schema', 'cis-relations-v99'), ('participants', [{}]*33),
+                            ('unknown', ['x']*65), ('intervals', [{}]*65)]:
+            with self.assertRaises(ValueError): relations.validate(dict(self.relation(), **{field: value}))
+
+
+if __name__ == '__main__': unittest.main()

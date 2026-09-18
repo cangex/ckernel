@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIS collector v1 loading contract, not acceptance",
+  "type": "object",
+  "required": ["schema", "name", "profile", "programs", "maps", "relation", "clock", "contexts", "object_kinds", "source_filter", "event_abi", "bundle", "configuration", "limits", "stop_protocol", "audit", "unsupported"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "cis-collector-v1"},
+    "name": {"type": "string"},
+    "profile": {"type": "integer", "minimum": 1},
+    "programs": {"type": "array", "uniqueItems": true, "maxItems": 32, "items": {"type": "string"}},
+    "maps": {"type": "array", "uniqueItems": true, "maxItems": 32, "items": {"type": "string"}},
+    "relation": {"type": "string"},
+    "clock": {"enum": ["sample_period", "monotonic_wall_ns"]},
+    "contexts": {"type": "array", "items": {"type": "string"}},
+    "object_kinds": {"type": "array", "items": {"type": "string"}},
+    "source_filter": {"type": "string"},
+    "event_abi": {"const": 1},
+    "bundle": {"type": "string"},
+    "configuration": {"type": "string"},
+    "limits": {"type": "object"},
+    "stop_protocol": {"type": "array", "items": {"type": "string"}},
+    "audit": {"type": "array", "items": {"type": "string"}},
+    "unsupported": {"type": "string"}
+  }
+}

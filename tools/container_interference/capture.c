@@ -450,7 +450,8 @@ int cis_capture_inventory(struct cis_context *ctx,char *out,size_t cap)
 	size_t n=0;
 	unsigned int count=0;
 	if(!c) return -EINVAL;
-	n+=snprintf(out+n,cap-n,"{\"maps\":[");
+	if(cap<256) return -EOVERFLOW;
+	n+=snprintf(out+n,cap-n,"{\"schema\":\"cis-loaded-inventory-v1\",\"profile\":%u,\"maps\":[",ctx->session_collector);
 	bpf_object__for_each_map(m,c->object) {
 		struct bpf_map_info info={0}; __u32 size=sizeof(info);
 		if(!bpf_map__autocreate(m)) continue;
@@ -463,6 +464,18 @@ int cis_capture_inventory(struct cis_context *ctx,char *out,size_t cap)
 		if(!bpf_program__autoload(p)) continue;
 		if(bpf_obj_get_info_by_fd(bpf_program__fd(p),&info,&size) || cap-n<64) return -EIO;
 		n+=snprintf(out+n,cap-n,"%s%u",count++?",":"",info.id);
+	}
+	n+=snprintf(out+n,cap-n,"],\"map_names\":["); count=0;
+	bpf_object__for_each_map(m,c->object) {
+		if(!bpf_map__autocreate(m)) continue;
+		if(cap-n<128) return -EOVERFLOW;
+		n+=snprintf(out+n,cap-n,"%s\"%s\"",count++?",":"",bpf_map__name(m));
+	}
+	n+=snprintf(out+n,cap-n,"],\"program_names\":["); count=0;
+	bpf_object__for_each_program(p,c->object) {
+		if(!bpf_program__autoload(p)) continue;
+		if(cap-n<128) return -EOVERFLOW;
+		n+=snprintf(out+n,cap-n,"%s\"%s\"",count++?",":"",bpf_program__name(p));
 	}
 	n+=snprintf(out+n,cap-n,"],\"ip_perf_cpus\":%d}",c->ncpu);
 	return n<cap?0:-EOVERFLOW;

@@ -44,6 +44,7 @@ from child_usage import ChildProcesses, reaped_cpu_ns as reaped_child_cpu_ns
 from schedule import Schedule
 import survey
 import prototype_admission
+import collector_manifest
 
 
 def now():
@@ -56,7 +57,7 @@ def encoded(value):
 
 def compact_record(record):
     return {key: value for key, value in record.items()
-            if key not in ('boundary_before', 'boundary_after', 'survey', 'source_identity', 'owner_identities')}
+            if key not in ('boundary_before', 'boundary_after', 'survey', 'source_identity', 'owner_identities', 'collector_bundle')}
 
 
 def worker_roots(registry, targets, collector):
@@ -78,6 +79,7 @@ def host_admin(pid=None):
 
 
 def source_manifest(args, boot):
+    bundle = collector_manifest.bundle_manifest(args.bpf)
     return {'protocol': VERSION, 'boot_id': boot,
             'controller_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'worker_sha256': hashlib.sha256(Path(args.worker).read_bytes()).hexdigest(),
@@ -85,7 +87,8 @@ def source_manifest(args, boot):
             'bpf_sha256': hashlib.sha256(Path(args.bpf).read_bytes()).hexdigest(),
             'support_sha256': digest({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
                 for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py',
-                             'child_usage.py', 'prototype_admission.py')}),
+                             'child_usage.py', 'prototype_admission.py', 'collector_manifest.py')}),
+            'collector_bundle': bundle, 'collector_bundle_sha256': digest(bundle),
             'kernel_release': os.uname().release,
             'kernel_notes_sha256': hashlib.sha256(Path('/sys/kernel/notes').read_bytes()).hexdigest(),
             'kernel_cmdline_sha256': hashlib.sha256(Path('/proc/cmdline').read_bytes()).hexdigest(),
@@ -703,6 +706,7 @@ class Controller:
                              'PREPARE' if self.admission else 'IDLE',
                     'admission_policy': getattr(self, 'admission_policy', 'strict'),
                     'performance_certification': 'NOT_ACCEPTED',
+                    'prototype_sessions_started': getattr(self, 'prototype_sessions_started', 0),
                     'roots': len(self.roots), 'sessions': list(self.history), 'continuous_metrics_scans': 0,
                     'boundary_root_reads': self.boundary_reads, 'psi_triggers': 0,
                     'nonce_epoch': self.nonce_epoch, 'periodic_enabled': bool(self.schedule and self.schedule.enabled)}
@@ -778,6 +782,12 @@ class Controller:
             self.cancel(record['session_id'])
         if state == 'ARMED':
             record['inventory'] = message['inventory']
+            try:
+                record['collector_contract_sha256'] = collector_manifest.validate_inventory(
+                    record['collector'], record['inventory'])
+            except ValueError as error:
+                record['collector_contract_error'] = str(error)
+                self.cancel(record['session_id'])
             active['arm_pending'] = True
         elif state == 'CAPTURING':
             record['window'] = message
