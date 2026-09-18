@@ -84,7 +84,15 @@ guaranteed future observation::
 
   python3 session.py request '{"version":1,"op":"schedule_pause"}'
   python3 session.py request '{"version":1,"op":"status"}'
-  python3 session.py request '{"version":1,"op":"start","collector":"owner","targets":["ID:GENERATION"],"nonce":"manual1","window_ms":2000}'
+  python3 session.py request '{"version":1,"op":"start","collector":"owner","targets":["ID:GENERATION"],"nonce":"manual1","nonce_epoch":"EPOCH_FROM_STATUS","window_ms":2000}'
+
+Replace both placeholders with the returned identity and current nonce epoch.
+Pausing does not cancel an active session or reset the shared interval budget.
+Wait at least the configured interval from ``last_admit_ns`` before another
+manual request. A budget rejection is expected, not permission to change the
+interval or start a second controller. Resume with ``schedule_enable`` when
+the manual session has finalized. Expired permits require a new explicit
+experiment, not a forged P1 receipt.
 
 Wait for the returned session to finalize before interpreting its files::
 
@@ -97,3 +105,5 @@ Reports retain missing evidence and costs. ``diagnosis_plan.py`` supplies
 manual recommendations only. Automatic specialist routing is not enabled.
 The manual IP path also collects boundary counters; a valid throttling
 counter does not require enough IP samples to declare a valid hotspot.
+Offline reports also record hashes of their analysis modules; re-analysis
+does not change the original capture source or its boot-relative clock.

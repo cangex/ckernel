@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import statistics
 
@@ -24,7 +25,9 @@ def exploratory_cost(files, declared):
                 raise ValueError('invalid cost window')
             if values[0].get('operations' if item['workload']=='throughput' else 'p99_ns',0)<=0:
                 raise ValueError('invalid cost denominator')
-            data[(item['workload'],item['repetition'],item['mode'],role)]=values[0]
+            key=(item['workload'],item['repetition'],item['mode'],role)
+            if key in data:raise ValueError('duplicate cost measurement identity')
+            data[key]=values[0]
     for workload in declared.get('plan',{}).get('workloads',[]):
         for mode in ('ip','owner','sched','reclaim'):
             for role_name in ('target','observer'):
@@ -52,6 +55,29 @@ def exploratory_cost(files, declared):
                 else:row['status']='INCOMPLETE'
                 rows.append(row)
     return rows
+
+
+def protocol_complete(declared, sessions, costs):
+    if not declared or not sessions:
+        return False
+    plan=declared.get('plan',{})
+    reported=declared.get('cases',[])
+    actual={str(row['session_id']) for row in sessions}
+    if (len(actual)!=len(sessions) or len(reported)!=len(sessions) or
+            {str(row.get('session_id')) for row in reported}!=actual):
+        return False
+    if 'measurements' in declared:
+        expected=plan.get('pairs',0)*len(plan.get('workloads',[]))*4
+        return (expected==len(sessions) and len(costs)==8*len(plan.get('workloads',[])) and
+                all(row['n']==plan.get('pairs') and row['status']=='RECORD_ONLY' for row in costs))
+    if plan.get('cases'):
+        return {row['nonce'] for row in sessions}=={name.replace('-','') for name in plan['cases']}
+    # The original periodic protocol stores its frozen plan separately.
+    slots=declared.get('periodic_slots',0)
+    return (slots==6 and len(sessions)==11 and
+            sum(row['collector']=='ip' for row in sessions)==slots and
+            {row['nonce'] for row in sessions if row['collector']=='owner'}==
+            {'shared','private','reuse','preempt','nonTargetHolder'})
 
 
 def analyze(log, output):
@@ -98,9 +124,11 @@ def analyze(log, output):
     result['declared_result']=json.JSONDecoder().raw_decode(declared.lstrip())[0] if declared else None
     if result['declared_result'] and 'measurements' in result['declared_result']:
         result['exploratory_cost']=exploratory_cost(files,result['declared_result'])
+    result['protocol_complete']=protocol_complete(result['declared_result'],result['sessions'],
+                                                 result.get('exploratory_cost',[]))
     result['status']=('PASS' if result['declared_result'] and
                       result['declared_result'].get('prototype_functional_status')=='PASS' and
-                      b'CIS_PROFILE_VM_EXIT=0' in raw and result['sessions'] and
+                      b'CIS_PROFILE_VM_EXIT=0' in raw and result['protocol_complete'] and
                       all(r['quality']=='PASS' for r in result['sessions']) and
                       all(r['status']=='PASS' for r in result['truth']) else 'FAIL')
     (output/'check.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
@@ -108,6 +136,7 @@ def analyze(log, output):
 
 
 if __name__=='__main__':
+    os.umask(0o077)
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('log',type=Path)
     parser.add_argument('output',type=Path)

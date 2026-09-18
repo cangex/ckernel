@@ -5,6 +5,7 @@ import argparse
 from collections import Counter
 import hashlib
 import json
+import os
 from pathlib import Path
 import time
 
@@ -15,6 +16,12 @@ from diagnosis_plan import recommend
 
 MAX_BYTES = 16*1024*1024
 MAX_FINDINGS = 128
+
+
+def analysis_source():
+    names=('explain.py','owner_report.py','attribution.py','session_quality.py','diagnosis_plan.py')
+    return {name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            for name in names}
 
 
 def within_window(record, begin, end):
@@ -113,6 +120,7 @@ def explain(record, raw):
     explained=time.monotonic_ns()
     same_clock=analysis_boot is not None and analysis_boot==record.get('boot_id')
     result = dict(schema='cis-explanation-v1', session_id=sid, collector=record.get('collector'),
+        analysis_source_sha256=analysis_source(),
         source=record.get('source_identity'), raw_sha256=hashlib.sha256(raw).hexdigest(),
         window=record.get('window'), admission_policy=record.get('admission_policy', 'strict'),
         quality=quality, findings=findings[:MAX_FINDINGS], candidates=candidates,
@@ -143,8 +151,8 @@ def markdown(report):
         if item['kind']=='observed_holder_waiter':
             w,h=item['waiter'],item['holder']
             relation='容器内部' if item['relation']=='container_internal' else '跨容器'
-            lines.append('- %s关系：`%s:%s` 的线程 `%s` 等待 `%s` 对象 `%s`；与 `%s:%s` 的线程 `%s` 持有该对象的区间重合 %.3f ms。'%(
-                relation,w[0],w[1],w[2],item['resource'],item['object'],h[0],h[1],h[2],item['overlap_ns']/1e6))
+            lines.append('- %s关系：`%s:%s` 的线程（宿主TID）`%s` 等待 `%s` 对象 `%s`；与 `%s:%s` 的线程（宿主TID）`%s` 持有该对象的区间重合 %.3f ms。'%(
+                relation,w[0],w[1],w[2]&0xffffffff,item['resource'],item['object'],h[0],h[1],h[2]&0xffffffff,item['overlap_ns']/1e6))
             chain=item.get('waiter_stack_leaf_to_root')
             lines.append('  等待栈（叶到根）：`%s`。'%(' → '.join(chain) if chain else '未完成符号解析，原始地址见JSON'))
             if item['holder_offcpu']:
@@ -177,6 +185,7 @@ def markdown(report):
 
 
 if __name__=='__main__':
+    os.umask(0o077)
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--record', type=Path, required=True)
     parser.add_argument('--events', type=Path, required=True)

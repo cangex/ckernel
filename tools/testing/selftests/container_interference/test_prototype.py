@@ -98,6 +98,14 @@ class Explanations(unittest.TestCase):
         self.assertEqual(report['findings'][0]['holder_offcpu'][0]['ns'],1)
         self.assertIsNone(report['total_interference_ns'])
 
+    def test_human_tid_is_not_packed_tgid_tid(self):
+        events=[event(1,3,1,actor_tid=(100<<32)|101),event(2,2,2,actor_tid=(200<<32)|102),
+                event(5,4,1,actor_tid=(100<<32)|101),event(6,3,2,actor_tid=(200<<32)|102)]
+        text=markdown(self.owner_report(events))
+        self.assertIn('`101`',text)
+        self.assertIn('`102`',text)
+        self.assertNotIn(str((100<<32)|101),text)
+
     def test_unsupported_or_outside_intervals_stay_unknown(self):
         for detail in ('type=99 sample_time_ns=1 duration_ns=5',
                        'type=4 sample_time_ns=99 duration_ns=5',
@@ -137,6 +145,8 @@ class Explanations(unittest.TestCase):
 
     def test_empty_does_not_mean_no_interference(self):
         report=explain(self.record(),b'')
+        self.assertEqual(len(report['analysis_source_sha256']),5)
+        self.assertTrue(all(len(value)==64 for value in report['analysis_source_sha256'].values()))
         self.assertEqual(report['unknown'][0]['reason'],'no_raw_events')
         self.assertIsNone(report['total_interference_ns'])
 
