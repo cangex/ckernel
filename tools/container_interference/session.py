@@ -62,7 +62,7 @@ def compact_record(record):
 
 def worker_roots(registry, targets, collector):
     """Identity-only roots never acquire a target deadline or active probes."""
-    if collector not in ('owner', 'ip', 'sched', 'reclaim') or not 1 <= len(targets) <= 2 or len(set(targets)) != len(targets):
+    if collector not in collector_manifest.COLLECTORS or not 1 <= len(targets) <= 2 or len(set(targets)) != len(targets):
         raise ValueError('invalid collector or target set')
     if len(registry) > MAX_ROOTS or any(key not in registry for key in targets):
         raise ValueError('invalid identity registry')
@@ -128,8 +128,8 @@ def validate(request):
     if op not in fields or set(request) - fields[op] - {'version', 'op'}:
         raise ValueError('unknown command or field')
     if op == 'start':
-        if request.get('collector') not in ('ip', 'owner', 'sched', 'reclaim'):
-            raise ValueError('collector must be ip, owner, sched or reclaim')
+        if request.get('collector') not in collector_manifest.COLLECTORS:
+            raise ValueError('unsupported collector')
         targets = request.get('targets')
         if (not isinstance(targets, list) or not 1 <= len(targets) <= 2
                 or not all(isinstance(t, str) and len(t) <= 48 for t in targets)

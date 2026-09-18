@@ -52,7 +52,12 @@ int main(void) {
     assert(cis_profile_map(4, "stacks"));
     assert(!cis_profile_map(4, "work_items"));
     assert(!cis_profile_map(4, "watched"));
-    assert(!cis_profile_map(5, "roots"));
+    assert(cis_profile_program(5, "lock_begin"));
+    assert(cis_profile_program(5, "lock_end"));
+    assert(!cis_profile_program(5, "owner_state"));
+    assert(cis_profile_map(5, "roots"));
+    assert(!cis_profile_map(5, "holders"));
+    assert(!cis_profile_map(6, "roots"));
     return 0;
 }
 '''

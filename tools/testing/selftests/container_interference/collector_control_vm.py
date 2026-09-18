@@ -111,7 +111,7 @@ def run(expiry=False, fault=False):
             note('failed_verification_blocks_admission', session=sid,
                  real_verifier_absent=True, injected_verifier_failed=True)
         else:
-            for name in collector_manifest.COLLECTORS:
+            for name in ('ip', 'owner', 'sched', 'reclaim'):
                 sid = request('start', collector=name, targets=targets, nonce='load'+name)['session_id']
                 row = finish(sid)
                 assert row['result'] == 'COMPLETE', row

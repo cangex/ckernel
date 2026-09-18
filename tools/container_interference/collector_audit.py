@@ -20,11 +20,13 @@ def audit(record, raw):
     for line in raw.splitlines():
         if len(line) > 8192: raise ValueError('audit record length')
         row = json.loads(line)
+        if not isinstance(row, dict): raise ValueError('audit record must be an object')
         if str(row.get('session_id')) != str(record['session_id']): raise ValueError('audit session mismatch')
         kind = row.get('kind')
         if kind not in names: continue
         if kind in found: raise ValueError('duplicate terminal counter group')
         detail = row.get('detail', '')
+        if not isinstance(detail, str): raise ValueError('audit detail must be text')
         fields = dict(re.findall(r'(\w+)=(\d+)(?:\s|$)', detail))
         found[kind] = {name: int(fields[name]) if name in fields else None for name in names[kind]}
     missing = [kind for kind in names if kind not in found]

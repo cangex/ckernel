@@ -27,6 +27,10 @@ COLLECTORS = {
                     maps=COMMON_MAPS + ['targets', 'stacks', 'pending'], relation='reclaim_interval',
                     clock='monotonic_wall_ns', contexts=['synchronous_task'], object_kinds=[],
                     source_filter='target begin, original identity retained to end'),
+    'sync': dict(profile=5, programs=['lock_begin', 'lock_end'],
+                 maps=COMMON_MAPS + ['targets', 'stacks', 'pending'], relation='lock_wait_candidates',
+                 clock='monotonic_wall_ns', contexts=['synchronous_task'], object_kinds=['untyped_lock_address'],
+                 source_filter='existing contention pairs; partial slowpath coverage, holder/lifetime unknown'),
 }
 
 

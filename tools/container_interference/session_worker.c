@@ -57,7 +57,7 @@ int main(int argc,char **argv)
 	channel=atoi(argv[1]); ctx->output_fd=atoi(argv[2]);
 	ctx->session_id=strtoull(argv[3],NULL,10); window=atoi(argv[5]);
 	ctx->session_collector=!strcmp(argv[4],"ip")?1:!strcmp(argv[4],"owner")?2:
-		!strcmp(argv[4],"sched")?3:!strcmp(argv[4],"reclaim")?4:0;
+		!strcmp(argv[4],"sched")?3:!strcmp(argv[4],"reclaim")?4:!strcmp(argv[4],"sync")?5:0;
 	if(!ctx->session_id || !ctx->session_collector || window<100 || window>10000) return 2;
 	ctx->output_limit=16ULL<<20; ctx->identity_only=1; ctx->psi_epoll=-1;
 	ctx->window_ms=window; ctx->ip_hz=1000; ctx->entry_rate_limit=200000;
@@ -119,7 +119,7 @@ int main(int argc,char **argv)
 	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used && ctx->roots[i].session_target) {
 		struct cis_root *r=&ctx->roots[i];
 		if(ctx->session_collector>=2) {
-			r->diagnostic_kind=ctx->session_collector==2?16:ctx->session_collector==3?1:4;
+			r->diagnostic_kind=ctx->session_collector==2?16:ctx->session_collector==3?1:ctx->session_collector==5?2:4;
 			r->requested_start_ns=start;
 			if(cis_capture_diagnostic(ctx,r,1)) { err=1; reason="DIAGNOSTIC_ATTACH"; goto drain; }
 			r->state=CIS_DIAGNOSING; ctx->diagnostic++;

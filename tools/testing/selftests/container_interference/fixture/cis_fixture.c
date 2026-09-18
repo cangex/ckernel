@@ -37,6 +37,54 @@ static DECLARE_RWSEM(fixture_lifetime);
 static u64 object_generation=1;
 static DEFINE_SPINLOCK(storm_lock);
 static u64 storm_counter;
+static spinlock_t sync_spin[2];
+static struct rw_semaphore sync_rwsem[2];
+static u64 sync_generation[2][2]={{1,1},{1,1}};
+
+static long sync_ioctl(unsigned long arg)
+{
+	struct cis_fixture_sync q;
+	bool acquired;
+	if(copy_from_user(&q,(void __user *)arg,sizeof(q))) return -EFAULT;
+	if(q.family<1 || q.family>2 || q.slot>1 || q.operation>3 || q.reserved ||
+	   q.hold_us>(q.family==1?100:2000) || (q.family==1 && q.operation==1)) return -EINVAL;
+	q.result=0; q.acquired_ns=0; q.release_begin_ns=0; q.released_ns=0;
+	q.object=q.family==1?(unsigned long)&sync_spin[q.slot]:(unsigned long)&sync_rwsem[q.slot];
+	q.tid=task_pid_nr(current);
+	rcu_read_lock(); q.cgroup_id=cgroup_id(task_dfl_cgroup(current)); rcu_read_unlock();
+	/* Reset never races a live operation. Address reuse has an explicit truth generation. */
+	if(q.operation==3) {
+		down_write(&fixture_lifetime);
+		if(q.family==1) spin_lock_init(&sync_spin[q.slot]);
+		else init_rwsem(&sync_rwsem[q.slot]);
+		q.generation=++sync_generation[q.family-1][q.slot];
+		q.begin_ns=ktime_get_ns();
+		up_write(&fixture_lifetime);
+		return copy_to_user((void __user *)arg,&q,sizeof(q))?-EFAULT:0;
+	}
+	down_read(&fixture_lifetime);
+	q.generation=sync_generation[q.family-1][q.slot]; q.begin_ns=ktime_get_ns();
+	if(q.family==1) {
+		if(q.operation==2) acquired=spin_trylock(&sync_spin[q.slot]);
+		else { spin_lock(&sync_spin[q.slot]); acquired=true; }
+	} else if(q.operation==1) { down_read(&sync_rwsem[q.slot]); acquired=true; }
+	else if(q.operation==2) acquired=down_write_trylock(&sync_rwsem[q.slot]);
+	else { down_write(&sync_rwsem[q.slot]); acquired=true; }
+	if(acquired) {
+		q.acquired_ns=ktime_get_ns();
+		if(q.hold_us) {
+			if(q.family==1) udelay(q.hold_us);
+			else usleep_range(q.hold_us,q.hold_us+50);
+		}
+		q.release_begin_ns=ktime_get_ns();
+		if(q.family==1) spin_unlock(&sync_spin[q.slot]);
+		else if(q.operation==1) up_read(&sync_rwsem[q.slot]);
+		else up_write(&sync_rwsem[q.slot]);
+		q.released_ns=ktime_get_ns();
+	} else q.result=-EBUSY;
+	up_read(&fixture_lifetime);
+	return copy_to_user((void __user *)arg,&q,sizeof(q))?-EFAULT:0;
+}
 struct dentry_test_context { struct task_struct *task; struct dentry *dentry; u64 slowpaths; };
 static DEFINE_PER_CPU(struct dentry_test_context, dentry_test);
 #ifdef CONFIG_CIS_OBSERVE
@@ -158,6 +206,7 @@ static long fixture_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 	struct mutex *lock;
 	(void)file;
 	if(!capable(CAP_SYS_ADMIN)) return -EPERM;
+	if(cmd==CIS_FIXTURE_SYNC) return sync_ioctl(arg);
 	if(cmd==CIS_FIXTURE_DENTRY_DELAY) {
 		u32 enable;
 		int ret=0;
@@ -275,8 +324,9 @@ static const struct file_operations ops={.owner=THIS_MODULE,.open=fixture_open,.
 static struct miscdevice device={.minor=MISC_DYNAMIC_MINOR,.name="cis-fixture",.fops=&ops,.mode=0600};
 static int __init fixture_init(void)
 {
-	int ret;
+	int ret, i;
 	if(!isolated_vm) return -EPERM;
+	for(i=0;i<2;i++) { spin_lock_init(&sync_spin[i]); init_rwsem(&sync_rwsem[i]); }
 	ww_mutex_init(&attempt_ww[0],&attempt_class);
 	ww_mutex_init(&attempt_ww[1],&attempt_class);
 #ifdef CONFIG_CIS_OBSERVE

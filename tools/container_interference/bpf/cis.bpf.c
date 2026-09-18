@@ -17,10 +17,10 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,2); __type(key,__u64
 #endif
 struct { __uint(type,BPF_MAP_TYPE_PERF_EVENT_ARRAY); __uint(max_entries,512); __type(key,__u32); __type(value,__u32); } events SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(key,__u32); __type(value,struct cis_bpf_stats); } stats SEC(".maps");
-#if CIS_PROFILE == 0 || CIS_PROFILE == 4
+#if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5
 struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,CIS_STACKS); __type(key,__u32); __type(value,__u64[CIS_STACK_DEPTH]); } stacks SEC(".maps");
 #endif
 #if CIS_PROFILE == 0
@@ -143,7 +143,7 @@ int sched_wait(struct bpf_raw_tracepoint_args *ctx)
 }
 #endif
 
-#if CIS_PROFILE == 0 || CIS_PROFILE == 4
+#if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5
 static __always_inline int begin(void *ctx,__u64 object,__u32 type,__u32 kind,__u32 flags)
 {
 	struct cis_identity id={0};
@@ -195,12 +195,13 @@ static __always_inline int finish(void *ctx,__u64 object,__u32 type,__u32 kind,_
 	return 0;
 }
 
-#if CIS_PROFILE == 0
+#if CIS_PROFILE == 0 || CIS_PROFILE == 5
 SEC("raw_tp/contention_begin")
 int lock_begin(struct bpf_raw_tracepoint_args *ctx) { return begin(ctx,ctx->args[0],CIS_LOCK_WAIT,CIS_DIAG_LOCK,ctx->args[1]); }
 SEC("raw_tp/contention_end")
 int lock_end(struct bpf_raw_tracepoint_args *ctx) { return finish(ctx,ctx->args[0],CIS_LOCK_WAIT,CIS_DIAG_LOCK,ctx->args[1]); }
 #endif
+#if CIS_PROFILE == 0 || CIS_PROFILE == 4
 SEC("raw_tp/mm_vmscan_direct_reclaim_begin")
 int reclaim_begin(struct bpf_raw_tracepoint_args *ctx) { return begin(ctx,0,CIS_RECLAIM,CIS_DIAG_RECLAIM,0); }
 SEC("raw_tp/mm_vmscan_direct_reclaim_end")
@@ -210,6 +211,7 @@ SEC("raw_tp/mm_vmscan_memcg_reclaim_begin")
 int memcg_begin(struct bpf_raw_tracepoint_args *ctx) { return begin(ctx,0,CIS_MEMCG_RECLAIM,CIS_DIAG_RECLAIM,0); }
 SEC("raw_tp/mm_vmscan_memcg_reclaim_end")
 int memcg_end(struct bpf_raw_tracepoint_args *ctx) { return finish(ctx,0,CIS_MEMCG_RECLAIM,CIS_DIAG_RECLAIM,0); }
+#endif
 #endif
 
 #if CIS_PROFILE == 0

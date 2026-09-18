@@ -34,4 +34,13 @@ struct cis_fixture_attempt {
 };
 #define CIS_FIXTURE_ATTEMPT _IOWR('C',9,struct cis_fixture_attempt)
 #define CIS_FIXTURE_DENTRY_DELAY _IOW('C',10,__u32)
+/* family: 1 spin, 2 rwsem; operation: 0 write, 1 read, 2 try-write, 3 reset. */
+struct cis_fixture_sync {
+	__u32 family, slot, operation, hold_us;
+	__s32 result;
+	__u32 reserved;
+	__u64 object, generation, tid, cgroup_id;
+	__u64 begin_ns, acquired_ns, release_begin_ns, released_ns;
+};
+#define CIS_FIXTURE_SYNC _IOWR('C',11,struct cis_fixture_sync)
 #endif

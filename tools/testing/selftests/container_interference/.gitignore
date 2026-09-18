@@ -11,5 +11,6 @@
 /entry_workload
 /entry_storm
 /session_launch
+/sync_workload
 __pycache__/
 *.pyc

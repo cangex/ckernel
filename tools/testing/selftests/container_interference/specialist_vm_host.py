@@ -24,13 +24,15 @@ def run(args):
     os.umask(0o077)
     base = Path('/root/cis-20260916-232524')
     scratch = Path('/dev/shm/cis-x-20260918')
-    source = base/'periodic/kernel'
+    source = Path(args.source).resolve() if args.source else base/'periodic/kernel'
     evidence, image, initrd = [Path(x).resolve() for x in (args.evidence, args.image, args.initrd)]
     if os.uname().machine != 'aarch64' or os.geteuid() != 0:
         raise PermissionError('dedicated ARM64 development host required')
     if (not evidence.is_relative_to(base/'evidence') or not image.is_relative_to(base)
             or not initrd.is_relative_to(scratch) or not evidence.is_dir()):
         raise ValueError('outside dedicated artifact directories')
+    if source != base/'periodic/kernel' and not source.is_relative_to(scratch):
+        raise ValueError('source outside dedicated checkout directories')
     lock = os.open(base/'x-vm.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     if subprocess.run(['pgrep', '-f', '(^|/)qemu-system-aarch64( |$)'], stdout=subprocess.DEVNULL).returncode != 1:
@@ -99,6 +101,7 @@ def run(args):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     for name in ('image','image-sha256','initrd','evidence'): parser.add_argument('--'+name,required=True)
+    parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
     parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x1-sync'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     raise SystemExit(run(parser.parse_args()))

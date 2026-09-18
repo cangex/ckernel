@@ -53,10 +53,29 @@ pre-window readers and non-owner APIs need explicit incompleteness. Waiting
 end alone does not identify the blocker. No additional X1 owner resource
 is activated or accepted by this source-audit document.
 
+X1 first-layer implementation
+-----------------------------
+
+``sync.bpf.o`` loads only contention_begin/end and their bounded maps.
+It supplies source-bound E1 candidates, not holders or full rwsem reader
+sets. ``sync_report.py`` never infers a holder from repeated addresses.
+The existing producer recursion barrier does not prove that generic
+contention tracepoint recursion losses are zero; that coverage is explicitly
+UNVERIFIED. Full entry and background costs remain unaccepted.
+
+``sync_vm.py`` freezes three rounds of shared/private spinlocks, mixed
+rwsem access, independent rwsems, reader-only and try-write cases. Fixture
+ioctl truth brackets acquisition and release; ``sync_check.py`` validates
+candidate object, task, cgroup and interval. It does not insert ground-truth
+holders into the measured report, or use missing qspinlock events to claim
+a population recall rate. Spin holds are bounded to 100 microseconds,
+rwsem holds to 2 milliseconds, only inside a disposable VM. Kernel locking
+algorithms are unchanged. Runtime results must be collected separately.
+
 Remaining stages
 ----------------
 
-X1 owner adapters/fixtures; X2 page_counter updates; X3 allocator stages;
+X1 owner adapters and full counterexamples; X2 page_counter updates; X3 allocator stages;
 X4 Socket/backlog/skb; X5 block I/O; X6 specialist routing; X7 integration
 remain unaccepted until their own code, runtime truth and quality results
 are available. Schema availability is not resource coverage.
