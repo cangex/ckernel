@@ -20,18 +20,22 @@ def sha(path):
     return value.hexdigest()
 
 
+def scratch_path(path):
+    return any(path.is_relative_to(root) for root in
+               (Path('/dev/shm/cis-x-20260918'), Path('/dev/shm/cis-x-20260919')))
+
+
 def run(args):
     os.umask(0o077)
     base = Path('/root/cis-20260916-232524')
-    scratch = Path('/dev/shm/cis-x-20260918')
     source = Path(args.source).resolve() if args.source else base/'periodic/kernel'
     evidence, image, initrd = [Path(x).resolve() for x in (args.evidence, args.image, args.initrd)]
     if os.uname().machine != 'aarch64' or os.geteuid() != 0:
         raise PermissionError('dedicated ARM64 development host required')
     if (not evidence.is_relative_to(base/'evidence') or not image.is_relative_to(base)
-            or not initrd.is_relative_to(scratch) or not evidence.is_dir()):
+            or not scratch_path(initrd) or not evidence.is_dir()):
         raise ValueError('outside dedicated artifact directories')
-    if source != base/'periodic/kernel' and not source.is_relative_to(scratch):
+    if source != base/'periodic/kernel' and not scratch_path(source):
         raise ValueError('source outside dedicated checkout directories')
     lock = os.open(base/'x-vm.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
