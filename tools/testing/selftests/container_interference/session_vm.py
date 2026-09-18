@@ -30,6 +30,24 @@ if not Path('/cis-disposable-vm').exists():
     raise SystemExit('dedicated VM marker missing')
 OUT = Path('/tmp/session-evidence')
 OUT.mkdir()
+fault_audit = (OUT/'fault-actions.jsonl').open('x') if args.faults else None
+fault_sequence = 0
+
+
+def fault_event(value):
+    global fault_sequence
+    if fault_audit is None:return
+    if fault_audit.tell() > 16*1024*1024:raise RuntimeError('fault audit bound exceeded')
+    fault_sequence += 1
+    fault_audit.write(json.dumps(dict(sequence=fault_sequence,**value))+'\n')
+
+
+def inject_signal(pid, sig, sid, role):
+    ticks=int(Path('/proc/%d/stat'%pid).read_text().rsplit(')',1)[1].split()[19])
+    before=time.monotonic_ns()
+    os.kill(pid,sig)
+    fault_event(dict(kind='signal',pid=pid,start_ticks=ticks,signal=int(sig),session_id=sid,role=role,
+                     before_ns=before,after_ns=time.monotonic_ns(),syscall_result=0))
 if args.diagnose_recursion:
     # Needed for addresses in the bounded diagnostic; do not disable KASLR.
     (OUT/'observer-kallsyms.log').write_text(Path('/proc/kallsyms').read_text())
@@ -54,8 +72,11 @@ def request(op, **fields):
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as conn:
         conn.settimeout(15)
         conn.connect(SOCK)
-        conn.send(json.dumps(dict(version=1, op=op, **fields)).encode())
+        message=dict(version=1, op=op, **fields)
+        before=time.monotonic_ns()
+        conn.send(json.dumps(message).encode())
         result = json.loads(conn.recv(8192))
+        fault_event(dict(kind='request',before_ns=before,after_ns=time.monotonic_ns(),request=message,response=result))
         if not result['ok']: raise RuntimeError(result)
         return result['data']
 
@@ -142,6 +163,9 @@ if args.resource_faults or args.stage_faults:
     def inventory():
         return json.loads(subprocess.check_output(['/profile/session-residue','--snapshot'],text=True))
     original=inventory()
+    inventory_audit=dict(before=original, checks=[])
+    inventory_path=OUT/'resource-inventories.json'
+    inventory_path.write_text(json.dumps(inventory_audit))
     observations=[]
     for limit in range(4,25) if args.resource_faults else ():
         sid=begin('ip','fdLimit%d'%limit,inject='fd_limit_%d'%limit)['session_id']
@@ -152,6 +176,9 @@ if args.resource_faults or args.stage_faults:
             remaining=inventory()
             if remaining==original: break
             time.sleep(.02)
+        inventory_audit['checks'].append(dict(nonce='fdLimit%d'%limit,session_id=sid,
+                                             after=remaining,time_ns=time.monotonic_ns()))
+        inventory_path.write_text(json.dumps(inventory_audit))
         assert remaining==original, (original,remaining)
         observations.append(dict(limit=limit,result=record['result'],reason=record['receipt']['reason'],
                                  inventory_restored=True))
@@ -169,6 +196,9 @@ if args.resource_faults or args.stage_faults:
             remaining=inventory()
             if remaining==original: break
             time.sleep(.02)
+        inventory_audit['checks'].append(dict(nonce='stage'+point.replace('_',''),session_id=sid,
+                                             after=remaining,time_ns=time.monotonic_ns()))
+        inventory_path.write_text(json.dumps(inventory_audit))
         assert remaining==original, (original,remaining)
         lines=(OUT/'records'/(sid+'.jsonl')).read_text().splitlines()
         injected=[json.loads(line) for line in lines if json.loads(line).get('kind')=='fault_injection']
@@ -307,24 +337,24 @@ if args.cost:
                 print('CIS_PROFILE_COST '+label,flush=True)
 if args.faults:
     sid=begin('owner','workerCrash')['session_id'];window(sid)
-    os.kill(request('status',session=sid)['worker_pid'],signal.SIGKILL)
+    inject_signal(request('status',session=sid)['worker_pid'],signal.SIGKILL,sid,'worker')
     assert finished(sid)['result']=='FAILED'
     print('CIS_PROFILE_FAULT worker_crash_cleaned=1',flush=True)
     sid=begin('ip','workerStop')['session_id'];window(sid)
-    os.kill(request('status',session=sid)['worker_pid'],signal.SIGSTOP)
+    inject_signal(request('status',session=sid)['worker_pid'],signal.SIGSTOP,sid,'worker')
     record=finished(sid,allow_fault=True)
     assert record['state']=='FAULTED'
     request('recover')
     print('CIS_PROFILE_FAULT worker_stop_faulted_recovered=1',flush=True)
     sid=begin('owner','controllerStop')['session_id'];window(sid)
-    os.kill(daemon.pid,signal.SIGSTOP);time.sleep(2.5);os.kill(daemon.pid,signal.SIGCONT)
+    inject_signal(daemon.pid,signal.SIGSTOP,sid,'controller');time.sleep(2.5);inject_signal(daemon.pid,signal.SIGCONT,sid,'controller')
     assert finished(sid)['result']=='COMPLETE'
     print('CIS_PROFILE_FAULT controller_stop_worker_deadline=1',flush=True)
     for both in (False,True):
         sid=begin('ip','bothCrash' if both else 'controllerCrash')['session_id'];window(sid)
         worker=request('status',session=sid)['worker_pid']
-        if both:os.kill(worker,signal.SIGKILL)
-        os.kill(daemon.pid,signal.SIGKILL);daemon.wait(timeout=10)
+        if both:inject_signal(worker,signal.SIGKILL,sid,'worker')
+        inject_signal(daemon.pid,signal.SIGKILL,sid,'controller');daemon.wait(timeout=10)
         for _ in range(500):
             if not Path('/proc/%d'%worker).exists():break
             time.sleep(.01)
@@ -341,6 +371,7 @@ if args.faults:
         print('CIS_PROFILE_FAULT '+('both_crash' if both else 'controller_crash')+'_faulted_recovered=1',flush=True)
 request('stop');assert daemon.wait(timeout=10)==0
 daemon_log.close()
+if fault_audit is not None:fault_audit.close()
 print('CIS_PROFILE_QUALITY_FAILURES '+json.dumps(quality_failures),flush=True)
 print('CIS_PROFILE_VM_FUNCTIONAL_PASS=%d' % (not quality_failures),flush=True)
 raise SystemExit(bool(quality_failures))

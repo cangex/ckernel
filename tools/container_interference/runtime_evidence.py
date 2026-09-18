@@ -77,6 +77,33 @@ def analyze(text, source):
 
     check('real_fd_exhaustion', ['fdLimit%d'%i for i in range(4,25)], fd_exhaustion,
           'predeclared RLIMIT_NOFILE 4..24 sweep; not all resource failures')
+    if checks['real_fd_exhaustion']['status']=='PASS' and not any(records[nonces['fdLimit%d'%i]]['result']=='PARTIAL' for i in range(4,25)):
+        checks['real_fd_exhaustion'].update(status='FAIL', defects=['no limit-induced partial case observed'])
+    inventories=[body for path,body in files.items() if path.endswith('/resource-inventories.json')]
+    restored=dict(status='BLOCKED',reason='raw before/after inventory absent')
+    if len(inventories)>1:raise ValueError('duplicate resource inventory audit')
+    if inventories:
+        audit,_=json.JSONDecoder().raw_decode(inventories[0].lstrip())
+        baseline=audit['before'];seen=set();wrong=[];previous=-1
+        def valid_snapshot(value):
+            return isinstance(value,dict) and set(value)=={'maps','programs'} and all(
+                isinstance(v,list) and len(v)<=4096 and all(type(x) is int and x>0 for x in v) and v==sorted(set(v))
+                for v in value.values())
+        if not valid_snapshot(baseline):raise ValueError('invalid baseline BPF inventory')
+        for row in audit['checks']:
+            nonce=row['nonce']
+            if nonce in seen or row['time_ns']<previous:raise ValueError('duplicate/unordered inventory audit')
+            seen.add(nonce);previous=row['time_ns']
+            if not valid_snapshot(row['after']):raise ValueError('invalid final BPF inventory')
+            if nonce not in nonces or str(row['session_id'])!=nonces[nonce] or row['after']!=baseline:
+                wrong.append(nonce)
+        required={'fdLimit%d'%i for i in range(4,25)}|{'stage'+s.replace('_','') for s in STAGES}
+        restored=dict(status='FAIL' if wrong else 'PASS' if seen==required else 'BLOCKED',
+                      missing=sorted(required-seen),defects=wrong,
+                      scope='enumerable BPF inventory restored, not deferred memory/CPU reclamation')
+    checks['inventory_restoration']=restored
+    from lifecycle_evidence import analyze as lifecycle_analyze
+    checks['crash_recovery']=lifecycle_analyze(files,records,clean_exit)
     return dict(schema='cis-runtime-subclaims-v1', subchecks=checks,
                 raw_clean_exit=clean_exit, full_lifecycle_complete=False,
                 full_resource_failures_complete=False,

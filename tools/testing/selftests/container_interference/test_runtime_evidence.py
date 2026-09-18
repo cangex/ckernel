@@ -52,5 +52,16 @@ class RuntimeEvidence(unittest.TestCase):
         self.assertEqual(analyze(text,{'worker_sha256':'a'})['subchecks']['real_fd_exhaustion']['status'],'PASS')
         self.assertEqual(analyze(text.replace('soft=4 ','soft=99 ',1),{'worker_sha256':'a'})['subchecks']['real_fd_exhaustion']['status'],'FAIL')
 
+    def test_inventory_restore_checks_raw_ids(self):
+        audit=dict(before={'maps':[],'programs':[]},checks=[dict(nonce='stage'+stage.replace('_',''),session_id=i+1,
+                   time_ns=i+1,after={'maps':[],'programs':[]}) for i,stage in enumerate(STAGES)])
+        text=self.log()+'\nCIS_FILE /tmp/resource-inventories.json\n'+json.dumps(audit)
+        self.assertEqual(analyze(text,{'worker_sha256':'a'})['subchecks']['inventory_restoration']['status'],'BLOCKED')
+        audit['checks'][0]['after']['maps']=[99]
+        text=self.log()+'\nCIS_FILE /tmp/resource-inventories.json\n'+json.dumps(audit)
+        self.assertEqual(analyze(text,{'worker_sha256':'a'})['subchecks']['inventory_restoration']['status'],'FAIL')
+        audit['before']={}
+        with self.assertRaises(ValueError):analyze(self.log()+'\nCIS_FILE /tmp/resource-inventories.json\n'+json.dumps(audit),{'worker_sha256':'a'})
+
 
 if __name__=='__main__':unittest.main()
