@@ -5,10 +5,11 @@ import time
 
 
 def expected_fields(version, collector):
-    if version not in ('1', '2') or version == '1' and collector == 'counter':
+    if version not in ('1', '2', '3') or version == '1' and collector == 'counter' or version != '3' and collector == 'allocator':
         raise ValueError('unsupported source-switch version')
     result = dict(version=version, owner=str(int(collector=='owner')), fd=str(int(collector=='fd')))
-    if version == '2': result['counter'] = str(int(collector=='counter'))
+    if version in ('2', '3'): result['counter'] = str(int(collector=='counter'))
+    if version == '3': result['allocator'] = str(int(collector=='allocator'))
     return result
 
 

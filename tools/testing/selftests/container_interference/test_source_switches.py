@@ -23,5 +23,12 @@ class SourceSwitchTests(unittest.TestCase):
         with patch('source_switches.Path.read_text',return_value='version=1 owner=0\n'):
             with self.assertRaises(ValueError): observe(None)
 
+    def test_allocator_does_not_enable_counter_or_owner(self):
+        with patch('source_switches.Path.read_text', return_value='version=3 owner=0 fd=0 counter=0 allocator=1\n'):
+            validate(observe('allocator'),'allocator',0,2**64-1)
+            with self.assertRaises(ValueError): observe('counter')
+        with patch('source_switches.Path.read_text', return_value='version=2 owner=0 fd=0 counter=0\n'):
+            with self.assertRaises(ValueError): observe('allocator')
+
 
 if __name__=='__main__': unittest.main()

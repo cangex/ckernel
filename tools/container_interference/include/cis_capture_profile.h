@@ -18,6 +18,8 @@ static inline int cis_profile_program(unsigned int profile, const char *name)
 		return !strcmp(name, "lock_begin") || !strcmp(name, "lock_end");
 	if (profile == 7)
 		return !strcmp(name, "counter_step");
+	if (profile == 8)
+		return !strcmp(name, "alloc_step");
 	return (profile == 2 || profile == 6) && (!strcmp(name, "owner_state") || !strcmp(name, "owner_switch"));
 }
 
@@ -25,14 +27,14 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 {
 	if (!profile)
 		return 1;
-	if (profile < 1 || profile > 7)
+	if (profile < 1 || profile > 8)
 		return 0;
 	if (!strcmp(name, "session_window") || !strcmp(name, "roots") ||
 	    !strcmp(name, "events") || !strcmp(name, "stats"))
 		return 1;
 	if (profile == 3)
 		return !strcmp(name, "targets");
-	if (profile == 4 || profile == 5 || profile == 7)
+	if (profile == 4 || profile == 5 || profile == 7 || profile == 8)
 		return !strcmp(name, "targets") || !strcmp(name, "stacks") || !strcmp(name, "pending");
 	return (profile == 2 || profile == 6) && (!strcmp(name, "targets") || !strcmp(name, "stacks") ||
 		!strcmp(name, "watched") || !strcmp(name, "holders") ||

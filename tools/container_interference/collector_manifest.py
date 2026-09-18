@@ -42,6 +42,11 @@ COLLECTORS = {
                     clock='monotonic_wall_ns', contexts=['synchronous_task'],
                     object_kinds=['page_counter_usage', 'children_min_usage', 'children_low_usage'],
                     source_filter='independent sampled calls with first 64 steps; actual traversal, no synthetic ancestor walk; protocol 2 native init generation, legacy or zero generation unknown'),
+    'allocator': dict(profile=8, programs=['alloc_step'],
+                    maps=COMMON_MAPS + ['targets', 'stacks', 'pending'], relation='allocation_stages',
+                    clock='monotonic_wall_ns', contexts=['synchronous_task'],
+                    object_kinds=['kmem_cache_address', 'kmem_cache_node_list_lock_address', 'sampled_allocation'],
+                    source_filter='one exact boot-selected cache; per-CPU call sampling and first 64 stages; source pointer context across migration; no inferred holder or cache lifetime'),
 }
 
 

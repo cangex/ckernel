@@ -11,8 +11,10 @@
 #define CIS_DIAG_WORK 8
 #define CIS_DIAG_OWNER 16
 #define CIS_DIAG_COUNTER 32
+#define CIS_DIAG_ALLOCATOR 64
 #define CIS_OWNER_EVENT 12
 #define CIS_COUNTER_EVENT 13
+#define CIS_ALLOC_EVENT 14
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -47,6 +49,12 @@ struct cis_counter_event {
 	__u64 leaf_generation, object_generation, parent_generation;
 	__s64 usage;
 	__u32 operation, stage, depth, ordinal, sample_shift, reserved;
+};
+struct cis_alloc_event {
+	struct cis_event base;
+	__u64 cache, resource, task_start, gfp, requested, count;
+	__u32 operation, stage, ordinal, sample_shift;
+	__s32 requested_node, observed_node;
 };
 struct cis_object_key { __u64 object; __u32 kind, reserved; };
 struct cis_watch { __u64 id, generation, start_ns, deadline_ns, epoch, events; };
