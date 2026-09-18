@@ -15,7 +15,7 @@ MAX_RELATIONS=128
 def analyze(record,raw):
     collector=record['collector']; base=explain(record,raw); relations=[]; omitted=0
     specialist=None
-    if collector in ('sync','counter','allocator','net','block'):
+    if collector in ('sync','counter','allocator','net','block','rwsem'):
         module=__import__(collector+'_report'); specialist=module.analyze(record,raw)
     quality=specialist['quality'] if specialist else base['quality']
     scope=specialist.get('scope_audit',{}) if specialist else {}
@@ -75,6 +75,16 @@ def analyze(record,raw):
                 for f in sock['backlog']:
                     add('backlog_service_release','E2',None,dict(resource,skb=f['skb_address'],queue_epoch_ns=f['queue_epoch_ns']),[],
                         [f['queue_epoch_ns'],f['release_entry_ns']],[],['packet origin and unique blocker unknown'],queue_episode=f)
+        elif collector=='rwsem':
+            for obj in specialist['objects']:
+                for f in obj['waits']:
+                    known=[h['holder'] for h in f['observed_holders'] if h['evidence']=='E2']
+                    add('rwsem_holder_waiter','E2' if known else 'E1',f['waiter'],
+                        dict(kind='rw_semaphore',address=obj['address'],init_ns=obj['init_ns'],lifetime=obj['lifetime']),
+                        known,f['interval_ns'],f['stack_leaf_to_root'],
+                        ['observed reader set is not complete; elapsed time is not spin cycles'],
+                        observed_holders=f['observed_holders'],mode=f['mode'],outcome=f['outcome'],
+                        unexplained_elapsed_ns=f['unexplained_elapsed_ns'])
         elif collector=='block':
             for f in specialist['requests']:
                 add('block_request_episode','E2',f['submitter'],dict(kind='observed_request',address=f['request'],episode_ns=f['episode_ns']),
@@ -102,7 +112,7 @@ def markdown(report):
     labels={'holder_waiter':'持有与等待','wait_interval_only':'锁等待，持有者未闭合','shared_updates':'共同更新同一计数器',
         'counter_operation':'计数更新/回滚','allocation_stages':'对象分配阶段','allocation_release_entry':'分配与释放入口',
         'socket_holder_waiter':'Socket逻辑锁等待','backlog_service_release':'backlog排队、服务与释放',
-        'block_request_episode':'块请求排队与服务'}
+        'block_request_episode':'块请求排队与服务','rwsem_holder_waiter':'读写锁已观察持有与等待'}
     lines=['# 容器周期Profile解释报告','','会话 `%s`，专项 `%s`，证据质量 **%s**。'%(report['session_id'],report['collector'],report['quality']['status']),
         '这是受限路径上的观察报告，不是总干扰率或生产性能认证。','','## 已观察关系']
     for r in report['relations'][:16]:

@@ -5,7 +5,7 @@
   "required": ["schema", "boot_id", "session_id", "collector", "quality", "relations", "raw_sha256", "source", "timing", "total_interference_ns"],
   "properties": {
     "schema": {"const": "cis-explanation-v2"},
-    "collector": {"enum": ["ip", "owner", "fd", "sync", "sched", "reclaim", "counter", "allocator", "net", "block"]},
+    "collector": {"enum": ["ip", "owner", "fd", "sync", "sched", "reclaim", "counter", "allocator", "net", "block", "rwsem"]},
     "relations": {
       "type": "array", "maxItems": 128,
       "items": {

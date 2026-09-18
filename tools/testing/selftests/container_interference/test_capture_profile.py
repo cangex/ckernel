@@ -94,7 +94,12 @@ int main(void) {
     assert(cis_profile_program(10, "block_complete"));
     assert(cis_profile_program(10, "block_merge"));
     assert(!cis_profile_program(10, "net_state"));
-    assert(!cis_profile_map(11, "roots"));
+    assert(cis_profile_map(11, "roots"));
+    assert(cis_profile_map(11, "rwsem_watched"));
+    assert(cis_profile_program(11, "rwsem_state"));
+    assert(!cis_profile_program(11, "owner_state"));
+    assert(!cis_profile_map(11, "holders"));
+    assert(!cis_profile_map(12, "roots"));
     return 0;
 }
 '''

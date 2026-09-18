@@ -3,7 +3,7 @@ CC ?= cc
 CFLAGS ?= -O2 -g
 CFLAGS += -Wall -Wextra -Werror
 LDLIBS += -pthread
-TEST_GEN_PROGS := workload baseline identity fleet entry_workload entry_storm session_launch sync_workload fd_workload fd_cross_workload counter_workload counter_mem_workload allocator_workload allocator_fixture_workload net_workload net_backlog_workload block_workload diagnosis_workload joint_workload
+TEST_GEN_PROGS := workload baseline identity fleet entry_workload entry_storm session_launch sync_workload fd_workload fd_cross_workload counter_workload counter_mem_workload allocator_workload allocator_fixture_workload net_workload net_backlog_workload block_workload diagnosis_workload joint_workload rwsem_workload
 TEST_GEN_PROGS_EXTENDED := logic_test budget_test metrics_test fast_test recursion_snapshot_test
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
@@ -15,6 +15,7 @@ fd_cross_workload: fixture/uapi.h
 counter_workload: ../../../../include/uapi/linux/cis_counter_test.h
 allocator_fixture_workload: ../../../../include/uapi/linux/cis_alloc_test.h
 net_workload net_backlog_workload: net_fixture/uapi.h
+rwsem_workload: rwsem_fixture/uapi.h
 run_tests: all
 	./logic_test
 	./budget_test

@@ -20,7 +20,7 @@ struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(k
 #if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 7 || CIS_PROFILE == 8
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10 || CIS_PROFILE == 11
 #if CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10
 #define PROFILE_STACKS 2048
 #else
@@ -38,6 +38,9 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __typ
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,__u64); __type(value,struct cis_watch); } net_watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u64); __type(value,struct cis_net_event); } net_skb SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,struct cis_net_service_key); __type(value,struct cis_net_event); } net_service SEC(".maps");
+#endif
+#if CIS_PROFILE == 11
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,__u64); __type(value,struct cis_watch); } rwsem_watched SEC(".maps");
 #endif
 #if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 6
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");
@@ -114,6 +117,10 @@ static __always_inline void emit(void *ctx,struct cis_event *e)
 	if(bpf_perf_event_output(ctx,&events,BPF_F_CURRENT_CPU,e,sizeof(*e))) COUNT(s,lost);
 	else COUNT(s,emitted);
 }
+
+#if CIS_PROFILE == 11
+#include "rwsem_collect.h"
+#endif
 
 #if CIS_PROFILE == 9
 static __always_inline void net_actor(struct cis_net_event *e, u32 context)

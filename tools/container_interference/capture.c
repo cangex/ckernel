@@ -161,6 +161,18 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 			v->requested_node,v->observed_node,v->sample_shift,e->stack_id);
 		cis_report(ctx,"ALLOCATOR",r,d);return;
 	}
+	if(size>=sizeof(struct cis_rwsem_event) && size<=sizeof(struct cis_rwsem_event)+7 && e->type==CIS_RWSEM_EVENT) {
+		struct cis_rwsem_event *v=data;
+		char d[700];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 sample_time_ns=%llu object=0x%llx init_ns=%llu phase=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu cpu=%u skipped=%llu stack_id=%d",
+			(unsigned long long)e->time_ns,(unsigned long long)e->object,
+			(unsigned long long)e->sequence_ns,v->phase,(unsigned long long)e->tid,
+			(unsigned long long)v->actor_start,(unsigned long long)v->actor_id,
+			(unsigned long long)v->actor_generation,e->cpu,(unsigned long long)v->skipped,e->stack_id);
+		cis_report(ctx,"RWSEM",r,d);return;
+	}
 	if(size>=sizeof(struct cis_counter_event) && size<=sizeof(struct cis_counter_event)+7 && e->type==CIS_COUNTER_EVENT) {
 		struct cis_counter_event *v=data;
 		char d[1100];
@@ -256,7 +268,7 @@ static int attach(struct capture *c,const char *name,struct bpf_link **slot)
 
 static int configure_links(struct capture *c,unsigned int kinds)
 {
-	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end","owner_state","owner_switch","counter_step","alloc_step","alloc_release","net_state","net_release","block_start","block_insert","block_issue","block_requeue","block_complete","block_merge","block_remap"};
+	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end","owner_state","owner_switch","counter_step","alloc_step","alloc_release","net_state","net_release","block_start","block_insert","block_issue","block_requeue","block_complete","block_merge","block_remap","rwsem_state"};
 	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4,16,16,32,64,64,128,128,256,256,256,256,256,256,256};
 	_Static_assert(sizeof(names)/sizeof(names[0]) == CIS_DIAGNOSTIC_LINKS, "link names");
 	_Static_assert(sizeof(masks)/sizeof(masks[0]) == CIS_DIAGNOSTIC_LINKS, "link masks");

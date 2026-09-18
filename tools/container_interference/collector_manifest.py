@@ -58,6 +58,10 @@ COLLECTORS = {
                   clock='monotonic_wall_ns',contexts=['submission_task','completion_executor_separate'],
                   object_kinds=['observed_blk_mq_request_episode','queue_and_device'],
                   source_filter='native block_io_start opens 256 bounded watches; all registered target starts, no inference from bare request address; partial completion, merge and remap explicit; no unique blocking tenant claim'),
+    'rwsem': dict(profile=11, programs=['rwsem_state'], maps=COMMON_MAPS+['targets','stacks','rwsem_watched'],
+                  relation='rwsem_observed_holders', clock='monotonic_wall_ns', contexts=['synchronous_non_rt_task'],
+                  object_kinds=['rw_semaphore_observed_initialization'],
+                  source_filter='target init/attempt opens 64 watches, 1024 events/object; observed init required for E2; bounded eight-reader analysis; pre-window and non-owner use remain unknown'),
 }
 
 

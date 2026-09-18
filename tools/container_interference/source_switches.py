@@ -5,19 +5,20 @@ import time
 
 
 def expected_fields(version, collector):
-    if (version not in ('1', '2', '3', '4', '5', '6') or version == '1' and collector == 'counter'
-            or version not in ('3','4','5','6') and collector == 'allocator'
-            or version not in ('5','6') and collector == 'net'
-            or version != '6' and collector == 'block'):
+    if version not in ('1', '2', '3', '4', '5', '6', '7'):
+        raise ValueError('unsupported source-switch version')
+    v = int(version)
+    if v < {'counter':2, 'allocator':3, 'net':5, 'block':6, 'rwsem':7}.get(collector, 1):
         raise ValueError('unsupported source-switch version')
     result = dict(version=version, owner=str(int(collector=='owner')), fd=str(int(collector=='fd')))
-    if version in ('2', '3', '4', '5', '6'): result['counter'] = str(int(collector=='counter'))
-    if version in ('3', '4', '5', '6'): result['allocator'] = str(int(collector=='allocator'))
-    if version in ('4','5','6'): result['allocator_release'] = str(int(collector=='allocator'))
-    if version in ('5','6'): result.update(net=str(int(collector=='net')),net_release=str(int(collector=='net')))
-    if version=='6':
+    if v >= 2: result['counter'] = str(int(collector=='counter'))
+    if v >= 3: result['allocator'] = str(int(collector=='allocator'))
+    if v >= 4: result['allocator_release'] = str(int(collector=='allocator'))
+    if v >= 5: result.update(net=str(int(collector=='net')),net_release=str(int(collector=='net')))
+    if v >= 6:
         result.update({name:str(int(collector=='block')) for name in (
             'block_start','block_insert','block_issue','block_requeue','block_complete','block_merge','block_remap')})
+    if v >= 7: result['rwsem'] = str(int(collector=='rwsem'))
     return result
 
 
