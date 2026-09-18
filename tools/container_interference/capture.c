@@ -416,7 +416,8 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	c->cpu_stats=calloc(c->possible_cpus,sizeof(*c->cpu_stats));
 	if(!c->cpu_stats) goto fail;
 	/* More burst room on small systems, still <=4 MiB of payload globally. */
-	while(pages<16 && (unsigned long long)(pages*2)*4096*c->possible_cpus<=(4ULL<<20)) pages*=2;
+	pages=cis_profile_buffer_pages(ctx->session_collector,c->possible_cpus);
+	if(!pages) goto fail;
 	stage="output_perf_buffer";
 	if(fault_at(ctx,stage,1)) goto fail;
 	c->ring=perf_buffer__new(mapfd(c,"events"),pages,event,lost,c,NULL);

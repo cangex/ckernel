@@ -3,6 +3,19 @@
 #define CIS_CAPTURE_PROFILE_H
 #include <string.h>
 
+static inline int cis_profile_buffer_pages(unsigned int profile, unsigned int cpus)
+{
+	unsigned int pages = 2;
+	unsigned int limit = profile == 8 ? 128 : 16;
+
+	if (!cpus || cpus > 512)
+		return 0;
+	/* Allocation stage bursts use the existing global 4 MiB payload budget. */
+	while (pages < limit && (unsigned long long)pages * 2 * 4096 * cpus <= (4ULL << 20))
+		pages *= 2;
+	return pages;
+}
+
 static inline int cis_profile_program(unsigned int profile, const char *name)
 {
 	if (!profile)
