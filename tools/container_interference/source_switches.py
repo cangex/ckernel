@@ -5,12 +5,15 @@ import time
 
 
 def expected_fields(version, collector):
-    if version not in ('1', '2', '3', '4') or version == '1' and collector == 'counter' or version not in ('3','4') and collector == 'allocator':
+    if (version not in ('1', '2', '3', '4', '5') or version == '1' and collector == 'counter'
+            or version not in ('3','4','5') and collector == 'allocator'
+            or version != '5' and collector == 'net'):
         raise ValueError('unsupported source-switch version')
     result = dict(version=version, owner=str(int(collector=='owner')), fd=str(int(collector=='fd')))
-    if version in ('2', '3', '4'): result['counter'] = str(int(collector=='counter'))
-    if version in ('3', '4'): result['allocator'] = str(int(collector=='allocator'))
-    if version == '4': result['allocator_release'] = str(int(collector=='allocator'))
+    if version in ('2', '3', '4', '5'): result['counter'] = str(int(collector=='counter'))
+    if version in ('3', '4', '5'): result['allocator'] = str(int(collector=='allocator'))
+    if version in ('4','5'): result['allocator_release'] = str(int(collector=='allocator'))
+    if version == '5': result.update(net=str(int(collector=='net')),net_release=str(int(collector=='net')))
     return result
 
 

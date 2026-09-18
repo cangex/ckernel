@@ -33,3 +33,16 @@ class AllocatorAudit(unittest.TestCase):
         self.assertEqual(result['declared_counter_bytes'],72)
         snapshots[1]['source_audit']=snapshots[1]['source_audit'].replace('release_active=0','release_active=1')
         with self.assertRaises(ValueError): delta(*snapshots)
+
+    def test_context_guard_cost_and_gaps_preserved(self):
+        snapshots=[]
+        for n in (0,1):
+            row=self.snapshot(n)
+            row['source_audit']=row['source_audit'].replace('version=1 active=0','version=3 active=0 release_active=0').replace('bytes_per_cpu=48','bytes_per_cpu=96 guard_bytes_per_cpu=3')
+            row['source_audit']=row['source_audit'].rstrip()+' free_entries=%d free_items=%d free_capped=0 free_nested=%d free_nmi=0 free_irq=%d\n'%(100*n,5*n,n,2*n)
+            snapshots.append(row)
+        result=delta(*snapshots)
+        self.assertEqual(result['totals']['free_nested'],1)
+        self.assertEqual(result['totals']['free_irq'],2)
+        self.assertEqual(result['declared_guard_bytes'],3)
+        self.assertEqual(result['declared_counter_bytes'],96)

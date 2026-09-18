@@ -30,3 +30,13 @@ class AllocatorSource(unittest.TestCase):
         self.assertIn('count > CIS_CA_STEPS',text)
         self.assertIn('this_cpu_inc(cis_skipped)',text)
         self.assertNotIn('current->',text)
+
+    def test_release_guard_separates_preempting_context_not_owner(self):
+        root=Path(__file__).resolve().parents[4]
+        text=(root/'kernel/locking/cis_observe.c').read_text().split('void __cis_alloc_release(',1)[1].split('void __cis_alloc_step(',1)[0]
+        self.assertIn('guard->active[context]',text)
+        self.assertIn('(!context && this_cpu_read(cis_in_trace))',text)
+        self.assertIn('cis_alloc_free_nested',text)
+        self.assertIn('cis_alloc_free_nmi',text)
+        self.assertIn('cis_alloc_free_irq',text)
+        self.assertNotIn('local_irq_disable',text)
