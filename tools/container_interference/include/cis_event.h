@@ -15,6 +15,7 @@
 #define CIS_OWNER_EVENT 12
 #define CIS_COUNTER_EVENT 13
 #define CIS_ALLOC_EVENT 14
+#define CIS_ALLOC_RELEASE_EVENT 15
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -55,6 +56,12 @@ struct cis_alloc_event {
 	__u64 cache, resource, task_start, gfp, requested, count;
 	__u32 operation, stage, ordinal, sample_shift;
 	__s32 requested_node, observed_node;
+};
+struct cis_alloc_live_key { __u64 cache, object; };
+struct cis_alloc_live { struct cis_event allocation; __u64 task_start; };
+struct cis_alloc_release_event {
+	struct cis_event base;
+	__u64 cache, allocation_task_start, executor_start, executor_id, executor_generation;
 };
 struct cis_object_key { __u64 object; __u32 kind, reserved; };
 struct cis_watch { __u64 id, generation, start_ns, deadline_ns, epoch, events; };

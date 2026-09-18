@@ -56,7 +56,7 @@ def verify(serial,output,fixture=False):
     order=case_order() if fixture else ORDER
     if fixture:
         if (plan.get('order')!=order or plan.get('sample_shift')!=0 or plan.get('cache')!='cis_alloc_test' or
-                plan.get('operations')!=4 or plan.get('cases')!=list(CASES) or plan.get('rounds')!=3):
+                plan.get('operations')!=4 or plan.get('cases')!=list(CASES) or plan.get('rounds')!=3 or not plan.get('release_tracking')):
             errors.append('frozen_plan')
         if 'CIS_ALLOC_FIXTURE_UNLOAD=0' not in text.splitlines(): errors.append('fixture_cleanup')
     elif (plan.get('order')!=order or plan.get('sample_shift')!=6 or plan.get('cache')!='maple_node' or
@@ -81,7 +81,7 @@ def verify(serial,output,fixture=False):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        result=check_case(label.split('-')[0],ev['window'],logs,report,identities) if fixture else check_work(ev['window'],logs,report,identities)
+        result=check_case(label.split('-')[0],ev['window'],logs,report,identities,require_releases=True) if fixture else check_work(ev['window'],logs,report,identities)
         audit=source_delta(ev['source_before'],ev['source_after'],
                            shift=0 if fixture else 6, cache='cis_alloc_test' if fixture else 'maple_node')
         if 'off' in label and any(audit['totals'].values()): errors.append('off_not_quiet_'+label)

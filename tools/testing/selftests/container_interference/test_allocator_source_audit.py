@@ -20,3 +20,16 @@ class AllocatorAudit(unittest.TestCase):
             b['source_audit']=b['source_audit'].replace(change,'')
             with self.assertRaises(ValueError): delta(self.snapshot(),b)
         with self.assertRaises(ValueError): delta(self.snapshot(2),self.snapshot(1))
+
+    def test_release_source_cost_and_incomplete_switch_rejected(self):
+        snapshots=[]
+        for n in (0,1):
+            row=self.snapshot(n)
+            row['source_audit']=row['source_audit'].replace('version=1 active=0','version=2 active=0 release_active=0').replace('bytes_per_cpu=48','bytes_per_cpu=72')
+            row['source_audit']=row['source_audit'].rstrip()+' free_entries=%d free_items=%d free_capped=0\n'%(100*n,5*n)
+            snapshots.append(row)
+        result=delta(*snapshots)
+        self.assertEqual(result['totals']['free_entries'],100)
+        self.assertEqual(result['declared_counter_bytes'],72)
+        snapshots[1]['source_audit']=snapshots[1]['source_audit'].replace('release_active=0','release_active=1')
+        with self.assertRaises(ValueError): delta(*snapshots)

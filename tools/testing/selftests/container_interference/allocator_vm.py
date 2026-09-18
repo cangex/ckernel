@@ -40,9 +40,9 @@ def run(fixture=False):
               scope='ordinary VMA split/merge bridge; no independent allocator-event recall or cost acceptance')
     if fixture:
         plan = dict(order=case_order(),cases=list(CASES),rounds=3,operations=4,roots=2,
-            sample_shift=0,cache='cis_alloc_test',window_ms=2000,cpu=[0,1],free_migration_cpu=[2,3],
+            sample_shift=0,cache='cis_alloc_test',release_tracking=True,window_ms=2000,cpu=[0,1],free_migration_cpu=[2,3],
             management_cpu=7,memory_max_bytes=64<<20,
-            scope='test-only native allocation truth; full-rate selected cache, no production recall or free ownership claim')
+            scope='test-only native allocation and release truth; full-rate selected cache, no production recall or free completion claim')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-allocator.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -102,12 +102,12 @@ def run(fixture=False):
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 report=analyze(record,(out/'records'/(sid+'.jsonl')).read_bytes())
                 identities = [record['root_identities'][t] for t in targets]
-                result=check_case(case,window,logs,report,identities) if fixture else check_work(window,logs,report,identities)
+                result=check_case(case,window,logs,report,identities,require_releases=True) if fixture else check_work(window,logs,report,identities)
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else:
                 idle=observe(None)
-                result=check_case(case,window,logs) if fixture else check_work(window,logs)
+                result=check_case(case,window,logs,require_releases=True) if fixture else check_work(window,logs)
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,source_before=source_before,source_after=snapshot(),exit_codes=codes,result=result)
             (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2)); results.append(evidence)

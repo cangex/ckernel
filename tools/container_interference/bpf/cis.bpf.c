@@ -26,6 +26,9 @@ struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,CIS_STACKS); 
 #if CIS_PROFILE == 0
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_work_state); } work_items SEC(".maps");
 #endif
+#if CIS_PROFILE == 8
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_alloc_live_key); __type(value,struct cis_alloc_live); } alloc_live SEC(".maps");
+#endif
 #if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 6
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,struct cis_object_key); __type(value,struct cis_owner_record); } holders SEC(".maps");
@@ -149,7 +152,54 @@ int alloc_step(struct bpf_raw_tracepoint_args *ctx)
 	e.observed_node = BPF_CORE_READ(sample, observed_node);
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);
+	if (e.base.object && (e.stage == 17 || (e.stage == 20 && e.operation == 1 && e.count == 1))) {
+		struct cis_alloc_live_key object_key = { .cache = e.cache, .object = e.base.object };
+		struct cis_alloc_live live = { .allocation = e.base, .task_start = e.task_start };
+		live.allocation.nesting = e.ordinal;
+		/* Never silently replace an unmatched lifetime at the same address. */
+		if (bpf_map_update_elem(&alloc_live, &object_key, &live, BPF_NOEXIST)) COUNT(s, rejected);
+	}
 	if (e.stage == 20) bpf_map_delete_elem(&pending, &key);
+	return 0;
+}
+
+SEC("raw_tp/cis_alloc_release")
+int alloc_release(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct cis_alloc_release_sample *sample = (void *)ctx->args[0];
+	struct cis_alloc_live_key key = { .cache = (u64)BPF_CORE_READ(sample, cache),
+		.object = (u64)BPF_CORE_READ(sample, object) };
+	struct cis_alloc_live *live;
+	struct cis_alloc_release_event e = {};
+	struct cis_bpf_stats *s = statistics();
+	struct task_struct *task = (void *)bpf_get_current_task();
+	struct cis_identity executor = {};
+	u64 now = BPF_CORE_READ(sample, time_ns);
+
+	COUNT(s, received);
+	live = bpf_map_lookup_elem(&alloc_live, &key);
+	if (!live) return 0;
+	if (!same_window(&live->allocation, CIS_DIAG_ALLOCATOR, now)) {
+		COUNT(s, expired); bpf_map_delete_elem(&alloc_live, &key); return 0;
+	}
+	e.base = live->allocation; e.allocation_task_start = live->task_start;
+	e.base.weight = e.base.time_ns; e.base.time_ns = now;
+	e.base.type = CIS_ALLOC_RELEASE_EVENT; e.cache = key.cache;
+	e.base.flags = BPF_CORE_READ(sample, context); e.base.cpu = bpf_get_smp_processor_id();
+	e.base.ip = BPF_CORE_READ(sample, caller);
+	e.base.stack_id = bpf_get_stackid(ctx, &stacks, 0);
+	e.base.executor_tid = 0;
+	if (!e.base.flags) {
+		e.base.executor_tid = bpf_get_current_pid_tgid();
+		e.executor_start = BPF_CORE_READ(task, start_boottime);
+		if (identity(task, &executor)) {
+			e.executor_id = executor.id; e.executor_generation = executor.generation;
+		}
+	}
+	/* The hook precedes publication for reuse; retire identity before returning. */
+	bpf_map_delete_elem(&alloc_live, &key);
+	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
+	else COUNT(s, emitted);
 	return 0;
 }
 #endif

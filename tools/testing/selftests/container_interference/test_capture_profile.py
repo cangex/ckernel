@@ -69,6 +69,10 @@ int main(void) {
     assert(cis_profile_map(7, "pending"));
     assert(!cis_profile_map(7, "holders"));
     assert(cis_profile_program(8, "alloc_step"));
+    assert(cis_profile_program(8, "alloc_release"));
+    assert(!cis_profile_program(7, "alloc_release"));
+    assert(cis_profile_map(8, "alloc_live"));
+    assert(!cis_profile_map(7, "alloc_live"));
     assert(!cis_profile_program(8, "counter_step"));
     assert(cis_profile_map(8, "roots"));
     assert(cis_profile_map(8, "pending"));

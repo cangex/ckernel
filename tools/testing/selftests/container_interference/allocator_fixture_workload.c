@@ -26,11 +26,16 @@ static int action(int fd, unsigned int operation, unsigned int cache,
 	struct cis_alloc_test_request r = { .action = operation, .cache = cache,
 		.count = count, .bulk = bulk };
 	int error = ioctl(fd, CIS_ALLOC_TEST_RUN, &r);
+	unsigned int i;
 	if (error < 0) { perror("allocator fixture"); return 1; }
-	printf("CIS_ALLOC_TRUTH index=%u action=%u cache=%u count=%u bulk=%u begin_ns=%llu end_ns=%llu cache_address=%llu returned=%u cpu=%u result=%d\n",
+	printf("CIS_ALLOC_TRUTH index=%u action=%u cache=%u count=%u bulk=%u begin_ns=%llu end_ns=%llu cache_address=%llu returned=%u cpu=%u result=%d callback_begin_ns=%llu callback_end_ns=%llu callback_cpu=%u callback_context=%u",
 		index, operation, cache, count, bulk, (unsigned long long)r.begin_ns,
 		(unsigned long long)r.end_ns, (unsigned long long)r.cache_address,
-		r.returned, r.cpu, error);
+		r.returned, r.cpu, error, (unsigned long long)r.callback_begin_ns,
+		(unsigned long long)r.callback_end_ns, r.callback_cpu, r.callback_context);
+	if (r.returned > CIS_AT_MAX) return 1;
+	for (i = 0; i < r.returned; i++) printf(" object%u=%llu", i, (unsigned long long)r.objects[i]);
+	putchar('\n');
 	return operation == CIS_AT_ALLOC && r.returned != count;
 }
 
@@ -38,7 +43,7 @@ int main(int argc, char **argv)
 {
 	struct timespec deadline;
 	unsigned long long start;
-	unsigned int cache, cpu, i, count, bulk, cold, migration;
+	unsigned int cache, cpu, i, count, bulk, cold, migration, deferred;
 	int fd, error;
 	if (argc != 5) return 2;
 	start = strtoull(argv[2], NULL, 10);
@@ -46,7 +51,8 @@ int main(int argc, char **argv)
 	cpu = strtoul(argv[4], NULL, 10);
 	cold = !strcmp(argv[1], "cold");
 	migration = !strcmp(argv[1], "migration");
-	bulk = !strcmp(argv[1], "bulk") || migration;
+	deferred = !strcmp(argv[1], "rcu");
+	bulk = !strcmp(argv[1], "bulk") || migration || deferred;
 	if (!cold && !migration && !bulk && strcmp(argv[1], "warm") && strcmp(argv[1], "private")) return 2;
 	if (cache > 1 || cpu > 1 || select_cpu(cpu)) return 2;
 	count = bulk ? 8 : cold ? 1 : 4;
@@ -61,7 +67,9 @@ int main(int argc, char **argv)
 		if (cold && action(fd, CIS_AT_SHRINK, cache, 0, 0, i)) return 4;
 		if (select_cpu(cpu) || action(fd, CIS_AT_ALLOC, cache, count, bulk, i)) return 5;
 		if (migration && select_cpu(cpu + 2)) return 6;
-		if (action(fd, CIS_AT_FREE, cache, 0, bulk, i)) return 7;
+		if (deferred) {
+			if (action(fd, CIS_AT_DEFER, cache, 0, 0, i) || action(fd, CIS_AT_DRAIN, cache, 0, 0, i)) return 7;
+		} else if (action(fd, CIS_AT_FREE, cache, 0, bulk, i)) return 7;
 		usleep(5000);
 	}
 	return close(fd) ? 8 : 0;

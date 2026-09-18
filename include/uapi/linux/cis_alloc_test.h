@@ -6,12 +6,17 @@
 #define CIS_AT_ALLOC 1
 #define CIS_AT_FREE 2
 #define CIS_AT_SHRINK 3
+#define CIS_AT_DEFER 4
+#define CIS_AT_DRAIN 5
 #define CIS_AT_MAX 128
 struct cis_alloc_test_request {
 	__u32 action, cache, count, bulk;
 	__u64 reserved[2];
 	__u64 begin_ns, end_ns, cache_address;
 	__u32 returned, cpu;
+	__u64 callback_begin_ns, callback_end_ns;
+	__u32 callback_cpu, callback_context;
+	__u64 objects[CIS_AT_MAX];
 };
 #define CIS_ALLOC_TEST_RUN _IOWR('C', 82, struct cis_alloc_test_request)
 #endif

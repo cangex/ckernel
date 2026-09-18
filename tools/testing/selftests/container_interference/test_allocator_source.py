@@ -21,3 +21,12 @@ class AllocatorSource(unittest.TestCase):
         self.assertIn('CIS_CA_NODE_HELD',text)
         self.assertIn('CIS_CA_BULK_ROLLBACK',text)
         self.assertNotIn('current->cis',text)
+
+    def test_release_precedes_reuse_and_gaps_invalidate_identity(self):
+        root=Path(__file__).resolve().parents[4]
+        text=(root/'mm/slub.c').read_text().split('static __fastpath_inline void slab_free(',1)[1]
+        self.assertLess(text.index('cis_alloc_release('),text.index('memcg_slab_free_hook('))
+        text=(root/'kernel/locking/cis_observe.c').read_text().split('void __cis_alloc_release(',1)[1].split('void __cis_alloc_step(',1)[0]
+        self.assertIn('count > CIS_CA_STEPS',text)
+        self.assertIn('this_cpu_inc(cis_skipped)',text)
+        self.assertNotIn('current->',text)

@@ -99,8 +99,10 @@ def analyze(record, raw):
             interval_ns=[key[-1],last['sample_time_ns']],elapsed_wall_ns=last['sample_time_ns']-key[-1],
             phases=intervals,exclusive_wall_ns=partition,visits=dict(Counter(STAGES[r['stage']] for r in rows)),
             sample_shift=first['sample_shift'],stack_leaf_to_root=stacks.get(first['stack_id'],[]),
-            allocation_owner=list(key[:2]),free_owner='UNOBSERVED',cache_lifetime='UNKNOWN',holder=None,spin_cycles=None))
-    return dict(schema='cis-allocator-report-v1',quality=base['quality'],scope_audit=audit(record,raw),
+            allocation_owner=list(key[:2]),free_owner='UNOBSERVED',cache_lifetime='UNKNOWN',holder=None,spin_cycles=None,
+            object_samples=[dict(object=r['object'],time_ns=r['sample_time_ns'],ordinal=r['ordinal'],cpu=r['cpu'])
+                            for r in rows if r['object'] and (r['stage']==17 or r['stage']==20 and first['operation']==1 and last['count']==1)]))
+    result=dict(schema='cis-allocator-report-v1',quality=base['quality'],scope_audit=audit(record,raw),
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),
         analysis_source_sha256=dict(base['analysis_source_sha256'],**{'allocator_report.py':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}),
         calls=calls,excluded=dict(excluded),performance_certification='NOT_ACCEPTED',
@@ -110,4 +112,9 @@ def analyze(record, raw):
                 'node_lock_acquire includes uncontended calls; no full lock owner/lifetime coverage',
                 'same cache address is not proof of interference or a shared allocation owner',
                 'sampling is per CPU selected-cache entry, not unbiased population cost',
-                'no free/RCU ownership, tree identity or hardware cache-line cause is asserted'])
+                'release entry is not allocator completion or RCU grace-period duration',
+                'allocation identity is the registered requesting container, not proof of memcg billing owner',
+                'no Maple tree identity or hardware cache-line cause is asserted'])
+    from allocator_lifetime import correlate
+    result['lifetimes']=correlate(record,raw,result,stacks)
+    return result
