@@ -36,6 +36,7 @@ def run(specialists=False):
     if specialists:
         plan=dict(cases=['sched-shared','sched-private','sched-idle','reclaim-high',
                          'reclaim-control','quota'],window_ms=2000,roots=2,
+                  memory_high_release='after completed capture, before business drain',
                   performance_certification='NOT_ACCEPTED')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-prototype.sock'
@@ -114,8 +115,15 @@ def run(specialists=False):
                 running=[] if label=='sched-idle' else [launch(label,i,
                     ['reclaim' if collector=='reclaim' else 'throughput','3',str(start)],
                     cpu=0 if label=='sched-shared' else i*2) for i in range(2)]
-                for child in running:assert child.wait(timeout=20)==0
                 row,report=finish(sid)
+                if label=='reclaim-high':
+                    before=time.monotonic_ns()
+                    (root/'root0/memory.high').write_text('max')
+                    (out/'memory-high-release.json').write_text(json.dumps(dict(
+                        before_ns=before,after_ns=time.monotonic_ns(),capture_end_ns=row['window']['end_ns'],
+                        value='max',reason='end bounded pressure injection; no change during capture')))
+                    assert before>row['window']['end_ns']
+                for child in running:assert child.wait(timeout=20)==0
                 assert report['quality']['status']=='PASS',report['quality']
                 findings=report['findings']
                 assert not any(e['kind']=='observed_holder_waiter' for e in findings)
