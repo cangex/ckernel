@@ -10,8 +10,11 @@ Fixed hierarchy fixture
 Kernel source e1cc144b7 includes the native page-counter observation calls;
 userspace and fixture runner source 336fc52c4. The ARM64 Image SHA256 is
 ebbab2092c6e81376b5bf5d5e016b551dd5da3ee685837120a68064a17377891.
-The complete Image builds and boots in the dedicated VM. A complete module
-build for this revision has not run. This is not host-kernel deployment.
+The complete Image builds and boots in the dedicated VM. The same frozen
+configuration's full modules target subsequently passes (1702 .ko files
+hashed); Image and configuration hashes are unchanged. This is not a build
+of every possible Kconfig combination or host-kernel deployment. Module
+evidence is x2-counter-modules-20260918 under the same evidence root.
 
 Evidence directory on 14::
 
@@ -102,3 +105,17 @@ Local exported archives (SHA256)::
 
   fixture: 3e5a4e27607cbfd8cfe6ccf4eb2659351125ca3520ff1b06eea8df081e8a15fc
   bridge: fc2b7ab5bfb80bd23549a5485f934b2f26d42cf70d281bb05b5828d537d7033d
+
+Final Linux replay
+------------------
+
+Verifier/source 3ea5783fd was checked out with the selected kernel files in
+a separate Linux directory. All 253 tool tests, 21 owner tests and 7 profile
+tests PASS, with no SKIP. Earlier tools-only exports skipped the selected
+FD source audit; the final checkout restores that coverage, not the test's
+expectation. The two new operation-boundary tests run here as well.
+
+The Linux fixture, ordinary bridge and control replays all PASS. The two
+verification JSON files are byte-identical to the local independent replay.
+Logs are in x2-final-audit-20260918 under the evidence root. Dedicated VMs
+have exited; root free space remains 6.2GiB. No old evidence was removed.
