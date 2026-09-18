@@ -28,7 +28,7 @@ def tcp_pair():
         except BaseException: client.close(); raise
 
 
-def run():
+def run(backlog=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/net_shift').read_text().strip()!='0':
@@ -43,7 +43,8 @@ def run():
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
     source=source_manifest(args,env['boot_id']); permit=prototype_admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
-    plan=dict(order=case_order(),cases=list(CASES),rounds=3,operations=4,roots=2,net_shift=0,
+    cases=('backlog',) if backlog else CASES
+    plan=dict(order=case_order(cases),cases=list(cases),rounds=3,operations=4,roots=2,net_shift=0,
         window_ms=2000,cpu=[0,1],management_cpu=7,memory_max_bytes=64<<20,
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
         scope='logical lock fixture with deliberate bounded sleep while held, not ordinary application cost acceptance')
@@ -85,6 +86,7 @@ def run():
         for label in plan['order']:
             case=label.split('-')[0]; collecting='-net' in label; sid=None
             client,server=tcp_pair(); sockets.extend((client,server)); selected=[server,server]
+            if case=='backlog': selected=[server,client]
             if case=='private':
                 other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server)); selected[1]=other_server
             source_before=snapshot()
@@ -98,7 +100,8 @@ def run():
             for i,p in enumerate(roots):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle)
                 fd=selected[i].fileno()
-                child=subprocess.Popen(['/session_launch',str(p),str(i),'/net_workload',str(fd),str(i),str(start),case],
+                workload='/net_backlog_workload' if case=='backlog' else '/net_workload'
+                child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case],
                     stdout=handle,stderr=handle,pass_fds=(fd,))
                 children.append(child); running.append(child)
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()
@@ -135,4 +138,7 @@ def run():
         requests.close(); log.close()
 
 
-if __name__=='__main__': run()
+if __name__=='__main__':
+    import argparse
+    parser=argparse.ArgumentParser(); parser.add_argument('--backlog',action='store_true')
+    run(parser.parse_args().backlog)

@@ -18,13 +18,15 @@ def verify(serial,output):
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
+    cases=tuple(plan.get('cases',[]))
+    if cases not in (CASES,('backlog',)): raise ValueError('unsupported frozen case set')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_NET_FIXTURE_UNLOAD=0' not in text.splitlines():
         errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
-    if (plan.get('order')!=case_order() or plan.get('cases')!=list(CASES) or plan.get('rounds')!=3 or
+    if (plan.get('order')!=case_order(cases) or plan.get('rounds')!=3 or
             plan.get('net_shift')!=0 or plan.get('hold_ms')!=30 or plan.get('operations')!=4): errors.append('frozen_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
-    for label in case_order():
+    for label in case_order(cases):
         ev=value(label+'-evidence.json'); logs=[files[prefix+label+'-%d.log'%i] for i in range(2)]
         report=None; identities=None
         if '-net' in label:

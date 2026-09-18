@@ -17,7 +17,10 @@ if ! (insmod /cis_net_fixture.ko && /bin/busybox ifconfig lo up &&
     poweroff -f
     exit 91
 fi
-/usr/bin/python3 /profile/net_vm.py
+case " $(cat /proc/cmdline) " in
+    *" cis_net_test=backlog "*) /usr/bin/python3 /profile/net_vm.py --backlog ;;
+    *) /usr/bin/python3 /profile/net_vm.py ;;
+esac
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"
 find /tmp/net-evidence -type f | sort | while read -r f; do

@@ -5,12 +5,15 @@ from owner_report import fields
 CASES=('shared','private','switch')
 
 
-def case_order():
-    return [case+'-'+mode+str(r) for case in CASES for r in range(3)
+def case_order(cases=CASES):
+    return [case+'-'+mode+str(r) for case in cases for r in range(3)
             for mode in (('off','net') if r%2==0 else ('net','off'))]
 
 
 def check_case(case,window,logs,report=None,identities=None):
+    if case=='backlog':
+        from net_backlog_check import check_backlog
+        return check_backlog(window,logs,report,identities)
     if case not in CASES or len(logs)!=2: raise ValueError('fixture case')
     errors=[]; truth=[]; pids=[]
     for actor,log in enumerate(logs):

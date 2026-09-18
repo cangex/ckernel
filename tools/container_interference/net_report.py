@@ -102,7 +102,7 @@ def queues(rows):
 
 def analyze(record,raw):
     if record.get('collector')!='net' or len(raw)>16<<20: raise ValueError('bounded net capture required')
-    base=explain(record,raw); scope=audit(record,raw); excluded=Counter(); groups=defaultdict(list); stacks={}
+    base=explain(record,raw); scope=audit(record,raw); excluded=Counter(); groups=defaultdict(list); stacks={}; stack_errors=Counter()
     identities=dict(record.get('root_identities',{})); identities.update(record.get('owner_identities',{}))
     known={(v['id'],v['generation']) for v in identities.values()}
     count=0
@@ -114,7 +114,7 @@ def analyze(record,raw):
         count+=1
         if count>16384: excluded['report_capacity']+=1; continue
         if (not REQUIRED<=d.keys() or any(type(d[k]) is not int or d[k]<0 for k in REQUIRED-{'stack_id'})
-                or d['stack_id'] < -1 or d['protocol']!=1 or not 1<=d['phase']<=9 or d['context'] not in (0,1,2)
+                or d['stack_id'] < -4095 or d['protocol']!=1 or not 1<=d['phase']<=9 or d['context'] not in (0,1,2)
                 or not d['cookie'] or not d['socket'] or not d['netns'] or d['packet_flags'] & ~7):
             excluded['schema']+=1; continue
         who=actor(d)
@@ -125,6 +125,7 @@ def analyze(record,raw):
         if not within_window(record,d['sample_time_ns'],d['sample_time_ns']):
             excluded['outside_window']+=1; continue
         if d['cookie'] not in groups and len(groups)>=64: excluded['watch_capacity']+=1; continue
+        if d['stack_id']<0: stack_errors[str(d['stack_id'])]+=1
         groups[d['cookie']].append(d)
     accepted=not excluded and base['quality']['status']=='PASS' and scope['status']=='PASS'
     sockets=[]
@@ -138,7 +139,10 @@ def analyze(record,raw):
             if owner_bad or queue_bad:
                 excluded['socket_stream_invalid']+=1
             for wait in waits:
-                wait['stack_leaf_to_root']=stacks.get(wait.pop('stack_id'),[])
+                stack_id=wait.pop('stack_id')
+                wait['stack_leaf_to_root']=stacks.get(stack_id,[])
+                wait['stack_capture_error']=stack_id if stack_id<0 else None
+                wait['stack_status']='AVAILABLE' if wait['stack_leaf_to_root'] else 'UNAVAILABLE'
             sockets.append(dict(cookie=cookie,socket_address=rows[0]['socket'],netns=rows[0]['netns'],
                 lifetime='native_socket_cookie',waits=waits if not owner_bad else [],
                 backlog=backlog if not queue_bad else [],owner_unknown=owner_unknown,queue_unknown=queue_unknown,
@@ -147,7 +151,7 @@ def analyze(record,raw):
     if excluded: quality.update(status='FAIL',defects=quality['defects']+list(excluded))
     if quality['status']!='PASS' or scope['status']!='PASS': sockets=[]
     return dict(schema='cis-net-report-v1',boot_id=record.get('boot_id'),session_id=record.get('session_id'),
-        quality=quality,scope_audit=scope,sockets=sockets,excluded=dict(excluded),
+        quality=quality,scope_audit=scope,sockets=sockets,excluded=dict(excluded),stack_capture_errors=dict(stack_errors),
         raw_sha256=hashlib.sha256(raw).hexdigest(),source=base['source'],
         analysis_source_sha256=dict(base['analysis_source_sha256'],**{'net_report.py':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}),
         performance_certification='NOT_ACCEPTED',
