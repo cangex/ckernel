@@ -107,6 +107,6 @@ def analyze(text, source):
     return dict(schema='cis-runtime-subclaims-v1', subchecks=checks,
                 raw_clean_exit=clean_exit, full_lifecycle_complete=False,
                 full_resource_failures_complete=False,
-                remaining=['crash/restart and control backpressure cross-checks',
+                remaining=['concurrent restart and control backpressure cross-checks',
                            'ARM/DRAIN/publish storage failures and bounded recovery',
                            'allocator-internal coverage and combined CPU enforcement evidence'])

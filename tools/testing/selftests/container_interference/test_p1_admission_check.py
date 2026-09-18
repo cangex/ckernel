@@ -5,10 +5,15 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'container_interference'))
-from p1_admission_check import SOURCE_KEYS, evaluate
+from p1_admission_check import SOURCE_KEYS, REQUIRED_EVIDENCE, evaluate
+from periodic_plan import P1_CHECKS
 
 
 class EvidenceAdmission(unittest.TestCase):
+    def test_every_gate_has_an_explicit_evidence_contract(self):
+        self.assertEqual(set(REQUIRED_EVIDENCE),set(P1_CHECKS))
+        self.assertTrue(all(len(value)>40 for value in REQUIRED_EVIDENCE.values()))
+
     def source(self):
         return {key: 'test-kernel' if key == 'kernel_release' else 'a' * 64 for key in SOURCE_KEYS}
 
@@ -45,3 +50,13 @@ class EvidenceAdmission(unittest.TestCase):
         del source['kernel_notes_sha256']
         with self.assertRaises(ValueError):
             evaluate(source, [('raw', self.raw())])
+
+    def test_bounded_failure_is_not_hidden_by_missing_coverage(self):
+        for nonce,check in [('cancelActive','lifecycle_runtime'),
+                            ('stageobjectload','resource_failure_runtime'),
+                            ('fdLimit4','resource_failure_runtime')]:
+            failed=self.raw().replace(b'"nonce": "test"',json.dumps('nonce').encode()+b': '+json.dumps(nonce).encode())
+            failed=failed.replace(b'"objects_absent": true',b'"objects_absent": false')
+            result=evaluate(self.source(),[('failed',failed),('incomplete',self.raw())])
+            self.assertEqual(result['checks'][check],'FAIL')
+            self.assertFalse(result['phase_complete'])

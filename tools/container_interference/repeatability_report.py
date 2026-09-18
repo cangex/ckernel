@@ -118,8 +118,13 @@ def analyze(artifacts):
             ci = interval(differences)
             blocks = [interval(differences[i:i+5]) for i in (0, 5)]
             compatible = all(x['lower95_pct'] >= -bound and x['upper95_pct'] <= bound for x in [ci]+blocks)
+            timeout_cells = [dict(boot=row['boot'], pair=row['pair'], label=label,
+                                  count=row[label.lower()]['result']['timeouts'])
+                             for row in raw_rows for label in ('A', 'B')
+                             if w == 'latency' and row[label.lower()]['result']['timeouts']]
             rows.append(dict(workload=w, role=role, tolerance_pct=bound, pooled=ci, boots=blocks,
-                             status='PASS' if compatible else 'BLOCKED', raw=raw_rows))
+                             status='PASS' if compatible and not timeout_cells else 'BLOCKED',
+                             timeout_cells=timeout_cells, raw=raw_rows))
     return dict(schema='cis-repeatability-report-v1', protocol=PROTOCOL, source=sources[0], evidence=evidence,
                 rows=rows, calibration_status='PASS' if all(x['status']=='PASS' for x in rows) else 'BLOCKED',
                 observer_admission=False, limits='paired t intervals conditional on sampling assumptions; two boot blocks are reported separately, not ten independent boots')

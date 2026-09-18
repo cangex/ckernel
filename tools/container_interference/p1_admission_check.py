@@ -17,6 +17,24 @@ from session_check import analyze, extract
 SOURCE_KEYS = ('controller_sha256', 'worker_sha256', 'residue_sha256',
                'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256', 'kernel_cmdline_sha256')
 
+REQUIRED_EVIDENCE = {
+    'identity_runtime': 'Controlled migration is a subclaim; registration races, short-lived descendants, generation reuse and non-target owners still require source-bound runtime evidence.',
+    'lifecycle_runtime': 'Cancellation and five signal/recovery cases are subclaims; concurrent restart, failed publication and FAULTED admission barriers require a complete lifecycle reader.',
+    'resource_failure_runtime': 'FD 4..24 and eight boundary cases are subclaims; allocator-internal loading/memory failures and rollback need additional raw evidence.',
+    'storage_backpressure_runtime': 'Initial ENOSPC does not cover ARM, DRAIN, publication, blocked storage and bounded recovery; the full raw reader is not implemented.',
+    'combined_cpu_enforcement_runtime': 'Live/reaped child accounting has tests; runtime budget-stop handoff and post-stop residual CPU need a complete evidence reader.',
+    'kernel_background_cost': 'Business-context probe/PMU CPU and deferred kworker/RCU CPU ownership are not fully measured; process CPU alone cannot grant this check.',
+    'total_memory_cost': 'Object metadata is partial; JIT/BTF/verifier transients, perf metadata, shared-page deduplication and deferred retention lack a complete upper bound.',
+    'idle_throughput': 'One complete source-bound OFF/IDLE cost batch with both roles and five paired rounds is required.',
+    'idle_p99': 'One complete source-bound OFF/IDLE open-loop latency batch with both roles and five paired rounds is required.',
+    'ip_capture_quality': 'Functional capture alone is insufficient; a complete source-bound IP cost batch must include raw quality for all windows.',
+    'owner_capture_quality': 'Functional capture alone is insufficient; a complete source-bound owner cost batch must include raw quality for all windows.',
+    'owner_truth_runtime': 'Owner model/fixture results are not a full receipt; mutex and real lockref raw truth, private objects, switching, reuse, preemption and non-target owners must be cross-checked.',
+    'ip_window_throughput': 'Both roles need a complete IP cost batch and accepted window capture quality; no historical binary substitution.',
+    'owner_window_throughput': 'Both roles need a complete owner cost batch and accepted window capture quality; no historical binary substitution.',
+    'window_latency_contract': 'A complete frozen v2 open-loop latency batch for IP and owner is required; OFF/OFF calibration is not observer performance evidence.',
+}
+
 
 def source_identity(value):
     if not isinstance(value, dict) or any(key not in value for key in SOURCE_KEYS):
@@ -52,7 +70,7 @@ def combine(statuses):
 def evaluate(source, artifacts):
     source = source_identity(source)
     checks = {key: 'BLOCKED' for key in P1_CHECKS}
-    details = {key: dict(reason='evidence reader or required runtime evidence not yet complete')
+    details = {key: dict(reason=REQUIRED_EVIDENCE[key])
                for key in P1_CHECKS}
     index, rows = [], []
     if not artifacts:
@@ -99,6 +117,14 @@ def evaluate(source, artifacts):
         for check in ('lifecycle_runtime', 'resource_failure_runtime'):
             details[check].setdefault('bounded_runtime_evidence', []).append(
                 dict(artifact_sha256=sha, **runtime))
+        # A subset cannot grant full acceptance, but a demonstrated failure
+        # must remain a failure even when other required coverage is absent.
+        for check, subchecks in {
+                'lifecycle_runtime': ('cancellation', 'crash_recovery'),
+                'resource_failure_runtime': ('boundary_failures', 'real_fd_exhaustion',
+                                             'inventory_restoration')}.items():
+            if any(runtime['subchecks'][key]['status'] == 'FAIL' for key in subchecks):
+                checks[check] = 'FAIL'
     for mode in ('ip', 'owner'):
         candidates = [(entry, summary) for entry, summary in rows
                       if any(x['mode'] == mode and x['interval']['n'] == 5 for x in summary['cost'])]

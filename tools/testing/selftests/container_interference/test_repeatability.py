@@ -42,6 +42,16 @@ class Repeatability(unittest.TestCase):
         result=analyze([('a',fixture(0,3000)),('b',fixture(1,3000))])
         self.assertEqual(result['calibration_status'],'BLOCKED')
 
+    def test_equal_timeouts_are_not_calibration_pass(self):
+        result=analyze([('a',fixture(0).replace(b'timeouts=0',b'timeouts=40')),
+                        ('b',fixture(1).replace(b'timeouts=0',b'timeouts=40'))])
+        self.assertEqual(result['rows'][0]['status'],'PASS')
+        self.assertEqual(result['calibration_status'],'BLOCKED')
+        for row in result['rows'][2:]:
+            self.assertEqual(row['pooled']['mean_pct'],0)
+            self.assertEqual(row['status'],'BLOCKED')
+            self.assertEqual(len(row['timeout_cells']),20)
+
     def test_boot_blocks_not_hidden_by_pooling(self):
         result=analyze([('a',fixture(0,3000)),('b',fixture(1,-3000))])
         self.assertEqual(result['calibration_status'],'BLOCKED')
