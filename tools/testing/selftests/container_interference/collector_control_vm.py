@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import collector_manifest
 import prototype_admission as admission
 from session import source_manifest, validate
+from source_switches import observe
 
 
 def crash_nonce(name):
@@ -45,7 +46,8 @@ def run(expiry=False, fault=False, crashes=False):
     permit = admission.create(source, env, time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit, indent=2))
     (out/'plan.json').write_text(json.dumps(dict(schema='cis-x0-plan-v1', expiry=expiry, fault=fault, crashes=crashes,
-        interval_s=60, no_fake_clock=True, source=source), indent=2))
+        interval_s=60, no_fake_clock=True, source=source,
+        collectors=list(collector_manifest.COLLECTORS),source_switches=True), indent=2))
     endpoint = '/run/cis-x0.sock'
     command = ['/usr/bin/python3', '/profile/session.py', '--socket', endpoint,
                '--directory', str(out/'records'), '--worker', args.worker, '--residue', args.residue,
@@ -165,12 +167,14 @@ def run(expiry=False, fault=False, crashes=False):
             note('failed_verification_blocks_admission', session=sid,
                  real_verifier_absent=True, injected_verifier_failed=True)
         else:
-            for name in ('ip', 'owner', 'sched', 'reclaim'):
+            for name in collector_manifest.COLLECTORS:
                 sid = request('start', collector=name, targets=targets, nonce='load'+name)['session_id']
+                window(sid)
+                active=observe(name)
                 row = finish(sid)
                 assert row['result'] == 'COMPLETE', row
                 collector_manifest.validate_inventory(name, row['inventory'])
-                note('selective_load_'+name, session=sid)
+                note('selective_load_'+name, session=sid,active_sources=active,idle_sources=observe())
             old_epoch = request('schedule_configure', plan=dict(interval_s=60,jitter_ms=0))['nonce_epoch']
             enabled = request('schedule_enable')
             sid = request('start', collector='ip', targets=targets, nonce='manual', nonce_epoch=old_epoch)['session_id']

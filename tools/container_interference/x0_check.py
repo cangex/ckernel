@@ -10,6 +10,7 @@ from collector_audit import audit as scope_audit
 from collector_manifest import validate_inventory
 from session_check import extract
 from prototype_admission import SOURCE_KEYS
+from source_switches import validate as validate_sources
 
 CONTROL = {'selective_load_ip', 'selective_load_owner', 'selective_load_sched', 'selective_load_reclaim',
            'pause_drain_and_shared_manual_budget', 'restart_paused_nonce_and_budget_preserved',
@@ -27,8 +28,16 @@ def check(text):
     if plan.get('schema') != 'cis-x0-plan-v1' or result.get('schema') != 'cis-x0-result-v1':
         raise ValueError('unsupported X0 result protocol')
     checks = result['checks']
-    expected = (CRASHES if plan.get('crashes') else {'real_permit_expiry'} if plan['expiry'] else
-                {'failed_verification_blocks_admission'} if plan['fault'] else CONTROL)
+    collectors=plan.get('collectors')
+    if collectors is not None and (len(collectors)!=len(set(collectors)) or
+            set(collectors)!={'ip','owner','sched','reclaim','sync','fd'}):
+        raise ValueError('unexpected control cohort collectors')
+    controls=(CONTROL-{'selective_load_'+name for name in ('ip','owner','sched','reclaim')} |
+              {'selective_load_'+name for name in collectors}) if collectors is not None else CONTROL
+    crashes=(CRASHES-{'worker_kill_'+name for name in ('ip','owner','sched','reclaim','sync')} |
+             {'worker_kill_'+name for name in collectors}) if collectors is not None else CRASHES
+    expected = (crashes if plan.get('crashes') else {'real_permit_expiry'} if plan['expiry'] else
+                {'failed_verification_blocks_admission'} if plan['fault'] else controls)
     defects = []
     if set(row['name'] for row in checks) != expected or len(checks) != len(expected): defects.append('incomplete_check_set')
     if any(row.get('status') != 'PASS' for row in checks): defects.append('case_failed')
@@ -58,7 +67,7 @@ def check(text):
         scope.append(dict(session=row['session_id'], **scope_audit(row, raw)))
     if plan.get('crashes'):
         actions=[json.loads(line) for line in files[prefix+'signals.jsonl'].splitlines() if line.startswith('{')]
-        if len(records)!=len(CRASHES) or not actions: defects.append('crash_audit_incomplete')
+        if len(records)!=len(crashes) or not actions: defects.append('crash_audit_incomplete')
         if {row.get('role') for row in actions}!={'worker','controller'}: defects.append('crash_roles')
         for row in records:
             if not row.get('objects_absent') or not row.get('finalized'): defects.append('crash_cleanup_not_final')
@@ -78,11 +87,16 @@ def check(text):
             defects.append('fault_not_retained')
         if not ops('start', False): defects.append('fault_admission_not_rejected')
     else:
-        for collector in ('ip', 'owner', 'sched', 'reclaim'):
+        for collector in collectors or ('ip', 'owner', 'sched', 'reclaim'):
             rows = [r for r in records if r['nonce'] == 'load'+collector]
             if len(rows) != 1 or rows[0].get('result') != 'COMPLETE' or rows[0].get('objects_absent') is not True:
                 defects.append('load_'+collector)
-            else: validate_inventory(collector, rows[0]['inventory'])
+            else:
+                validate_inventory(collector, rows[0]['inventory'])
+                if plan.get('source_switches'):
+                    marker=next(item for item in checks if item['name']=='selective_load_'+collector)
+                    validate_sources(marker['active_sources'],collector,rows[0]['window']['start_ns'],rows[0]['window']['end_ns'])
+                    validate_sources(marker['idle_sources'],None,rows[0]['window']['end_ns'],2**64-1)
         if not ops('schedule_pause') or not ops('unregister') or not ops('unregister', False):
             defects.append('pause_unregister_audit')
         rejected = {row['request'].get('nonce') for row in ops('start', False)}

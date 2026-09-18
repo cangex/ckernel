@@ -14,6 +14,7 @@ from session import source_manifest
 from explain import explain
 from fd_check import check
 from collector_audit import audit as scope_audit
+from source_switches import observe
 
 
 def run(suite='basic'):
@@ -30,7 +31,7 @@ def run(suite='basic'):
     if suite not in ('basic','lifecycle'): raise ValueError('unsupported suite')
     plan=dict(schema='cis-fd-plan-v1',cases=['threads','private','native'] if suite=='basic' else ['cross','reuse'],repetitions=3,roots=2,
               window_ms=2000,operations_per_thread=16,fixture_hold_us=100,
-              suite=suite,reuse_generations=4,
+              suite=suite,collector='fd',reuse_generations=4,
               reuse_allocator='fixture helper allocates on worker CPU then restores management affinity; not a cost test',
               scope='selected FD adapter bridge; full X1 acceptance incomplete',performance_certification='NOT_ACCEPTED')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
@@ -89,8 +90,10 @@ def run(suite='basic'):
         for repeat in range(3):
             for case in plan['cases']:
                 label=case+str(repeat)
-                sid=request('start',collector='owner',targets=targets,nonce=label,window_ms=2000)['session_id']
-                window=wait_record(sid,'window')['window'];start=max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000)
+                sid=request('start',collector=plan['collector'],targets=targets,nonce=label,window_ms=2000)['session_id']
+                window=wait_record(sid,'window')['window']
+                active_sources=observe('fd')
+                start=max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000)
                 names=[];boundaries=[]
                 for generation in range(4 if case=='reuse' else 1):
                     part=label+'g%d'%generation if case=='reuse' else label
@@ -108,7 +111,8 @@ def run(suite='basic'):
                 raw=(out/'records'/(sid+'.jsonl')).read_bytes()
                 report=explain(record,raw);scope=scope_audit(record,raw)
                 truth=check(report,[(out/name).read_text() for name in names],case)
-                (out/(label+'-boundaries.json')).write_text(json.dumps(dict(logs=names,groups=boundaries),indent=2))
+                (out/(label+'-boundaries.json')).write_text(json.dumps(dict(logs=names,groups=boundaries,
+                    active_sources=active_sources,idle_sources=observe()),indent=2))
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 (out/(label+'-truth.json')).write_text(json.dumps(truth,indent=2))
                 (out/(label+'-scope.json')).write_text(json.dumps(scope,indent=2))
@@ -116,7 +120,8 @@ def run(suite='basic'):
                 (out/'partial.json').write_text(json.dumps(results,indent=2))
                 assert truth['status']=='PASS' and scope['status']=='PASS',(truth,scope)
         result=dict(status='PASS',source=source,plan=plan,cases=results,
-                    unverified=['explicit CLONE_FILES cross-container bridge','address reuse runtime','full rwsem reader set'],
+                    unverified=(['full rwsem reader set','dense FD observer cost'] if suite=='lifecycle' else
+                                ['explicit CLONE_FILES cross-container bridge','address reuse runtime','full rwsem reader set']),
                     performance_certification='NOT_ACCEPTED')
         (out/'result.json').write_text(json.dumps(result,indent=2));print('CIS_FD_RESULT '+json.dumps(result),flush=True)
     finally:

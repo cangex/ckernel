@@ -20,13 +20,13 @@ struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(k
 #if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6
 struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,CIS_STACKS); __type(key,__u32); __type(value,__u64[CIS_STACK_DEPTH]); } stacks SEC(".maps");
 #endif
 #if CIS_PROFILE == 0
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_work_state); } work_items SEC(".maps");
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 6
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,struct cis_object_key); __type(value,struct cis_owner_record); } holders SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_owner_task); } holder_tasks SEC(".maps");
@@ -323,7 +323,7 @@ int work_cancel_end(struct pt_regs *ctx)
 }
 
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 6
 static __always_inline int live_watch(struct cis_watch *w,__u64 now)
 {
 	struct cis_target *t;
@@ -333,7 +333,11 @@ static __always_inline int live_watch(struct cis_watch *w,__u64 now)
 	       (t->kind&CIS_DIAG_OWNER);
 }
 
+#if CIS_PROFILE == 6
+SEC("raw_tp/cis_fdlock_state")
+#else
 SEC("raw_tp/cis_lock_state")
+#endif
 int owner_state(struct bpf_raw_tracepoint_args *ctx)
 {
 	/* Keep this raw-tp argument as a scalar: older verifiers reject a ctx+40 alias. */
@@ -349,7 +353,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 	__u32 phase=ctx->args[2];
 	COUNT(s,received);
 	COUNT(s,owner_entries);
-	if (key.kind < 1 || key.kind > 3) { COUNT(s,rejected); return 0; }
+	if (CIS_PROFILE == 6 ? key.kind != 3 : (key.kind < 1 || key.kind > 2)) { COUNT(s,rejected); return 0; }
 	if(s) {
 		if(!s->owner_seen) {s->owner_seen=1;s->owner_skip_base=raw_skipped;}
 		s->owner_skipped=raw_skipped-s->owner_skip_base;

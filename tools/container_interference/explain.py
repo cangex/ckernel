@@ -60,7 +60,7 @@ def explain(record, raw):
     identities.update(record.get('owner_identities', {}))
     known = {(v['id'], v['generation']) for v in identities.values()}
     owner = None
-    if record.get('collector') == 'owner':
+    if record.get('collector') in ('owner','fd'):
         if any(fields(e['detail']).get('resource') not in RESOURCES for e in events if e.get('kind') == 'OWNER'):
             raise ValueError('unsupported owner resource protocol')
         owner = owner_analyze(events)

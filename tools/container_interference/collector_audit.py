@@ -17,6 +17,7 @@ def audit(record, raw):
              'terminal_scope': ('unknown', 'overdepth', 'unmatched', 'nested', 'expired', 'irq_context'),
              'owner_entry_stages': ('owner_entries', 'sched_entries', 'target_waits', 'watch_events')}
     found = {}
+    owner_resources=set()
     optional = {'owner_map_updates': ('watch_races', 'watch_failed', 'holder_failed', 'attempt_failed')}
     for line in raw.splitlines():
         if len(line) > 8192: raise ValueError('audit record length')
@@ -24,6 +25,10 @@ def audit(record, raw):
         if not isinstance(row, dict): raise ValueError('audit record must be an object')
         if str(row.get('session_id')) != str(record['session_id']): raise ValueError('audit session mismatch')
         kind = row.get('kind')
+        if kind=='OWNER':
+            resource=re.search(r'(?:^|\s)resource=(\d+)(?:\s|$)',row.get('detail',''))
+            if resource: owner_resources.add(int(resource[1]))
+            else: errors.append('owner record missing resource')
         if kind not in names and kind not in optional: continue
         if kind in found: raise ValueError('duplicate terminal counter group')
         detail = row.get('detail', '')
@@ -35,7 +40,13 @@ def audit(record, raw):
     for kind, fields in names.items():
         found.setdefault(kind, {name: None for name in fields})
         missing.extend(kind+'.'+name for name, value in found[kind].items() if value is None)
+    if record.get('collector')=='fd' and owner_resources-{3}:
+        errors.append('FD source emitted another resource kind')
+    if (record.get('collector')=='owner' and contract and
+            record.get('collector_contract_sha256')==contract and owner_resources-{1,2}):
+        errors.append('owner source emitted another resource kind')
     return dict(schema='cis-collector-audit-v1', status='FAIL' if errors else 'BLOCKED' if missing else 'PASS',
                 collector_contract_sha256=contract, errors=errors, missing=missing, counters=found,
-                counters_overlap=True, population_coverage=None, object_reuse_coverage=None,
+                counters_overlap=True, owner_resources=sorted(owner_resources),
+                population_coverage=None, object_reuse_coverage=None,
                 note='scope audit only, not a zero-loss, attribution or performance acceptance')

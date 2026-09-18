@@ -26,6 +26,7 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(owner['1']['session_target'])
         self.assertNotIn('session_target', roots['1'])
         self.assertEqual(list(session.worker_roots(roots, ['0'], 'ip')), ['0'])
+        self.assertEqual(session.worker_roots(roots, ['0'], 'fd'), owner)
         for targets in ([], ['0']*2, ['0','1','2'], ['missing']):
             with self.assertRaises(ValueError): session.worker_roots(roots, targets, 'owner')
         self.assertNotIn('owner_identities', session.compact_record(dict(owner_identities=owner)))

@@ -12,6 +12,8 @@ from collector_manifest import validate_inventory
 from collector_audit import audit
 from explain import explain
 from fd_check import check
+from owner_report import fields
+from source_switches import validate as validate_sources
 
 
 def verify_boundaries(bounds, names, logs, window, requested_ns):
@@ -35,6 +37,35 @@ def verify_boundaries(bounds, names, logs, window, requested_ns):
     return sorted(set(errors))
 
 
+def verify_reuse_retirement(raw, logs):
+    events=[fields(row['detail']) for row in (json.loads(line) for line in raw.splitlines())
+            if row.get('kind')=='OWNER']
+    events=[event for event in events if event.get('resource')==3]
+    objects={};errors=[];verified=0
+    for text in logs:
+        truth=[json.loads(line.split(' ',1)[1]) for line in text.splitlines() if line.startswith('CIS_FD_TRUTH ')]
+        if not truth: errors.append('missing_lifetime_truth');continue
+        keys={(row['object'],row['tgid']) for row in truth}
+        if len(keys)!=1: errors.append('mixed_lifetime_truth');continue
+        obj,tgid=keys.pop()
+        objects.setdefault(obj,[]).append(dict(tgid=tgid,begin=min(row['begin_ns'] for row in truth),
+                                              end=max(row['released_ns'] for row in truth)))
+    for obj,lifetimes in objects.items():
+        lifetimes.sort(key=lambda row:row['begin'])
+        for old,new in zip(lifetimes,lifetimes[1:]):
+            retire=[event for event in events if event['object']==obj and event['phase']==8 and
+                    old['end']<=event['sample_time_ns']<new['begin']]
+            old_epochs={event['epoch'] for event in events if event['object']==obj and event['phase']==2 and event['actor_tid']>>32==old['tgid']}
+            new_epochs={event['epoch'] for event in events if event['object']==obj and event['phase']==2 and event['actor_tid']>>32==new['tgid']}
+            if not retire or len(old_epochs)!=1 or len(new_epochs)!=1 or old_epochs & new_epochs:
+                errors.append('missing_retirement_or_new_watch');continue
+            if not min(new_epochs)>max(event['sample_time_ns'] for event in retire):
+                errors.append('new_watch_precedes_retirement');continue
+            verified+=1
+    if not verified: errors.append('no_verified_retirement_reuse')
+    return dict(status='FAIL' if errors else 'PASS',errors=sorted(set(errors)),verified_reuses=verified)
+
+
 def verify(serial, output):
     if serial.stat().st_size>128<<20: raise ValueError('serial capacity')
     raw=serial.read_bytes();text=raw.decode();files=extract(text);prefix='/tmp/fd-evidence/'
@@ -43,6 +74,8 @@ def verify(serial, output):
     output.mkdir(mode=0o700);errors=[];cases=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
     lifecycle=plan.get('suite')=='lifecycle'
+    collector=plan.get('collector','owner')  # Older immutable cohorts used the combined source.
+    if collector not in ('fd','owner'): raise ValueError('unsupported FD cohort collector')
     allowed=['cross','reuse'] if lifecycle else ['threads','private','native']
     if plan.get('cases')!=allowed or plan.get('repetitions')!=3: errors.append('frozen_plan')
     if lifecycle and plan.get('reuse_generations')!=4: errors.append('frozen_reuse_count')
@@ -59,22 +92,32 @@ def verify(serial, output):
         label=row['nonce'];sid=str(row['session_id'])
         if label not in expected or not sid.isascii() or not sid.isdigit(): raise ValueError('case identity')
         if any(row.get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('session_source_'+label)
-        validate_inventory('owner',row['inventory'])
+        if row.get('collector')!=collector: errors.append('collector_'+label)
+        validate_inventory(collector,row['inventory'])
         capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode()
         report=explain(row,capture);scope=audit(row,capture)
         kind=label[:-1]
         names=([label+'g%d-%d.log'%(g,i) for g in range(4) for i in range(2)] if kind=='reuse'
                else [label+'-%d.log'%i for i in range(2)])
         truth=check(report,[files[prefix+name] for name in names],kind)
+        retirement=None
+        if collector=='fd':
+            bounds=value(label+'-boundaries.json')
+            validate_sources(bounds['active_sources'],'fd',row['requested_ns'],row['window']['end_ns'])
+            validate_sources(bounds['idle_sources'],None,row['window']['end_ns'],2**64-1)
         if lifecycle:
             bounds=value(label+'-boundaries.json')
             errors += [error+'_'+label for error in verify_boundaries(bounds,names,
                         [files[prefix+name] for name in names],row['window'],row['requested_ns'])]
             if kind=='reuse' and any('helper_affinity_restored=1' not in files[prefix+name] for name in names):
                 errors.append('reuse_allocation_setup_'+label)
+            if kind=='reuse':
+                retirement=verify_reuse_retirement(capture,[files[prefix+name] for name in names])
+                if retirement['status']!='PASS' or retirement['verified_reuses']!=truth['observed_address_reuses']:
+                    errors.append('reuse_retirement_'+label)
         if truth['status']!='PASS': errors.append('truth_'+label)
         if scope['status']!='PASS': errors.append('scope_'+label)
-        cases.append(dict(label=label,session_id=sid,truth=truth,scope=scope['status']))
+        cases.append(dict(label=label,session_id=sid,truth=truth,scope=scope['status'],retirement=retirement))
         for suffix,data in (('record',row),('report',report),('truth',truth),('scope',scope)):
             (output/(sid+'.'+suffix+'.json')).write_text(json.dumps(data,indent=2))
         (output/(sid+'.jsonl')).write_bytes(capture)

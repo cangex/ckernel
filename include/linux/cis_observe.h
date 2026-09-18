@@ -18,7 +18,7 @@ void __cis_mutex_wait(struct mutex *);
 static inline void cis_lock_event(void *object, unsigned int kind,
 		unsigned int phase, struct task_struct *owner, unsigned long flags)
 {
-	if (trace_cis_lock_state_enabled())
+	if (kind == CIS_FDLOCK ? trace_cis_fdlock_state_enabled() : trace_cis_lock_state_enabled())
 		__cis_lock_event(object, kind, phase, owner, flags);
 }
 static inline void cis_mutex_wait(struct mutex *lock)

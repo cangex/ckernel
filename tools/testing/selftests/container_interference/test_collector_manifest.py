@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 import copy
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -52,6 +53,17 @@ class CollectorContract(unittest.TestCase):
         self.assertIsNone(out['counters']['terminal_scope']['unknown'])
         self.assertIsNone(out['population_coverage'])
         with self.assertRaises(ValueError): collector_audit.audit(row, b'{"session_id":"2"}')
+
+    def test_independent_fd_inventory_and_resources(self):
+        self.assertNotEqual(cm.contract('owner')['profile'],cm.contract('fd')['profile'])
+        with self.assertRaises(ValueError): cm.validate_inventory('owner',self.inventory('fd'))
+        with self.assertRaises(ValueError): cm.validate_inventory('fd',self.inventory('owner'))
+        for name,allowed,wrong in (('fd',3,1),('owner',2,3)):
+            record=dict(collector=name,session_id='1',inventory=self.inventory(name),
+                        collector_contract_sha256=digest(cm.contract(name)))
+            raw=lambda resource: json.dumps(dict(session_id='1',kind='OWNER',detail='resource=%d'%resource)).encode()
+            self.assertEqual(collector_audit.audit(record,raw(allowed))['errors'],[])
+            self.assertEqual(collector_audit.audit(record,raw(wrong))['status'],'FAIL')
 
 
 class RelationContract(unittest.TestCase):

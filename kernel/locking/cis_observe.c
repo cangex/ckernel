@@ -24,7 +24,7 @@ static DEFINE_PER_CPU(unsigned long, cis_gate_filtered);
  * while any probe is registered; another container's holder is never filtered
  * by its identity. BPF owner watches are created only by WAIT events. */
 #define CIS_GATE_BITS 16
-static DECLARE_BITMAP(cis_waited, 1U << CIS_GATE_BITS);
+static unsigned long cis_waited[2][BITS_TO_LONGS(1U << CIS_GATE_BITS)];
 static bool wait_gate;
 module_param(wait_gate, bool, 0400);
 MODULE_PARM_DESC(wait_gate, "Admit WAIT and all subsequent events for possibly waited objects");
@@ -34,7 +34,7 @@ int cis_observe_register(void)
 	/* tracepoints_mutex serializes first-probe registration before enable.
 	 * An old in-flight callback may only add false positives after this clear;
 	 * tracepoint core synchronizes that generation before publishing new probes. */
-	bitmap_zero(cis_waited, 1U << CIS_GATE_BITS);
+	bitmap_zero(cis_waited[0], 1U << CIS_GATE_BITS);
 	return 0;
 }
 
@@ -43,18 +43,32 @@ void cis_observe_unregister(void)
 	/* Do not clear while last-generation readers may still be returning. */
 }
 
+int cis_fd_observe_register(void)
+{
+	bitmap_zero(cis_waited[1], 1U << CIS_GATE_BITS);
+	return 0;
+}
+
+void cis_fd_observe_unregister(void) { }
+
+static bool cis_trace_active(void)
+{
+	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled();
+}
+
 static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
 {
 	unsigned int bit = hash_long(((unsigned long)object >> 3) ^ kind, CIS_GATE_BITS);
+	unsigned long *gate = cis_waited[kind == CIS_FDLOCK];
 
 	if (phase == CIS_WAIT) {
-		if (!test_bit(bit, cis_waited)) {
-			set_bit(bit, cis_waited);
+		if (!test_bit(bit, gate)) {
+			set_bit(bit, gate);
 			smp_mb__after_atomic();
 		}
 		return true;
 	}
-	return test_bit(bit, cis_waited);
+	return test_bit(bit, gate);
 }
 
 #define CIS_DIAG_SAMPLES 8
@@ -104,16 +118,16 @@ static int cis_diag_show(struct seq_file *m, void *unused)
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-	if (trace_cis_lock_state_enabled())
+	if (cis_trace_active())
 		return -EBUSY;
 	/* Last-link close only unregisters callbacks in this OLK. Complete the
 	 * grace periods before userspace consumes terminal BPF/source counters.
 	 * This is control-plane work, never part of a lock callback. */
 	tracepoint_synchronize_unregister();
-	if (trace_cis_lock_state_enabled())
+	if (cis_trace_active())
 		return -EBUSY;
 	seq_printf(m, "version=3 enabled=%u trace_active=%u synchronized=1 bytes_per_possible_cpu=%zu snapshot=non_atomic wait_gate=%u gate_bytes=%zu\n",
-		   diag, trace_cis_lock_state_enabled(), sizeof(struct cis_recursion_diag),
+		   diag, cis_trace_active(), sizeof(struct cis_recursion_diag),
 		   wait_gate, sizeof(cis_waited));
 	for_each_possible_cpu(cpu) {
 		struct cis_recursion_diag *d = per_cpu_ptr(&cis_recursion_diag, cpu);
@@ -137,9 +151,21 @@ static int cis_diag_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(cis_diag);
 
+static int cis_sources_show(struct seq_file *m, void *unused)
+{
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+	/* Control-plane point observations, not an atomic session acknowledgement. */
+	seq_printf(m, "version=1 owner=%u fd=%u\n",
+		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled());
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(cis_sources);
+
 static int __init cis_diag_init(void)
 {
 	debugfs_create_file("cis_recursion", 0400, NULL, NULL, &cis_diag_fops);
+	debugfs_create_file("cis_sources", 0400, NULL, NULL, &cis_sources_fops);
 	return 0;
 }
 late_initcall(cis_diag_init);
@@ -167,13 +193,16 @@ void __cis_lock_event(void *object, unsigned int kind, unsigned int phase,
 		d->outer_kind = kind;
 		d->outer_phase = phase;
 	}
-	trace_cis_lock_state(object, kind, phase, owner, flags,
-			     this_cpu_read(cis_skipped));
+	if (kind == CIS_FDLOCK)
+		trace_cis_fdlock_state(object, kind, phase, owner, flags, this_cpu_read(cis_skipped));
+	else
+		trace_cis_lock_state(object, kind, phase, owner, flags, this_cpu_read(cis_skipped));
 	this_cpu_write(cis_in_trace, false);
 	preempt_enable();
 }
 EXPORT_SYMBOL_GPL(__cis_lock_event);
 EXPORT_TRACEPOINT_SYMBOL_GPL(cis_lock_state);
+EXPORT_TRACEPOINT_SYMBOL_GPL(cis_fdlock_state);
 
 void __cis_mutex_wait(struct mutex *lock)
 {
