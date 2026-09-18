@@ -5,6 +5,18 @@ import unittest
 
 
 class FDAdapterSource(unittest.TestCase):
+    def test_chroot_devices_are_prepared_before_workload(self):
+        directory=Path(__file__).resolve().parent
+        init=(directory/'fd_vm_init.sh').read_text()
+        workload=(directory/'fd_workload.c').read_text()
+        for device in ('cis-fixture','null'):
+            self.assertIn('"/dev/'+device+'"',workload)
+            copy='cp -a /dev/'+device+' /container-root/dev/'+device
+            self.assertIn(copy,init)
+            self.assertLess(init.index(copy),init.index('/usr/bin/python3 /profile/fd_vm.py'))
+            self.assertIn('test -c /container-root/dev/'+device,init)
+        self.assertIn('exit 91',init)
+
     def test_selected_calls_and_retirement_boundaries(self):
         root=Path(__file__).resolve().parents[4]
         paths={'fs/file.c':40,'fs/legacy-filescontrol.c':6,'fs/misc-filescontrol.c':4,
