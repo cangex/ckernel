@@ -14,6 +14,27 @@ from explain import explain
 from fd_check import check
 
 
+def verify_boundaries(bounds, names, logs, window, requested_ns):
+    errors=[]
+    if bounds.get('logs')!=names or len(logs)!=len(names): errors.append('log_boundaries')
+    groups=bounds.get('groups',[])
+    if len(groups)*2!=len(names): errors.append('group_count')
+    previous=requested_ns
+    for index,group in enumerate(groups):
+        # Namespace/cgroup preparation may precede the window. Actual fixture
+        # operations must pass their barrier and fit both lifetime and window.
+        if group.get('generation')!=index or not previous<=group['start_ns']<group['end_ns']<=window['end_ns']:
+            errors.append('group_order')
+        previous=group['end_ns']
+        for text in logs[index*2:index*2+2]:
+            events=[json.loads(line.split(' ',1)[1]) for line in text.splitlines() if line.startswith('CIS_FD_TRUTH ')]
+            if not events: errors.append('missing_operation_boundaries')
+            for event in events:
+                if not max(window['start_ns'],group['start_ns'])<=event['begin_ns']<event['released_ns']<=min(window['end_ns'],group['end_ns']):
+                    errors.append('operation_outside_window_or_lifetime')
+    return sorted(set(errors))
+
+
 def verify(serial, output):
     if serial.stat().st_size>128<<20: raise ValueError('serial capacity')
     raw=serial.read_bytes();text=raw.decode();files=extract(text);prefix='/tmp/fd-evidence/'
@@ -47,13 +68,8 @@ def verify(serial, output):
         truth=check(report,[files[prefix+name] for name in names],kind)
         if lifecycle:
             bounds=value(label+'-boundaries.json')
-            if bounds['logs']!=names: errors.append('log_boundaries_'+label)
-            groups=bounds['groups'];previous=row['window']['start_ns']
-            if len(groups)!=(4 if kind=='reuse' else 1): errors.append('group_count_'+label)
-            for group in groups:
-                if not previous<=group['start_ns']<group['end_ns']<=row['window']['end_ns']:
-                    errors.append('group_window_'+label)
-                previous=group['end_ns']
+            errors += [error+'_'+label for error in verify_boundaries(bounds,names,
+                        [files[prefix+name] for name in names],row['window'],row['requested_ns'])]
             if kind=='reuse' and any('helper_affinity_restored=1' not in files[prefix+name] for name in names):
                 errors.append('reuse_allocation_setup_'+label)
         if truth['status']!='PASS': errors.append('truth_'+label)
