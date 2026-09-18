@@ -20,7 +20,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 14
+#define CIS_DIAGNOSTIC_LINKS 15
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -104,6 +104,19 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	char detail[768];
 	const char *symbol;
 	(void)cpu;
+	if(size>=sizeof(struct cis_counter_event) && size<=sizeof(struct cis_counter_event)+7 && e->type==CIS_COUNTER_EVENT) {
+		struct cis_counter_event *v=data;
+		char d[1100];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 sample_time_ns=%llu call_ns=%llu tid=%llu task_start=%llu cpu=%u leaf=0x%llx object=0x%llx parent=0x%llx operation=%u stage=%u depth=%u ordinal=%u pages=%llu usage=%lld limit_snapshot=%llu sample_shift=%u stack_id=%d",
+			(unsigned long long)e->time_ns,(unsigned long long)e->sequence_ns,
+			(unsigned long long)e->tid,(unsigned long long)v->task_start,e->cpu,
+			(unsigned long long)v->leaf,(unsigned long long)e->object,(unsigned long long)v->parent,
+			v->operation,v->stage,v->depth,v->ordinal,(unsigned long long)v->pages,
+			(long long)v->usage,(unsigned long long)v->limit,v->sample_shift,e->stack_id);
+		cis_report(ctx,"COUNTER",r,d);return;
+	}
 	if(size>=sizeof(struct cis_owner_event) && size<=sizeof(struct cis_owner_event)+7 && e->type==CIS_OWNER_EVENT) {
 		struct cis_owner_event *o=data;
 		char d[1100];
@@ -184,8 +197,8 @@ static int attach(struct capture *c,const char *name,struct bpf_link **slot)
 
 static int configure_links(struct capture *c,unsigned int kinds)
 {
-	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end","owner_state","owner_switch"};
-	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4,16,16};
+	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end","owner_state","owner_switch","counter_step"};
+	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4,16,16,32};
 	unsigned int i;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
 		if(!(kinds&masks[i])) { bpf_link__destroy(c->diagnostic_links[i]); c->diagnostic_links[i]=NULL; }

@@ -22,7 +22,7 @@ def assess(record):
     for key in ('rejected', 'lost', 'owner_skipped'):
         if type(terminal.get(key)) is int and terminal[key] > 0:
             defects.append('terminal.' + key)
-    if record.get('collector') in ('owner', 'fd', 'sched', 'reclaim', 'sync'):
+    if record.get('collector') in ('owner', 'fd', 'sched', 'reclaim', 'sync', 'counter'):
         producer = receipt.get('producer_recursion') or {}
         if producer.get('required') is not True or producer.get('valid') is not True:
             missing.append('producer_recursion')

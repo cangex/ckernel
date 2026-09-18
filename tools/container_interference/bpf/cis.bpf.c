@@ -17,10 +17,10 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,2); __type(key,__u64
 #endif
 struct { __uint(type,BPF_MAP_TYPE_PERF_EVENT_ARRAY); __uint(max_entries,512); __type(key,__u32); __type(value,__u32); } events SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(key,__u32); __type(value,struct cis_bpf_stats); } stats SEC(".maps");
-#if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5
+#if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 7
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7
 struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,CIS_STACKS); __type(key,__u32); __type(value,__u64[CIS_STACK_DEPTH]); } stacks SEC(".maps");
 #endif
 #if CIS_PROFILE == 0
@@ -101,6 +101,58 @@ static __always_inline void emit(void *ctx,struct cis_event *e)
 	if(bpf_perf_event_output(ctx,&events,BPF_F_CURRENT_CPU,e,sizeof(*e))) COUNT(s,lost);
 	else COUNT(s,emitted);
 }
+
+#if CIS_PROFILE == 7
+SEC("raw_tp/cis_counter_step")
+int counter_step(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct cis_counter_sample *sample = (void *)ctx->args[0];
+	struct task_struct *task = (void *)bpf_get_current_task();
+	struct cis_counter_event e = {};
+	struct cis_identity id = {};
+	struct cis_pending_key key = {};
+	struct cis_event *saved, begin = {};
+	struct cis_bpf_stats *s = statistics();
+	u64 now = bpf_ktime_get_ns();
+
+	COUNT(s, received);
+	if (!synchronous_context()) return 0;
+	e.base.sequence_ns = BPF_CORE_READ(sample, start_ns);
+	e.base.time_ns = BPF_CORE_READ(sample, time_ns);
+	e.stage = BPF_CORE_READ(sample, stage);
+	key.tid = bpf_get_current_pid_tgid();
+	key.task_start_ns = BPF_CORE_READ(task, start_boottime);
+	key.object = e.base.sequence_ns; key.type = CIS_COUNTER_EVENT;
+	if (e.stage == 1) {
+		if (!identity(task, &id) || !allowed(&id, CIS_DIAG_COUNTER, now)) return 0;
+		begin.time_ns = e.base.sequence_ns; begin.id = id.id;
+		begin.type = CIS_COUNTER_EVENT; begin.tid = key.tid; begin.object = key.object;
+		begin.generation = id.generation; begin.stack_id = bpf_get_stackid(ctx, &stacks, 0);
+		if (bpf_map_update_elem(&pending, &key, &begin, BPF_NOEXIST)) {
+			COUNT(s, rejected); return 0;
+		}
+	}
+	saved = bpf_map_lookup_elem(&pending, &key);
+	if (!saved) return 0; /* Unselected/pre-window calls are not partial target calls. */
+	if (!same_window(saved, CIS_DIAG_COUNTER, now)) {
+		COUNT(s, expired); bpf_map_delete_elem(&pending, &key); return 0;
+	}
+	e.base.id = saved->id; e.base.generation = saved->generation;
+	e.base.stack_id = saved->stack_id; e.base.type = CIS_COUNTER_EVENT;
+	e.base.tid = key.tid; e.task_start = key.task_start_ns;
+	e.base.cpu = bpf_get_smp_processor_id();
+	e.base.object = (u64)BPF_CORE_READ(sample, counter);
+	e.leaf = (u64)BPF_CORE_READ(sample, leaf); e.parent = (u64)BPF_CORE_READ(sample, parent);
+	e.pages = BPF_CORE_READ(sample, pages); e.limit = BPF_CORE_READ(sample, limit);
+	e.usage = BPF_CORE_READ(sample, usage); e.operation = BPF_CORE_READ(sample, op);
+	e.depth = BPF_CORE_READ(sample, depth); e.ordinal = BPF_CORE_READ(sample, ordinal);
+	e.sample_shift = BPF_CORE_READ(sample, sample_shift);
+	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
+	else COUNT(s, emitted);
+	if (e.stage == 9) bpf_map_delete_elem(&pending, &key);
+	return 0;
+}
+#endif
 
 #if CIS_PROFILE == 0 || CIS_PROFILE == 1
 SEC("perf_event")

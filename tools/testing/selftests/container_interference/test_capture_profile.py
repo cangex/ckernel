@@ -63,7 +63,12 @@ int main(void) {
     assert(cis_profile_program(6, "owner_switch"));
     assert(!cis_profile_program(6, "lock_begin"));
     assert(!cis_profile_map(6, "pending"));
-    assert(!cis_profile_map(7, "roots"));
+    assert(cis_profile_program(7, "counter_step"));
+    assert(!cis_profile_program(7, "owner_state"));
+    assert(cis_profile_map(7, "roots"));
+    assert(cis_profile_map(7, "pending"));
+    assert(!cis_profile_map(7, "holders"));
+    assert(!cis_profile_map(8, "roots"));
     return 0;
 }
 '''
