@@ -244,13 +244,16 @@ def run(specialists=False, bridge=False, costs=False):
         configured=request('schedule_configure',plan=dict(interval_s=60,jitter_ms=0))
         enabled=request('schedule_enable')
         assert enabled['admission_policy']=='prototype' and enabled['next_ns']>begin
-        attempted=set();complete=set();deadline=time.monotonic()+375
+        attempted=set();complete=set();manual_seen=set();deadline=time.monotonic()+375
         while time.monotonic()<deadline and len(attempted)<6:
             status=request('status')
             if status['state']=='FAULTED':raise RuntimeError(status)
             for sid in status['sessions']:
-                if sid in attempted:continue
+                if sid in attempted or sid in manual_seen:continue
                 small=request('status',session=sid)
+                if not small.get('scheduled') and small.get('finalized'):
+                    manual_seen.add(sid)
+                    continue
                 if small.get('scheduled') and small.get('finalized'):
                     row,report=finish(sid);attempted.add(sid)
                     survey=row.get('survey',{}).get('roots',{})

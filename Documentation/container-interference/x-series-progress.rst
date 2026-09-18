@@ -43,7 +43,9 @@ not complete spinlock acquisition or holder history.
 
 ``files_struct->file_lock`` uses are not confined to ``fs/file.c``.
 Additional direct operations occur in ``fs/legacy-filescontrol.c``,
-``fs/misc-filescontrol.c``, ``fs/locks.c`` and ``fs/proc/fd.c``. An adapter
+``fs/misc-filescontrol.c``, ``fs/locks.c``, ``fs/proc/fd.c`` and
+``io_uring/openclose.c``. Driver fields also named file_lock are different
+objects and must not be included merely by field-name matching. An adapter
 that only instruments alloc_fd/close_fd_get_file must not claim complete
 FD lock ownership. It must either include those uses in its supported
 configuration or explicitly downgrade incomplete history.

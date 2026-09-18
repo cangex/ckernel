@@ -22,7 +22,7 @@ class SyncCandidates(unittest.TestCase):
             detail='type=3 sample_time_ns=%d duration_ns=%d flags=%d object=%d tid=101 stack_id=-1'%(time,duration,flags,object))).encode()
 
     def test_spin_read_write_are_candidates_not_owners(self):
-        for flags, access in [(1,'spin'),(2,'read'),(4,'write')]:
+        for flags, access in [(1,'spin'),(2,'read'),(4,'write'),(33,'mutex'),(3,'read'),(5,'write')]:
             result=analyze(self.record(),self.raw(flags=flags))
             candidate=result['candidates'][0]
             self.assertEqual(candidate['access_class'],access)
@@ -39,6 +39,9 @@ class SyncCandidates(unittest.TestCase):
     def test_unknown_context_incomplete_and_loss(self):
         for flags in (8,16,128):
             self.assertFalse(analyze(self.record(),self.raw(flags=flags))['candidates'])
+        result=analyze(self.record(),self.raw(flags=6))
+        self.assertFalse(result['candidates'])
+        self.assertEqual(result['excluded']['ambiguous_access_flags'],1)
         self.assertFalse(analyze(self.record(),self.raw(time=90,duration=20))['candidates'])
         row=self.record(); row['receipt']['terminal']['lost']=1
         self.assertFalse(analyze(row,self.raw())['candidates'])

@@ -5,6 +5,8 @@ No recall estimate: qspinlock does not emit a pair for every contended acquisiti
 No ownership result is inferred from fixture truth or fed into the collector.
 """
 import json
+import hashlib
+from pathlib import Path
 
 
 def check(report, logs, expected_positive=False):
@@ -30,6 +32,8 @@ def check(report, logs, expected_positive=False):
     if expected_positive and not matched: errors.append(dict(reason='positive_fixture_not_observed'))
     if report['quality']['status']!='PASS': errors.append(dict(reason='capture_quality',quality=report['quality']))
     return dict(schema='cis-sync-fixture-check-v1',status='FAIL' if errors else 'PASS',
+                checker_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                truth_sha256=[hashlib.sha256(text.encode()).hexdigest() for text in logs],
                 truth_operations=len(truth),matched_intervals=len(matched),matches=matched,errors=errors,
                 false_observed_relations=len(errors),eligible_recall=None,holder_coverage='NOT_IMPLEMENTED',
                 scope='first-layer discovery only; truth is never used to manufacture an owner edge')
