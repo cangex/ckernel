@@ -402,9 +402,10 @@ void __cis_alloc_release(struct kmem_cache *cache, const char *name,
 	}
 	context = in_hardirq() ? 2 : in_serving_softirq() ? 1 : 0;
 	guard = this_cpu_ptr(&cis_alloc_free_guard);
-	/* A softirq may release real RCU objects while a task's probe is paused.
-	 * Separate execution levels; still reject re-entry at the same level. */
-	if (guard->active[context] || (!context && this_cpu_read(cis_in_trace))) {
+	/* A release may interrupt a different probe, but the same raw-tp BPF
+	 * program cannot recurse even across execution levels on this CPU. */
+	if (guard->active[0] || guard->active[1] || guard->active[2] ||
+	    (!context && this_cpu_read(cis_in_trace))) {
 		this_cpu_inc(cis_alloc_free_nested);
 		this_cpu_inc(cis_skipped);
 		goto out;

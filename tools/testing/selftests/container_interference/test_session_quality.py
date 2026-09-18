@@ -18,6 +18,20 @@ class Quality(unittest.TestCase):
     def test_complete(self):
         self.assertEqual(assess(self.record())['status'], 'PASS')
 
+    def test_bpf_program_misses_cannot_be_hidden_by_source_counter(self):
+        r = self.record()
+        r['receipt']['program_audit'] = dict(required=True, valid=True, programs=2, recursion_misses=0)
+        self.assertEqual(assess(r)['status'], 'PASS')
+        r['receipt']['program_audit']['recursion_misses'] = 1
+        self.assertIn('program_audit.recursion_misses', assess(r)['defects'])
+        r['receipt']['program_audit']['recursion_misses'] = None
+        self.assertEqual(assess(r)['status'], 'BLOCKED')
+        r['receipt']['program_audit'] = 'invalid'
+        self.assertEqual(assess(r)['status'], 'BLOCKED')
+
+    def test_historical_program_misses_explicitly_unmeasured(self):
+        self.assertEqual(assess(self.record())['bpf_recursion_audit'], 'HISTORICAL_NOT_RECORDED')
+
     def test_last_unemitted_recursion_not_lost(self):
         r = self.record()
         r['collector'] = 'owner'

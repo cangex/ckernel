@@ -194,6 +194,13 @@ drain:
 				ctx->session_collector>=2?"true":"false",recursion_valid?"true":"false",
 				(unsigned long long)recursion_skipped);
 	}
+	{
+		size_t n=strlen(packet);
+		if(n && packet[n-1]=='}')
+			snprintf(packet+n-1,sizeof(packet)-n+1,",\"program_audit\":{\"required\":%s,\"valid\":%s,\"programs\":%u,\"recursion_misses\":%llu}}",
+				ctx->session_collector>=2?"true":"false",ctx->program_audit_valid?"true":"false",
+				ctx->program_audit_count,(unsigned long long)ctx->program_recursion_misses);
+	}
 	notify(channel,packet); close(channel); free(ctx);
 	return stop_error?4:err?1:0;
 }

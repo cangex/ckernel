@@ -30,6 +30,19 @@ def assess(record):
             missing.append('producer_recursion.skipped')
         elif producer['skipped']:
             defects.append('producer_recursion.skipped')
+    programs = receipt.get('program_audit')
+    if programs is not None and not isinstance(programs, dict):
+        missing.append('program_audit')
+    elif programs is not None and programs.get('required') is True:
+        if programs.get('valid') is not True:
+            missing.append('program_audit.valid')
+        if type(programs.get('programs')) is not int or programs['programs'] <= 0:
+            missing.append('program_audit.programs')
+        misses = programs.get('recursion_misses')
+        if type(misses) is not int or misses < 0:
+            missing.append('program_audit.recursion_misses')
+        elif misses:
+            defects.append('program_audit.recursion_misses')
     budget = (record.get('budget_reason') or
               (record.get('process_cpu_budget') or {}).get('violation'))
     reason = receipt.get('reason')
@@ -44,4 +57,5 @@ def assess(record):
                 missing=missing, defects=defects, budget_abort=bool(policy),
                 cleanup_verified=record.get('objects_absent') is True,
                 terminal=terminal, reason=reason,
+                bpf_recursion_audit='RECORDED' if programs is not None else 'HISTORICAL_NOT_RECORDED',
                 interpretation='safe cleanup and policy stops do not imply complete evidence')

@@ -60,6 +60,9 @@ struct cis_context {
 	uint64_t terminal_received, terminal_emitted, terminal_rejected;
 	uint64_t terminal_lost, terminal_owner_skipped;
 	int terminal_valid;
+	int program_audit_valid;
+	unsigned int program_audit_count;
+	uint64_t program_recursion_misses;
 	const char *fault_stage;
 	unsigned int fault_seen;
 	void *capture;

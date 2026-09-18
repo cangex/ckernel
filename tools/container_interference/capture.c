@@ -12,6 +12,7 @@
 #include <linux/perf_event.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -673,6 +674,38 @@ int cis_capture_fd(struct cis_context *ctx)
 	return c && ctx->diagnostic?perf_buffer__epoll_fd(c->ring):-1;
 }
 
+static void terminal_program_audit(struct capture *c)
+{
+	struct bpf_program *program;
+	struct cis_context *ctx = c->ctx;
+	unsigned int missing = 0;
+	char detail[256];
+	if (!c->object)
+		return;
+	bpf_object__for_each_program(program, c->object) {
+		struct bpf_prog_info info = {0};
+		__u32 size = sizeof(info);
+		int valid;
+		if (!bpf_program__autoload(program))
+			continue;
+		ctx->program_audit_count++;
+		valid = !bpf_obj_get_info_by_fd(bpf_program__fd(program), &info, &size) &&
+			size >= offsetof(struct bpf_prog_info, recursion_misses) + sizeof(info.recursion_misses);
+		if (!valid)
+			missing++;
+		else
+			ctx->program_recursion_misses += info.recursion_misses;
+		snprintf(detail, sizeof(detail), "program=%s id=%u valid=%d recursion_misses=%llu fresh_object=1 producers_detached=%d",
+			bpf_program__name(program), info.id, valid,
+			(unsigned long long)info.recursion_misses, c->quiesced);
+		cis_report(ctx, "terminal_program", NULL, detail);
+	}
+	ctx->program_audit_valid = !missing && ctx->program_audit_count > 0;
+	if (ctx->session_id && ctx->session_collector >= 2 &&
+	    (!ctx->program_audit_valid || ctx->program_recursion_misses))
+		ctx->errors++;
+}
+
 void cis_capture_stop(struct cis_context *ctx)
 {
 	struct capture *c=ctx->capture;
@@ -689,6 +722,7 @@ void cis_capture_stop(struct cis_context *ctx)
 		cis_report(ctx,"terminal_perf",NULL,detail);
 	}
 	if(c->ring) perf_buffer__consume(c->ring);
+	terminal_program_audit(c);
 	/* Keep immutable identities and watches until buffered records are interpreted. */
 	if(ctx->session_id && ctx->session_collector!=1 && c->object) for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
 		struct cis_root *r=&ctx->roots[i];
