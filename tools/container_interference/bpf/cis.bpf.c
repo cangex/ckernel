@@ -111,7 +111,7 @@ static __always_inline void emit(void *ctx,struct cis_event *e)
 }
 
 #if CIS_PROFILE == 9
-static __always_inline void net_actor(void *ctx, struct cis_net_event *e, u32 context)
+static __always_inline void net_actor(struct cis_net_event *e, u32 context)
 {
 	struct task_struct *task = (void *)bpf_get_current_task();
 	struct cis_identity actor = {};
@@ -122,7 +122,6 @@ static __always_inline void net_actor(void *ctx, struct cis_net_event *e, u32 co
 		e->actor_start = BPF_CORE_READ(task, start_boottime);
 		if (identity(task, &actor)) { e->actor_id = actor.id; e->actor_generation = actor.generation; }
 	}
-	e->base.stack_id = bpf_get_stackid(ctx, &stacks, 0);
 }
 static __always_inline void net_emit(void *ctx, struct cis_net_event *e)
 {
@@ -143,7 +142,7 @@ int net_state(struct bpf_raw_tracepoint_args *ctx)
 	u32 phase = BPF_CORE_READ(sample, phase), context = BPF_CORE_READ(sample, context);
 	COUNT(s, received);
 	if (!cookie || context > 2 || phase < 1 || phase > 8) { COUNT(s, rejected); return 0; }
-	net_actor(ctx, &e, context);
+	net_actor(&e, context);
 	watch = bpf_map_lookup_elem(&net_watched, &cookie);
 	if (!watch && phase <= 5 && e.actor_id) {
 		struct cis_identity actor = { .id = e.actor_id, .generation = e.actor_generation };
@@ -160,6 +159,7 @@ int net_state(struct bpf_raw_tracepoint_args *ctx)
 	}
 	if (!watch) return 0;
 	if (now < watch->start_ns || now >= watch->deadline_ns) { COUNT(s, expired); return 0; }
+	e.base.stack_id = bpf_get_stackid(ctx, &stacks, 0);
 	e.base.id = watch->id; e.base.generation = watch->generation;
 	e.base.time_ns = now; e.base.type = CIS_NET_EVENT;
 	e.base.object = (u64)BPF_CORE_READ(sample, sk); e.cookie = cookie;
@@ -198,7 +198,8 @@ int net_release(struct bpf_raw_tracepoint_args *ctx)
 	bpf_map_delete_elem(&net_skb, &skb);
 	if (!same_window(&e.base, CIS_DIAG_NET, now)) { COUNT(s, expired); return 0; }
 	e.base.time_ns = now; e.phase = 9;
-	net_actor(ctx, &e, BPF_CORE_READ(sample, context));
+	net_actor(&e, BPF_CORE_READ(sample, context));
+	e.base.stack_id = bpf_get_stackid(ctx, &stacks, 0);
 	net_emit(ctx, &e);
 	return 0;
 }

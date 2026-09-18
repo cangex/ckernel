@@ -77,7 +77,16 @@ int main(void) {
     assert(cis_profile_map(8, "roots"));
     assert(cis_profile_map(8, "pending"));
     assert(!cis_profile_map(8, "holders"));
-    assert(!cis_profile_map(9, "roots"));
+    assert(cis_profile_map(9, "roots"));
+    assert(cis_profile_map(9, "net_watched"));
+    assert(cis_profile_map(9, "net_skb"));
+    assert(cis_profile_map(9, "net_service"));
+    assert(!cis_profile_map(9, "alloc_live"));
+    assert(!cis_profile_map(9, "holders"));
+    assert(cis_profile_program(9, "net_state"));
+    assert(cis_profile_program(9, "net_release"));
+    assert(!cis_profile_program(9, "alloc_release"));
+    assert(!cis_profile_map(10, "roots"));
     return 0;
 }
 '''

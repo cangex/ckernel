@@ -47,6 +47,12 @@ COLLECTORS = {
                     clock='monotonic_wall_ns', contexts=['synchronous_allocation','release_task_or_irq_executor_separate'],
                     object_kinds=['kmem_cache_address', 'kmem_cache_node_list_lock_address', 'sampled_allocation'],
                     source_filter='one exact boot-selected cache; per-CPU allocation sampling and first 64 stages; tracked releases before reuse, bounded 1024 live objects, free batch cap rejects lifetime evidence; no inferred holder or cache lifetime'),
+    'net': dict(profile=9, programs=['net_state','net_release'],
+                maps=COMMON_MAPS+['targets','stacks','net_watched','net_skb','net_service'],
+                relation='socket_ownership_and_backlog',clock='monotonic_wall_ns',
+                contexts=['task_actor','irq_executor_unknown'],
+                object_kinds=['native_tcp_socket_cookie','observed_backlog_skb_episode'],
+                source_filter='boot-frozen native cookie selection; target opens 64 socket watches; 256 skb and service records; release entry not completion; packet origin and unobserved holders unknown'),
 }
 
 
