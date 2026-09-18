@@ -122,5 +122,20 @@ TRACE_EVENT_FN(cis_fdlock_state,
 		__entry->flags, __entry->skipped),
 	cis_fd_observe_register, cis_fd_observe_unregister
 );
+TRACE_EVENT(cis_rwsem_state,
+	TP_PROTO(void *object, unsigned int phase, unsigned long skipped),
+	TP_ARGS(object, phase, skipped),
+	TP_STRUCT__entry(
+		__field(void *, object)
+		__field(unsigned int, phase)
+		__field(unsigned long, skipped)
+	),
+	TP_fast_assign(
+		__entry->object = object; __entry->phase = phase;
+		__entry->skipped = skipped;
+	),
+	TP_printk("object=%p phase=%u skipped=%lu",
+		__entry->object, __entry->phase, __entry->skipped)
+);
 #endif
 #include <trace/define_trace.h>

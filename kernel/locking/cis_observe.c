@@ -20,6 +20,7 @@
 #endif
 #define CREATE_TRACE_POINTS
 #include <linux/cis_observe.h>
+#include <linux/cis_rwsem.h>
 
 static DEFINE_PER_CPU(bool, cis_in_trace);
 static DEFINE_PER_CPU(unsigned long, cis_skipped);
@@ -82,7 +83,7 @@ static bool cis_trace_active(void)
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
 	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
 	       trace_cis_alloc_release_enabled() || trace_cis_net_state_enabled() ||
-	       trace_cis_net_skb_release_enabled() || cis_block_active();
+	       trace_cis_net_skb_release_enabled() || trace_cis_rwsem_state_enabled() || cis_block_active();
 }
 
 static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
@@ -185,14 +186,15 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=6 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u\n",
+	seq_printf(m, "version=7 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
 		   trace_cis_net_skb_release_enabled(), CIS_BLOCK_ON(block_io_start),
 		   CIS_BLOCK_ON(block_rq_insert), CIS_BLOCK_ON(block_rq_issue),
 		   CIS_BLOCK_ON(block_rq_requeue), CIS_BLOCK_ON(block_rq_complete),
-		   CIS_BLOCK_ON(block_rq_merge), CIS_BLOCK_ON(block_rq_remap));
+		   CIS_BLOCK_ON(block_rq_merge), CIS_BLOCK_ON(block_rq_remap),
+		   trace_cis_rwsem_state_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -223,6 +225,22 @@ static int __init cis_diag_init(void)
 	return 0;
 }
 late_initcall(cis_diag_init);
+
+/* Acquired/release callbacks bracket a conservative interior hold interval.
+ * They do not read rwsem->owner (which is not a reader membership list). */
+void __cis_rwsem_event(void *object, unsigned int phase)
+{
+	preempt_disable_notrace();
+	if (this_cpu_read(cis_in_trace) || in_interrupt()) {
+		this_cpu_inc(cis_skipped);
+		preempt_enable_notrace();
+		return;
+	}
+	this_cpu_write(cis_in_trace, true);
+	trace_cis_rwsem_state(object, phase, this_cpu_read(cis_skipped));
+	this_cpu_write(cis_in_trace, false);
+	preempt_enable_notrace();
+}
 
 void __cis_lock_event(void *object, unsigned int kind, unsigned int phase,
 		struct task_struct *owner, unsigned long flags)

@@ -26,6 +26,7 @@
 #include <linux/sched/clock.h>
 #include <linux/export.h>
 #include <linux/rwsem.h>
+#include <linux/cis_rwsem.h>
 #include <linux/atomic.h>
 #include <trace/events/lock.h>
 
@@ -327,6 +328,7 @@ void __init_rwsem(struct rw_semaphore *sem, const char *name,
 #ifdef CONFIG_RWSEM_SPIN_ON_OWNER
 	osq_lock_init(&sem->osq);
 #endif
+	cis_rwsem_event(sem, CIS_RW_INIT);
 }
 EXPORT_SYMBOL(__init_rwsem);
 
@@ -1519,7 +1521,9 @@ void __sched down_read(struct rw_semaphore *sem)
 	might_sleep();
 	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
 
+	cis_rwsem_event(sem, CIS_RW_READ_BEGIN);
 	LOCK_CONTENDED(sem, __down_read_trylock, __down_read);
+	cis_rwsem_event(sem, CIS_RW_READ_ACQUIRED);
 }
 EXPORT_SYMBOL(down_read);
 
@@ -1528,11 +1532,14 @@ int __sched down_read_interruptible(struct rw_semaphore *sem)
 	might_sleep();
 	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
 
+	cis_rwsem_event(sem, CIS_RW_READ_BEGIN);
 	if (LOCK_CONTENDED_RETURN(sem, __down_read_trylock, __down_read_interruptible)) {
+		cis_rwsem_event(sem, CIS_RW_READ_ABORT);
 		rwsem_release(&sem->dep_map, _RET_IP_);
 		return -EINTR;
 	}
 
+	cis_rwsem_event(sem, CIS_RW_READ_ACQUIRED);
 	return 0;
 }
 EXPORT_SYMBOL(down_read_interruptible);
@@ -1542,11 +1549,14 @@ int __sched down_read_killable(struct rw_semaphore *sem)
 	might_sleep();
 	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
 
+	cis_rwsem_event(sem, CIS_RW_READ_BEGIN);
 	if (LOCK_CONTENDED_RETURN(sem, __down_read_trylock, __down_read_killable)) {
+		cis_rwsem_event(sem, CIS_RW_READ_ABORT);
 		rwsem_release(&sem->dep_map, _RET_IP_);
 		return -EINTR;
 	}
 
+	cis_rwsem_event(sem, CIS_RW_READ_ACQUIRED);
 	return 0;
 }
 EXPORT_SYMBOL(down_read_killable);
@@ -1556,10 +1566,13 @@ EXPORT_SYMBOL(down_read_killable);
  */
 int down_read_trylock(struct rw_semaphore *sem)
 {
-	int ret = __down_read_trylock(sem);
+	int ret;
+	cis_rwsem_event(sem, CIS_RW_READ_TRY);
+	ret = __down_read_trylock(sem);
 
 	if (ret == 1)
 		rwsem_acquire_read(&sem->dep_map, 0, 1, _RET_IP_);
+	cis_rwsem_event(sem, ret ? CIS_RW_READ_ACQUIRED : CIS_RW_TRY_FAILED);
 	return ret;
 }
 EXPORT_SYMBOL(down_read_trylock);
@@ -1571,7 +1584,9 @@ void __sched down_write(struct rw_semaphore *sem)
 {
 	might_sleep();
 	rwsem_acquire(&sem->dep_map, 0, 0, _RET_IP_);
+	cis_rwsem_event(sem, CIS_RW_WRITE_BEGIN);
 	LOCK_CONTENDED(sem, __down_write_trylock, __down_write);
+	cis_rwsem_event(sem, CIS_RW_WRITE_ACQUIRED);
 }
 EXPORT_SYMBOL(down_write);
 
@@ -1583,12 +1598,15 @@ int __sched down_write_killable(struct rw_semaphore *sem)
 	might_sleep();
 	rwsem_acquire(&sem->dep_map, 0, 0, _RET_IP_);
 
+	cis_rwsem_event(sem, CIS_RW_WRITE_BEGIN);
 	if (LOCK_CONTENDED_RETURN(sem, __down_write_trylock,
 				  __down_write_killable)) {
+		cis_rwsem_event(sem, CIS_RW_WRITE_ABORT);
 		rwsem_release(&sem->dep_map, _RET_IP_);
 		return -EINTR;
 	}
 
+	cis_rwsem_event(sem, CIS_RW_WRITE_ACQUIRED);
 	return 0;
 }
 EXPORT_SYMBOL(down_write_killable);
@@ -1598,11 +1616,14 @@ EXPORT_SYMBOL(down_write_killable);
  */
 int down_write_trylock(struct rw_semaphore *sem)
 {
-	int ret = __down_write_trylock(sem);
+	int ret;
+	cis_rwsem_event(sem, CIS_RW_WRITE_TRY);
+	ret = __down_write_trylock(sem);
 
 	if (ret == 1)
 		rwsem_acquire(&sem->dep_map, 0, 1, _RET_IP_);
 
+	cis_rwsem_event(sem, ret ? CIS_RW_WRITE_ACQUIRED : CIS_RW_TRY_FAILED);
 	return ret;
 }
 EXPORT_SYMBOL(down_write_trylock);
@@ -1613,6 +1634,7 @@ EXPORT_SYMBOL(down_write_trylock);
 void up_read(struct rw_semaphore *sem)
 {
 	rwsem_release(&sem->dep_map, _RET_IP_);
+	cis_rwsem_event(sem, CIS_RW_READ_RELEASE);
 	__up_read(sem);
 }
 EXPORT_SYMBOL(up_read);
@@ -1623,6 +1645,7 @@ EXPORT_SYMBOL(up_read);
 void up_write(struct rw_semaphore *sem)
 {
 	rwsem_release(&sem->dep_map, _RET_IP_);
+	cis_rwsem_event(sem, CIS_RW_WRITE_RELEASE);
 	__up_write(sem);
 }
 EXPORT_SYMBOL(up_write);
@@ -1633,7 +1656,9 @@ EXPORT_SYMBOL(up_write);
 void downgrade_write(struct rw_semaphore *sem)
 {
 	lock_downgrade(&sem->dep_map, _RET_IP_);
+	cis_rwsem_event(sem, CIS_RW_DOWNGRADE_BEGIN);
 	__downgrade_write(sem);
+	cis_rwsem_event(sem, CIS_RW_DOWNGRADE_END);
 }
 EXPORT_SYMBOL(downgrade_write);
 
@@ -1643,7 +1668,9 @@ void down_read_nested(struct rw_semaphore *sem, int subclass)
 {
 	might_sleep();
 	rwsem_acquire_read(&sem->dep_map, subclass, 0, _RET_IP_);
+	cis_rwsem_event(sem, CIS_RW_READ_BEGIN);
 	LOCK_CONTENDED(sem, __down_read_trylock, __down_read);
+	cis_rwsem_event(sem, CIS_RW_READ_ACQUIRED);
 }
 EXPORT_SYMBOL(down_read_nested);
 
@@ -1652,11 +1679,14 @@ int down_read_killable_nested(struct rw_semaphore *sem, int subclass)
 	might_sleep();
 	rwsem_acquire_read(&sem->dep_map, subclass, 0, _RET_IP_);
 
+	cis_rwsem_event(sem, CIS_RW_READ_BEGIN);
 	if (LOCK_CONTENDED_RETURN(sem, __down_read_trylock, __down_read_killable)) {
+		cis_rwsem_event(sem, CIS_RW_READ_ABORT);
 		rwsem_release(&sem->dep_map, _RET_IP_);
 		return -EINTR;
 	}
 
+	cis_rwsem_event(sem, CIS_RW_READ_ACQUIRED);
 	return 0;
 }
 EXPORT_SYMBOL(down_read_killable_nested);
@@ -1665,29 +1695,19 @@ void _down_write_nest_lock(struct rw_semaphore *sem, struct lockdep_map *nest)
 {
 	might_sleep();
 	rwsem_acquire_nest(&sem->dep_map, 0, 0, nest, _RET_IP_);
+	cis_rwsem_event(sem, CIS_RW_WRITE_BEGIN);
 	LOCK_CONTENDED(sem, __down_write_trylock, __down_write);
+	cis_rwsem_event(sem, CIS_RW_WRITE_ACQUIRED);
 }
 EXPORT_SYMBOL(_down_write_nest_lock);
-
-void down_read_non_owner(struct rw_semaphore *sem)
-{
-	might_sleep();
-	__down_read(sem);
-	/*
-	 * The owner value for a reader-owned lock is mostly for debugging
-	 * purpose only and is not critical to the correct functioning of
-	 * rwsem. So it is perfectly fine to set it in a preempt-enabled
-	 * context here.
-	 */
-	__rwsem_set_reader_owned(sem, NULL);
-}
-EXPORT_SYMBOL(down_read_non_owner);
 
 void down_write_nested(struct rw_semaphore *sem, int subclass)
 {
 	might_sleep();
 	rwsem_acquire(&sem->dep_map, subclass, 0, _RET_IP_);
+	cis_rwsem_event(sem, CIS_RW_WRITE_BEGIN);
 	LOCK_CONTENDED(sem, __down_write_trylock, __down_write);
+	cis_rwsem_event(sem, CIS_RW_WRITE_ACQUIRED);
 }
 EXPORT_SYMBOL(down_write_nested);
 
@@ -1696,18 +1716,37 @@ int __sched down_write_killable_nested(struct rw_semaphore *sem, int subclass)
 	might_sleep();
 	rwsem_acquire(&sem->dep_map, subclass, 0, _RET_IP_);
 
+	cis_rwsem_event(sem, CIS_RW_WRITE_BEGIN);
 	if (LOCK_CONTENDED_RETURN(sem, __down_write_trylock,
 				  __down_write_killable)) {
+		cis_rwsem_event(sem, CIS_RW_WRITE_ABORT);
 		rwsem_release(&sem->dep_map, _RET_IP_);
 		return -EINTR;
 	}
 
+	cis_rwsem_event(sem, CIS_RW_WRITE_ACQUIRED);
 	return 0;
 }
 EXPORT_SYMBOL(down_write_killable_nested);
 
+#endif
+
+#if defined(CONFIG_DEBUG_LOCK_ALLOC) || defined(CONFIG_CIS_OBSERVE)
+void down_read_non_owner(struct rw_semaphore *sem)
+{
+	might_sleep();
+	cis_rwsem_event(sem, CIS_RW_ANONYMOUS_BEGIN);
+	__down_read(sem);
+	/* Preserve the original debug implementation; never publish a reader owner. */
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	__rwsem_set_reader_owned(sem, NULL);
+#endif
+}
+EXPORT_SYMBOL(down_read_non_owner);
+
 void up_read_non_owner(struct rw_semaphore *sem)
 {
+	cis_rwsem_event(sem, CIS_RW_ANONYMOUS_END);
 	DEBUG_RWSEMS_WARN_ON(!is_rwsem_reader_owned(sem), sem);
 	__up_read(sem);
 }

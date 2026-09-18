@@ -254,8 +254,13 @@ extern void up_read_non_owner(struct rw_semaphore *sem);
 # define down_write_nest_lock(sem, nest_lock)	down_write(sem)
 # define down_write_nested(sem, subclass)	down_write(sem)
 # define down_write_killable_nested(sem, subclass)	down_write_killable(sem)
+#ifdef CONFIG_CIS_OBSERVE
+extern void down_read_non_owner(struct rw_semaphore *sem);
+extern void up_read_non_owner(struct rw_semaphore *sem);
+#else
 # define down_read_non_owner(sem)		down_read(sem)
 # define up_read_non_owner(sem)			up_read(sem)
+#endif
 #endif
 
 #endif /* _LINUX_RWSEM_H */
