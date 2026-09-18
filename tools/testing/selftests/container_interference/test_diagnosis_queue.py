@@ -58,6 +58,24 @@ class DiagnosisQueueTests(unittest.TestCase):
         self.assertIsNone(self.q.select(self.roots,1,{'counter'},automatic=True))
         self.assertIsNotNone(self.q.select(self.roots,1,{'counter'}))
 
+    def test_new_evidence_refreshes_both_eligibility_directions(self):
+        p=self.proposal(); p['automatic_eligible']=False
+        old=self.q.offer(p,self.roots,1); first=self.time
+        self.time+=NS; new=self.offer('1:1','counter','8'); self.q.enabled=True
+        self.assertNotEqual(old,new); self.assertNotIn(old,self.q.items)
+        self.assertEqual(self.q.items[new]['enqueued_ns'],first)
+        self.assertEqual(self.q.select(self.roots,1,{'counter'},automatic=True)['candidate_id'],new)
+        self.time+=NS; p=self.proposal(sid='9'); p['automatic_eligible']=False
+        self.q.offer(p,self.roots,1)
+        self.assertIsNone(self.q.select(self.roots,1,{'counter'},automatic=True))
+        self.assertEqual(len(self.q.items),1)
+
+    def test_fairness_uses_latest_service_across_collectors(self):
+        self.time=1000*NS
+        self.q.last={'1:1|counter':10*NS,'1:1|net':700*NS,'2:1|counter':500*NS}
+        self.offer('1:1','block'); self.offer('2:1','block')
+        self.assertEqual(self.q.select(self.roots,1,{'block'})['target'],'2:1')
+
     def test_source_routing_never_calls_counter_or_tcp_a_mutex(self):
         for symbol,collector in [('page_counter_try_charge','counter'),('alloc_fd','fd'),('mt_alloc_one','allocator'),
             ('kmem_cache_alloc','allocator'),('release_sock','net'),('skb_release_all','net'),('blk_mq_submit_bio','block'),

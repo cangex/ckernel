@@ -123,6 +123,6 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     for name in ('image','image-sha256','initrd','evidence'): parser.add_argument('--'+name,required=True)
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x2-counter','x2-memcg','x3-allocator','x3-fixture','x4-net','x4-backlog','x5-block'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x2-counter','x2-memcg','x3-allocator','x3-fixture','x4-net','x4-backlog','x5-block','x6-diagnosis'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     raise SystemExit(run(parser.parse_args()))

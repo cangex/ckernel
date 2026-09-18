@@ -40,11 +40,19 @@ class DiagnosisQueue:
                 or not isinstance(p.get('source_session'),str) or not p['source_session'].isascii()
                 or not p['source_session'].isdigit() or len(p['source_session'])>24):
             raise ValueError('untrusted or stale diagnosis proposal')
-        if any((i['target'],i['collector'])==(p['target'],p['collector']) for i in self.items.values()):
-            self.skipped['duplicate_pending']+=1; return None
+        pending=next(((k,i) for k,i in self.items.items()
+                      if (i['target'],i['collector'])==(p['target'],p['collector'])),None)
+        enqueued=now
+        if pending:
+            old_key,old=pending
+            if p['source_end_ns']<=old['source_end_ns']:
+                self.skipped['duplicate_pending']+=1; return None
+            # Fresh evidence replaces eligibility, not accumulated queue priority.
+            enqueued=old['enqueued_ns']; self.items.pop(old_key)
+            self.skipped['refreshed_pending']+=1
         if len(self.items)>=LIMITS['capacity']: self.skipped['queue_full']+=1; return None
         key=hashlib.sha256(json.dumps([p['target'],p['collector'],p['source_session'],epoch]).encode()).hexdigest()[:24]
-        p.update(candidate_id=key,enqueued_ns=now,expires_ns=p['source_end_ns']+LIMITS['ttl_ns'])
+        p.update(candidate_id=key,enqueued_ns=enqueued,expires_ns=p['source_end_ns']+LIMITS['ttl_ns'])
         self.items[key]=p; return key
 
     def select(self,roots,epoch,ready,*,automatic=False,candidate_id=None):
@@ -55,7 +63,7 @@ class DiagnosisQueue:
         eligible=[i for i in candidates if i['collector'] in ready and (not automatic or i.get('automatic_eligible') is True) and
                   now-self.last.get(i['target']+'|'+i['collector'],-LIMITS['cooldown_ns'])>=LIMITS['cooldown_ns']]
         if not eligible: return None
-        item=min(eligible,key=lambda i:(min((v for k,v in self.last.items() if k.startswith(i['target']+'|')),default=-1),
+        item=min(eligible,key=lambda i:(max((v for k,v in self.last.items() if k.startswith(i['target']+'|')),default=-1),
                                        i['enqueued_ns'],i['candidate_id']))
         return dict(item,queue_wait_ns=now-item['enqueued_ns'],sample_age_ns=now-item['source_end_ns'],automatic=automatic)
 
