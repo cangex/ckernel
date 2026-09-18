@@ -15,5 +15,6 @@
 /fd_workload
 /fd_cross_workload
 /counter_workload
+/counter_mem_workload
 __pycache__/
 *.pyc
