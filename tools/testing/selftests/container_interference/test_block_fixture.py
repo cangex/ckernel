@@ -33,3 +33,19 @@ class BlockFixture(unittest.TestCase):
         result=check_case('shared',dict(start_ns=0,end_ns=100),self.logs(),report,
             [dict(id=1,generation=1),dict(id=2,generation=1)])
         self.assertEqual(result['status'],'FAIL')
+
+    def test_full_pid_tid_truth_and_device_byte_pairing(self):
+        rows=[]
+        for role in range(2):
+            for n in range(8):
+                start=11+n*10; pid=101+role
+                rows.append(dict(submitter=[role+1,1,(pid<<32)|pid,1],episode_ns=start,
+                    request=1000+role*100+n,terminal='data_completion',episode_interval_ns=[start,start+2],
+                    devices=[[8,0]],operation=(1,0)[n%2],initial_bytes=4096,
+                    completions=[dict(bytes=4096,status=0)],uncertainty={},blocking_container=None))
+        report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),requests=rows)
+        identities=[dict(id=1,generation=1),dict(id=2,generation=1)]
+        result=check_case('shared',dict(start_ns=0,end_ns=100),self.logs(),report,identities)
+        self.assertEqual(result['status'],'PASS',result)
+        rows[0]['submitter'][2]=101
+        self.assertEqual(check_case('shared',dict(start_ns=0,end_ns=100),self.logs(),report,identities)['status'],'FAIL')

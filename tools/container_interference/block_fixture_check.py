@@ -33,12 +33,14 @@ def check_case(case,window,logs,report=None,identities=None):
             identity=identities[role]
             for op in ops:
                 lo,hi=op['interval_ns']
-                matches=[r for r in report['requests'] if r['submitter'][:3]==[identity['id'],identity['generation'],actors[role]]
+                pid_tid=(actors[role]<<32)|actors[role]
+                matches=[r for r in report['requests'] if r['submitter'][:3]==[identity['id'],identity['generation'],pid_tid]
                     and lo<=r['episode_ns']<=hi]
                 if (len(matches)!=1 or matches[0]['terminal']!='data_completion' or
                         matches[0]['episode_interval_ns'][1]>hi or matches[0]['devices']!=[devices[role]] or
                         matches[0]['operation']&255!=op['operation'] or matches[0]['initial_bytes']!=4096 or
-                        sum(c['bytes'] for c in matches[0]['completions'])!=4096 or matches[0]['uncertainty']):
+                        sum(c['bytes'] for c in matches[0]['completions'])!=4096 or
+                        any(c['status'] for c in matches[0]['completions']) or matches[0]['uncertainty']):
                     errors.append('request_call_pair_%d'%role)
                 else: associated.append([matches[0]['request'],matches[0]['episode_ns']])
         if len(associated)!=len(report['requests']): errors.append('unexpected_request')
