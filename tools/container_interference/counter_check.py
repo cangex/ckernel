@@ -3,12 +3,13 @@
 from owner_report import fields
 
 
-def check(report, logs, shared=True, failure=False):
+def check(report, logs, shared=True, failure=False, identities=None):
     defects, truth = [], []
-    for log in logs:
+    for index, log in enumerate(logs):
         pids=[fields(line).get('host_pid') for line in log.splitlines() if line.startswith('CIS_SESSION_CONTAINER ')]
         if len(pids)!=1 or not pids[0]: defects.append('missing_container_pid'); continue
-        truth.extend(dict(fields(line), host_pid=pids[0]) for line in log.splitlines() if line.startswith('CIS_COUNTER_TRUTH '))
+        identity=identities[index] if identities is not None else None
+        truth.extend(dict(fields(line), host_pid=pids[0], identity=identity) for line in log.splitlines() if line.startswith('CIS_COUNTER_TRUTH '))
     if report['quality']['status'] != 'PASS': defects.append('capture_quality')
     if not truth: defects.append('missing_truth')
     eligible, matched = 0, 0
@@ -27,6 +28,8 @@ def check(report, logs, shared=True, failure=False):
                 defects.append('missing_or_duplicate_call'); continue
             c=found[0]
             if c['actor'][2] & 0xffffffff != t['host_pid']: defects.append('wrong_task_identity')
+            if t['identity'] is not None and c['actor'][:2] != [t['identity']['id'],t['identity']['generation']]:
+                defects.append('wrong_container_identity')
             observed={s['address'] for s in c['steps'] if s['stage'] in ('usage_add','usage_sub')}
             if observed != {t['leaf'], t['parent']}: defects.append('wrong_actual_hierarchy')
             if failure and c['failure_address'] != t['failed']: defects.append('wrong_failure_ancestor')

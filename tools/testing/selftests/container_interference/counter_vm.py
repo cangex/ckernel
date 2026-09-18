@@ -90,10 +90,11 @@ def run():
                 for p in running: assert p.wait(timeout=10)==0
                 assert time.monotonic_ns()<window['end_ns'],'fixture outside window'
                 row=wait(sid,'finalized'); idle=observe(None)
-                (out/(label+'-boundaries.json')).write_text(json.dumps(dict(active_sources=active,idle_sources=idle),indent=2))
+                (out/(label+'-boundaries.json')).write_text(json.dumps(dict(active_sources=active,idle_sources=idle,targets=targets),indent=2))
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 report=analyze(record,(out/'records'/(sid+'.jsonl')).read_bytes())
-                truth=check(report,[(out/(label+'-%d.log'%i)).read_text() for i in range(2)],case!='private',case=='limitFailure')
+                truth=check(report,[(out/(label+'-%d.log'%i)).read_text() for i in range(2)],case!='private',case=='limitFailure',
+                            [record['root_identities'][key] for key in targets])
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 (out/(label+'-truth.json')).write_text(json.dumps(truth,indent=2))
                 results.append(dict(label=label,session_id=sid,truth=truth))

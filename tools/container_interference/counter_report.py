@@ -54,6 +54,8 @@ def analyze(record, raw):
     # Malformed records invalidate the stream, not just the convenient row.
     if excluded['invalid_schema']:
         quality_ok = False
+        base['quality'] = dict(base['quality'], status='FAIL',
+                               defects=base['quality']['defects']+['counter_schema'])
     for key, rows in groups.items():
         rows.sort(key=lambda d: d['ordinal'])
         first, last = rows[0], rows[-1]
@@ -67,6 +69,9 @@ def analyze(record, raw):
                  within_window(record, key[-1], last['sample_time_ns']))
         if not valid:
             excluded['incomplete_or_unaccepted_call'] += 1
+            continue
+        if last['usage'] not in (0, 1) or first['operation'] != 3 and last['usage'] != 1:
+            excluded['invalid_outcome'] += 1
             continue
         # This verifies the producer's rollback accounting, not contention cost.
         failed = first['operation'] == 3 and last['usage'] == 0
