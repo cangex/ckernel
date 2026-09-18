@@ -11,10 +11,12 @@
 #include <linux/string.h>
 #include <linux/sched.h>
 #include <linux/bug.h>
+#include <linux/cis_counter.h>
 #include <asm/page.h>
 
 static void propagate_protected_usage(struct page_counter *c,
-				      unsigned long usage)
+				      unsigned long usage,
+				      struct cis_counter_ctx *ctx, unsigned int depth)
 {
 	unsigned long protected, old_protected;
 	long delta;
@@ -27,8 +29,10 @@ static void propagate_protected_usage(struct page_counter *c,
 	if (protected != old_protected) {
 		old_protected = atomic_long_xchg(&c->min_usage, protected);
 		delta = protected - old_protected;
-		if (delta)
+		if (delta) {
 			atomic_long_add(delta, &c->parent->children_min_usage);
+			cis_counter_step(ctx, c->parent, CIS_CC_CHILD_MIN, depth + 1, 0, delta);
+		}
 	}
 
 	protected = min(usage, READ_ONCE(c->low));
@@ -36,8 +40,10 @@ static void propagate_protected_usage(struct page_counter *c,
 	if (protected != old_protected) {
 		old_protected = atomic_long_xchg(&c->low_usage, protected);
 		delta = protected - old_protected;
-		if (delta)
+		if (delta) {
 			atomic_long_add(delta, &c->parent->children_low_usage);
+			cis_counter_step(ctx, c->parent, CIS_CC_CHILD_LOW, depth + 1, 0, delta);
+		}
 	}
 }
 
@@ -46,18 +52,30 @@ static void propagate_protected_usage(struct page_counter *c,
  * @counter: counter
  * @nr_pages: number of pages to cancel
  */
-void page_counter_cancel(struct page_counter *counter, unsigned long nr_pages)
+static void counter_cancel(struct page_counter *counter, unsigned long nr_pages,
+		struct cis_counter_ctx *ctx, unsigned int depth, unsigned int stage)
 {
 	long new;
 
 	new = atomic_long_sub_return(nr_pages, &counter->usage);
+	cis_counter_step(ctx, counter, stage, depth, nr_pages, new);
 	/* More uncharges than charges? */
 	if (WARN_ONCE(new < 0, "page_counter underflow: %ld nr_pages=%lu\n",
 		      new, nr_pages)) {
 		new = 0;
 		atomic_long_set(&counter->usage, new);
+		cis_counter_step(ctx, counter, CIS_CC_CORRECT, depth, 0, new);
 	}
-	propagate_protected_usage(counter, new);
+	propagate_protected_usage(counter, new, ctx, depth);
+}
+
+void page_counter_cancel(struct page_counter *counter, unsigned long nr_pages)
+{
+	struct cis_counter_ctx ctx;
+
+	cis_counter_start(&ctx, counter, CIS_CC_CANCEL);
+	counter_cancel(counter, nr_pages, &ctx, 0, CIS_CC_SUB);
+	cis_counter_step(&ctx, counter, CIS_CC_END, 0, nr_pages, 1);
 }
 
 /**
@@ -70,12 +88,16 @@ void page_counter_cancel(struct page_counter *counter, unsigned long nr_pages)
 void page_counter_charge(struct page_counter *counter, unsigned long nr_pages)
 {
 	struct page_counter *c;
+	struct cis_counter_ctx ctx;
+	unsigned int depth = 0;
 
-	for (c = counter; c; c = c->parent) {
+	cis_counter_start(&ctx, counter, CIS_CC_CHARGE);
+	for (c = counter; c; c = c->parent, depth++) {
 		long new;
 
 		new = atomic_long_add_return(nr_pages, &c->usage);
-		propagate_protected_usage(c, new);
+		cis_counter_step(&ctx, c, CIS_CC_ADD, depth, nr_pages, new);
+		propagate_protected_usage(c, new, &ctx, depth);
 		/*
 		 * This is indeed racy, but we can live with some
 		 * inaccuracy in the watermark.
@@ -83,6 +105,7 @@ void page_counter_charge(struct page_counter *counter, unsigned long nr_pages)
 		if (new > READ_ONCE(c->watermark))
 			WRITE_ONCE(c->watermark, new);
 	}
+	cis_counter_step(&ctx, counter, CIS_CC_END, depth, nr_pages, 1);
 }
 
 /**
@@ -99,8 +122,11 @@ bool page_counter_try_charge(struct page_counter *counter,
 			     struct page_counter **fail)
 {
 	struct page_counter *c;
+	struct cis_counter_ctx ctx;
+	unsigned int depth = 0;
 
-	for (c = counter; c; c = c->parent) {
+	cis_counter_start(&ctx, counter, CIS_CC_TRY);
+	for (c = counter; c; c = c->parent, depth++) {
 		long new;
 		/*
 		 * Charge speculatively to avoid an expensive CAS.  If
@@ -117,8 +143,10 @@ bool page_counter_try_charge(struct page_counter *counter,
 		 * counter has changed and retries.
 		 */
 		new = atomic_long_add_return(nr_pages, &c->usage);
+		cis_counter_step(&ctx, c, CIS_CC_ADD, depth, nr_pages, new);
 		if (new > c->max) {
 			atomic_long_sub(nr_pages, &c->usage);
+			cis_counter_step(&ctx, c, CIS_CC_LIMIT_REVERSE, depth, nr_pages, new);
 			/*
 			 * This is racy, but we can live with some
 			 * inaccuracy in the failcnt which is only used
@@ -128,7 +156,7 @@ bool page_counter_try_charge(struct page_counter *counter,
 			*fail = c;
 			goto failed;
 		}
-		propagate_protected_usage(c, new);
+		propagate_protected_usage(c, new, &ctx, depth);
 		/*
 		 * Just like with failcnt, we can live with some
 		 * inaccuracy in the watermark.
@@ -136,12 +164,14 @@ bool page_counter_try_charge(struct page_counter *counter,
 		if (new > READ_ONCE(c->watermark))
 			WRITE_ONCE(c->watermark, new);
 	}
+	cis_counter_step(&ctx, counter, CIS_CC_END, depth, nr_pages, 1);
 	return true;
 
 failed:
-	for (c = counter; c != *fail; c = c->parent)
-		page_counter_cancel(c, nr_pages);
+	for (c = counter, depth = 0; c != *fail; c = c->parent, depth++)
+		counter_cancel(c, nr_pages, &ctx, depth, CIS_CC_ROLLBACK);
 
+	cis_counter_step(&ctx, *fail, CIS_CC_END, depth, nr_pages, 0);
 	return false;
 }
 
@@ -153,9 +183,13 @@ failed:
 void page_counter_uncharge(struct page_counter *counter, unsigned long nr_pages)
 {
 	struct page_counter *c;
+	struct cis_counter_ctx ctx;
+	unsigned int depth = 0;
 
-	for (c = counter; c; c = c->parent)
-		page_counter_cancel(c, nr_pages);
+	cis_counter_start(&ctx, counter, CIS_CC_UNCHARGE);
+	for (c = counter; c; c = c->parent, depth++)
+		counter_cancel(c, nr_pages, &ctx, depth, CIS_CC_SUB);
+	cis_counter_step(&ctx, counter, CIS_CC_END, depth, nr_pages, 1);
 }
 
 /**
@@ -210,11 +244,15 @@ int page_counter_set_max(struct page_counter *counter, unsigned long nr_pages)
 void page_counter_set_min(struct page_counter *counter, unsigned long nr_pages)
 {
 	struct page_counter *c;
+	struct cis_counter_ctx ctx;
+	unsigned int depth = 0;
 
+	cis_counter_start(&ctx, counter, CIS_CC_SET_MIN);
 	WRITE_ONCE(counter->min, nr_pages);
 
-	for (c = counter; c; c = c->parent)
-		propagate_protected_usage(c, atomic_long_read(&c->usage));
+	for (c = counter; c; c = c->parent, depth++)
+		propagate_protected_usage(c, atomic_long_read(&c->usage), &ctx, depth);
+	cis_counter_step(&ctx, counter, CIS_CC_END, depth, nr_pages, 1);
 }
 
 /**
@@ -227,11 +265,15 @@ void page_counter_set_min(struct page_counter *counter, unsigned long nr_pages)
 void page_counter_set_low(struct page_counter *counter, unsigned long nr_pages)
 {
 	struct page_counter *c;
+	struct cis_counter_ctx ctx;
+	unsigned int depth = 0;
 
+	cis_counter_start(&ctx, counter, CIS_CC_SET_LOW);
 	WRITE_ONCE(counter->low, nr_pages);
 
-	for (c = counter; c; c = c->parent)
-		propagate_protected_usage(c, atomic_long_read(&c->usage));
+	for (c = counter; c; c = c->parent, depth++)
+		propagate_protected_usage(c, atomic_long_read(&c->usage), &ctx, depth);
+	cis_counter_step(&ctx, counter, CIS_CC_END, depth, nr_pages, 1);
 }
 
 /**

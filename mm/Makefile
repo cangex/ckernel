@@ -149,3 +149,4 @@ obj-$(CONFIG_MEMORY_RELIABLE) += mem_reliable.o
 obj-$(CONFIG_DYNAMIC_POOL)	+= dynamic_pool.o
 obj-$(CONFIG_MEM_SAMPLING) += mem_sampling.o
 obj-$(CONFIG_THP_CONTROL) += thp_ctl.o
+obj-$(CONFIG_CIS_COUNTER_TEST) += cis_counter_test.o

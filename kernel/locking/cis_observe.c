@@ -13,6 +13,8 @@
 #include <linux/user_namespace.h>
 #include <linux/bitmap.h>
 #include <linux/hash.h>
+#include <linux/page_counter.h>
+#include <linux/ktime.h>
 #define CREATE_TRACE_POINTS
 #include <linux/cis_observe.h>
 
@@ -53,7 +55,8 @@ void cis_fd_observe_unregister(void) { }
 
 static bool cis_trace_active(void)
 {
-	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled();
+	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
+	       trace_cis_counter_step_enabled();
 }
 
 static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
@@ -156,8 +159,9 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=1 owner=%u fd=%u\n",
-		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled());
+	seq_printf(m, "version=2 owner=%u fd=%u counter=%u\n",
+		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
+		   trace_cis_counter_step_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -203,6 +207,64 @@ void __cis_lock_event(void *object, unsigned int kind, unsigned int phase,
 EXPORT_SYMBOL_GPL(__cis_lock_event);
 EXPORT_TRACEPOINT_SYMBOL_GPL(cis_lock_state);
 EXPORT_TRACEPOINT_SYMBOL_GPL(cis_fdlock_state);
+
+#ifdef CONFIG_CIS_OBSERVE_COUNTER
+static unsigned int counter_shift = 6;
+module_param(counter_shift, uint, 0400);
+MODULE_PARM_DESC(counter_shift, "Sample one in 2^shift page-counter calls per CPU (clamped to 16)");
+static DEFINE_PER_CPU(unsigned long, cis_counter_calls);
+
+bool cis_counter_enabled(void)
+{
+	return trace_cis_counter_step_enabled();
+}
+
+void __cis_counter_step(struct cis_counter_ctx *ctx, struct page_counter *counter,
+		u32 stage, u32 depth, unsigned long pages, long usage)
+{
+	struct cis_counter_sample sample;
+	u32 ordinal = ctx->steps++;
+
+	if (ordinal >= CIS_CC_STEPS && stage != CIS_CC_END)
+		return;
+	preempt_disable();
+	if (this_cpu_read(cis_in_trace)) {
+		this_cpu_inc(cis_skipped);
+		preempt_enable();
+		return;
+	}
+	this_cpu_write(cis_in_trace, true);
+	sample = (struct cis_counter_sample) {
+		.start_ns = ctx->start_ns, .time_ns = ktime_get_ns(),
+		.leaf = ctx->leaf, .counter = counter, .parent = counter->parent,
+		.pages = pages, .usage = usage, .limit = READ_ONCE(counter->max),
+		.op = ctx->op, .stage = stage, .depth = depth, .ordinal = ordinal,
+		.sample_shift = min(counter_shift, 16U),
+		.skipped = this_cpu_read(cis_skipped),
+	};
+	trace_cis_counter_step(&sample);
+	this_cpu_write(cis_in_trace, false);
+	preempt_enable();
+}
+
+void __cis_counter_start(struct cis_counter_ctx *ctx, struct page_counter *leaf, u32 op)
+{
+	unsigned long n;
+
+	preempt_disable();
+	if (this_cpu_read(cis_in_trace) || in_interrupt()) {
+		this_cpu_inc(cis_skipped);
+		preempt_enable();
+		return;
+	}
+	n = this_cpu_inc_return(cis_counter_calls);
+	preempt_enable();
+	if (n & ((1UL << min(counter_shift, 16U)) - 1))
+		return;
+	*ctx = (struct cis_counter_ctx) { .start_ns = ktime_get_ns(), .leaf = leaf, .op = op };
+	__cis_counter_step(ctx, leaf, CIS_CC_BEGIN, 0, 0, 0);
+}
+#endif
 
 void __cis_mutex_wait(struct mutex *lock)
 {

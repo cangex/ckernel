@@ -4,11 +4,21 @@
 #if !defined(_TRACE_CIS_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_CIS_H
 #include <linux/tracepoint.h>
+#include <linux/cis_counter.h>
 struct task_struct;
 int cis_observe_register(void);
 void cis_observe_unregister(void);
 int cis_fd_observe_register(void);
 void cis_fd_observe_unregister(void);
+TRACE_EVENT(cis_counter_step,
+	TP_PROTO(const struct cis_counter_sample *sample),
+	TP_ARGS(sample),
+	TP_STRUCT__entry(__field(struct cis_counter_sample, sample)),
+	TP_fast_assign(__entry->sample = *sample;),
+	TP_printk("leaf=%p counter=%p op=%u stage=%u ordinal=%u",
+		__entry->sample.leaf, __entry->sample.counter, __entry->sample.op,
+		__entry->sample.stage, __entry->sample.ordinal)
+);
 TRACE_EVENT_FN(cis_lock_state,
 	TP_PROTO(void *object, unsigned int kind, unsigned int phase,
 		 struct task_struct *owner, unsigned long flags, unsigned long skipped),

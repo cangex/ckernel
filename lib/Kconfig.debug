@@ -3068,3 +3068,20 @@ config CIS_OBSERVE_FD
 	  without observed acquisition remain unknown. Ordinary independent
 	  containers do not share this lock. This is a diagnostic adapter and
 	  does not change descriptor sharing or the locking algorithm.
+
+config CIS_OBSERVE_COUNTER
+	bool "Sample native hierarchical page-counter operations"
+	depends on CIS_OBSERVE && PAGE_COUNTER
+	default n
+	help
+	  Add an independent disabled tracepoint and bounded operation samples
+	  for actual counter updates and rollback. This does not identify lock
+	  holders or prove cache-line contention. No accounting is skipped.
+
+config CIS_COUNTER_TEST
+	bool "Disposable-VM page-counter observation truth fixture"
+	depends on CIS_OBSERVE_COUNTER
+	default n
+	help
+	  Expose root-only fixed test counters through /dev/cis-counter-test.
+	  Only enable in a disposable test VM, never in production.
