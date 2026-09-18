@@ -10,7 +10,7 @@ import time
 from types import SimpleNamespace
 
 import prototype_admission as admission
-from collector_manifest import COLLECTORS
+from joint_vm_check import JOINT_COLLECTORS
 from owner_report import fields
 from session import source_manifest
 from source_switches import observe
@@ -18,7 +18,7 @@ from unified_report import analyze
 
 
 def order():
-    modes=['off']+list(COLLECTORS)
+    modes=['off']+list(JOINT_COLLECTORS)
     return [(r,m) for r in range(3) for m in (modes if r%2==0 else list(reversed(modes)))]
 
 
@@ -35,7 +35,7 @@ def run():
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
     source=source_manifest(args,env['boot_id']); permit=admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
-    plan=dict(schema='cis-x7-joint-plan-v1',source=source,order=order(),modes=['off']+list(COLLECTORS),rounds=3,
+    plan=dict(schema='cis-x7-joint-plan-v1',source=source,order=order(),modes=['off']+list(JOINT_COLLECTORS),rounds=3,
         cpus=[0,0,1,1],workloads=['file','file','vma','vma'],management_cpu=7,
         offered_per_actor=1500,period_ns=2_000_000,timeout_ns=100_000_000,
         scope='native file and VMA operations, four active containers; no injected kernel delays',

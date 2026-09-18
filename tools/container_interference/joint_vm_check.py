@@ -6,19 +6,25 @@ import hashlib
 import json
 from pathlib import Path
 
-from collector_manifest import COLLECTORS
 from owner_report import fields
 from prototype_admission import SOURCE_KEYS
 from session_check import extract
 from source_switches import validate
 from unified_report import analyze
 
+# Versioned cohort, not the mutable set of collectors in the current checkout.
+JOINT_COLLECTORS = ('ip','owner','fd','sched','reclaim','sync','counter','allocator','net','block')
+
 
 def workload(log):
-    rows=[fields(v) for v in log.splitlines() if v.startswith('CIS_JOINT_WORK ')]
+    lines=[v for v in log.splitlines() if v.startswith('CIS_JOINT_WORK ')]
+    rows=[fields(v) for v in lines]
     samples=[v.split(' ',1)[1] for v in log.splitlines() if v.startswith('CIS_JOINT_LATENCIES ')]
     if len(rows)!=1 or len(samples)!=1: raise ValueError('complete workload timing required')
     values=[int(v) for v in samples[0].split(',')]; row=rows[0]
+    modes=[v.split('=',1)[1] for v in lines[0].split() if v.startswith('mode=')]
+    if len(modes)!=1 or modes[0] not in ('file','vma'): raise ValueError('workload mode required')
+    row['mode']=modes[0]
     if (len(values)!=1500 or values!=sorted(values) or any(v<0 for v in values) or row['errors']!=0 or
             row['offered']!=1500 or row['completed']!=1500 or row['period_ns']!=2_000_000 or row['timeout_ns']!=100_000_000 or
             row['p99_ns']!=values[1484] or row['max_ns']!=values[-1] or row['latency_sum_ns']!=sum(values) or
@@ -46,7 +52,7 @@ def check(serial,output):
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan=value('plan.json'); declared=value('result.json'); permit=value('permit.json')
     output.mkdir(mode=0o700); errors=[]; states=[]
-    modes=['off']+list(COLLECTORS); order=[(r,m) for r in range(3) for m in (modes if r%2==0 else list(reversed(modes)))]
+    modes=['off']+list(JOINT_COLLECTORS); order=[(r,m) for r in range(3) for m in (modes if r%2==0 else list(reversed(modes)))]
     if (plan['schema']!='cis-x7-joint-plan-v1' or plan['order']!=[list(v) for v in order] or
             plan['modes']!=modes or plan['cpus']!=[0,0,1,1] or plan['workloads']!=['file','file','vma','vma'] or
             plan['targets_by_round']!=[[0,2],[1,3],[0,3]] or plan['captures']!=30 or plan['clock_ticks']<=0):
