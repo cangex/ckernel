@@ -341,6 +341,7 @@ static DEFINE_PER_CPU(unsigned long, cis_alloc_eligible);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_selected);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_steps);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_capped);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_irq_filtered);
 
 static int cis_alloc_audit_show(struct seq_file *m, void *unused)
 {
@@ -349,12 +350,12 @@ static int cis_alloc_audit_show(struct seq_file *m, void *unused)
 		return -EPERM;
 	seq_printf(m, "version=1 active=%u shift=%u cache=%s snapshot=non_atomic bytes_per_cpu=%zu\n",
 		trace_cis_alloc_step_enabled(), min(alloc_shift, 16U), alloc_cache,
-		5 * sizeof(unsigned long));
+		6 * sizeof(unsigned long));
 	for_each_possible_cpu(cpu)
-		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu steps=%lu capped=%lu\n", cpu,
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu steps=%lu capped=%lu irq_filtered=%lu\n", cpu,
 			READ_ONCE(per_cpu(cis_alloc_entries, cpu)), READ_ONCE(per_cpu(cis_alloc_eligible, cpu)),
 			READ_ONCE(per_cpu(cis_alloc_selected, cpu)), READ_ONCE(per_cpu(cis_alloc_steps, cpu)),
-			READ_ONCE(per_cpu(cis_alloc_capped, cpu)));
+			READ_ONCE(per_cpu(cis_alloc_capped, cpu)), READ_ONCE(per_cpu(cis_alloc_irq_filtered, cpu)));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_alloc_audit);
@@ -397,12 +398,16 @@ void __cis_alloc_start(struct cis_alloc_ctx *ctx, struct kmem_cache *cache,
 	unsigned long n;
 	preempt_disable();
 	this_cpu_inc(cis_alloc_entries);
-	if (this_cpu_read(cis_in_trace) || in_interrupt()) {
+	if (!name || strcmp(name, alloc_cache))
+		goto out;
+	if (in_interrupt()) {
+		this_cpu_inc(cis_alloc_irq_filtered);
+		goto out;
+	}
+	if (this_cpu_read(cis_in_trace)) {
 		this_cpu_inc(cis_skipped);
 		goto out;
 	}
-	if (!name || strcmp(name, alloc_cache))
-		goto out;
 	n = this_cpu_inc_return(cis_alloc_eligible);
 	if (n & ((1UL << min(alloc_shift, 16U)) - 1))
 		goto out;

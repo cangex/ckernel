@@ -40,8 +40,10 @@ freelists. CONFIG is default-off and excludes SLUB_TINY and PREEMPT_RT.
 The disabled inline source gate precedes out-of-line selection. While active,
 each allocation entry pays the gate, a per-CPU counter and exact-name selection;
 selected events pay timestamps, BPF and output. Per-call context and private
-partial_context grow on stack. Audit exports five unsigned-long counters per
-possible CPU, including capped stages. Counter snapshots are non-atomic.
+partial_context grow on stack. Audit exports six unsigned-long counters per
+possible CPU, including capped stages and explicitly unsupported interrupt
+entries after cache selection. Counter snapshots are non-atomic. Unselected
+caches cannot create a selected-operation recursion gap.
 
 No object allocation or sleeping lock is added by source hooks. Existing CIS
 per-CPU recursion guard is shared with all adapters. A skipped recursive or
