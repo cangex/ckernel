@@ -14,9 +14,9 @@ class FDGuardTests(unittest.TestCase):
         c=contract('fd')
         inventory=dict(schema='cis-loaded-inventory-v1',profile=6,map_names=c['maps'],program_names=c['programs'],
             maps=list(range(1,len(c['maps'])+1)),programs=[20,21],ip_perf_cpus=0)
-        record=dict(collector='fd',session_id='1',inventory=inventory,result='FAILED',state='IDLE',
+        record=dict(collector='fd',session_id='1',inventory=inventory,result='PARTIAL',state='IDLE',
             finalized=True,objects_absent=True,requested_ns=100,window=dict(start_ns=200,end_ns=2200),
-            receipt=dict(reason='ENTRY_RATE_LIMIT',result='FAILED'))
+            receipt=dict(reason='ENTRY_RATE_LIMIT',result='PARTIAL'))
         raw=json.dumps(dict(session_id='1',kind='entry_budget_disable',
             detail='configured_limit=200000 delta_entries=300000 interval_ns=1000000000')).encode()
         logs=['\n'.join('CIS_FD_STORM '+json.dumps(dict(bucket=i,begin_ns=300+i*500,end_ns=800+i*500,operations=256,errors=0))
@@ -25,10 +25,10 @@ class FDGuardTests(unittest.TestCase):
                      idle=dict(before_ns=1400,after_ns=1401,expected_collector=None,observed=dict(version='1',owner='0',fd='0')))
         return record,raw,logs,sources
 
-    def test_guard_pass_is_failed_capture_and_business_continuation(self):
+    def test_guard_pass_is_rejected_capture_and_business_continuation(self):
         args=self.fixture();result=check(*args)
         self.assertEqual(result['status'],'PASS')
-        self.assertEqual(result['capture_status'],'FAILED')
+        self.assertEqual(result['capture_status'],'PARTIAL')
         args[0]['result']='COMPLETE'
         self.assertIn('capture_or_cleanup_state',check(*args)['errors'])
 

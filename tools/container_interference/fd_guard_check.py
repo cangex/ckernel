@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-"""A protection PASS deliberately requires a FAILED profiling capture."""
+"""Protection PASS requires a rejected, PARTIAL profiling window."""
 import json
 import argparse
 import hashlib
@@ -19,7 +19,7 @@ def check(record,raw,logs,sources):
     errors=[]
     report=explain(record,raw)
     receipt=record.get('receipt') or {}
-    if (record.get('result')!='FAILED' or not record.get('finalized') or
+    if (record.get('result')!='PARTIAL' or receipt.get('result')!='PARTIAL' or not record.get('finalized') or
             record.get('state')!='IDLE' or record.get('objects_absent') is not True):
         errors.append('capture_or_cleanup_state')
     if receipt.get('reason')!='ENTRY_RATE_LIMIT': errors.append('wrong_stop_reason')
@@ -44,7 +44,7 @@ def check(record,raw,logs,sources):
         if not after: errors.append('no_business_progress_after_source_detach')
         progress.append(sum(row['operations'] for row in after))
     return dict(status='FAIL' if errors else 'PASS',errors=errors,rates=rates,
-                post_detach_operations=progress,capture_status='FAILED',
+                post_detach_operations=progress,capture_status=record.get('result'),
                 scope='entry guard and business continuation, not successful dense profiling',
                 performance_certification='NOT_ACCEPTED')
 
