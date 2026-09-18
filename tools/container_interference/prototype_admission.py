@@ -13,6 +13,26 @@ LIMITS = dict(registered_roots=4, active_targets=2, window_ms=2000,
               sessions=32, lifetime_s=1200)
 
 
+def machine_model():
+    path = Path('/sys/firmware/devicetree/base/model')
+    if path.is_file():
+        return path.read_bytes().rstrip(b'\0').decode()
+    # This fixed guest kernel does not export OF sysfs. Read only the bounded
+    # boot log, without clearing it; an absent/overwritten model fails closed.
+    fd = os.open('/dev/kmsg', os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        for _ in range(512):
+            try:
+                line = os.read(fd, 4096).decode(errors='replace')
+            except BlockingIOError:
+                break
+            if ';Machine model: ' in line:
+                return line.split(';Machine model: ', 1)[1].strip()
+    finally:
+        os.close(fd)
+    return 'unknown'
+
+
 def environment():
     memory = int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines()
                       if line.startswith('MemTotal:')))*1024
@@ -20,7 +40,7 @@ def environment():
                 architecture=os.uname().machine, page_bytes=os.sysconf('SC_PAGE_SIZE'),
                 online_cpus=Path('/sys/devices/system/cpu/online').read_text().strip(),
                 memory_bytes=memory, marker=Path('/cis-disposable-vm').is_file(),
-                machine_model=Path('/sys/firmware/devicetree/base/model').read_bytes().rstrip(b'\0').decode())
+                machine_model=machine_model())
 
 
 def check_environment(env):
