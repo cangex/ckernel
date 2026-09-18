@@ -241,6 +241,27 @@ int main(int argc, char **argv)
         if(ready>=start) return 16;
     }
     if(!strcmp(argv[1],"internal-phase")) return internal_phase(start,seconds);
+    if(!strcmp(argv[1],"fd-storm")) {
+        uint64_t begins[8],ends[8],counts[8]={0};
+        if(seconds!=4) return 4;
+        until(start);
+        for(unsigned int bucket=0;bucket<8;bucket++) {
+            uint64_t deadline=start+(bucket+1)*500000000ULL;
+            begins[bucket]=cis_now_ns();
+            if(begins[bucket]>=deadline) return 17;
+            do {
+                for(unsigned int i=0;i<256;i++) {
+                    if(one_operation()) return 5;
+                    counts[bucket]++;
+                }
+            } while(cis_now_ns()<deadline);
+            ends[bucket]=cis_now_ns();
+        }
+        for(unsigned int bucket=0;bucket<8;bucket++)
+            printf("CIS_FD_STORM {\"bucket\":%u,\"begin_ns\":%" PRIu64 ",\"end_ns\":%" PRIu64 ",\"operations\":%" PRIu64 ",\"errors\":0}\n",
+                   bucket,begins[bucket],ends[bucket],counts[bucket]);
+        return 0;
+    }
     if(!strcmp(argv[1],"file-private")) {
         operation_path="/tmp/private-sample";
         int private_fd=open(operation_path,O_CREAT|O_RDWR|O_CLOEXEC,0600);
