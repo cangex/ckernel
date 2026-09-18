@@ -56,7 +56,8 @@ void cis_fd_observe_unregister(void) { }
 static bool cis_trace_active(void)
 {
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
-	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled();
+	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
+	       trace_cis_alloc_release_enabled();
 }
 
 static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
@@ -159,9 +160,10 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=3 owner=%u fd=%u counter=%u allocator=%u\n",
+	seq_printf(m, "version=4 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
-		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled());
+		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
+		   trace_cis_alloc_release_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -342,23 +344,60 @@ static DEFINE_PER_CPU(unsigned long, cis_alloc_selected);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_steps);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_capped);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_irq_filtered);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_free_entries);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_free_items);
+static DEFINE_PER_CPU(unsigned long, cis_alloc_free_capped);
 
 static int cis_alloc_audit_show(struct seq_file *m, void *unused)
 {
 	int cpu;
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-	seq_printf(m, "version=1 active=%u shift=%u cache=%s snapshot=non_atomic bytes_per_cpu=%zu\n",
-		trace_cis_alloc_step_enabled(), min(alloc_shift, 16U), alloc_cache,
-		6 * sizeof(unsigned long));
+	seq_printf(m, "version=2 active=%u release_active=%u shift=%u cache=%s snapshot=non_atomic bytes_per_cpu=%zu\n",
+		trace_cis_alloc_step_enabled(), trace_cis_alloc_release_enabled(), min(alloc_shift, 16U), alloc_cache,
+		9 * sizeof(unsigned long));
 	for_each_possible_cpu(cpu)
-		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu steps=%lu capped=%lu irq_filtered=%lu\n", cpu,
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu steps=%lu capped=%lu irq_filtered=%lu free_entries=%lu free_items=%lu free_capped=%lu\n", cpu,
 			READ_ONCE(per_cpu(cis_alloc_entries, cpu)), READ_ONCE(per_cpu(cis_alloc_eligible, cpu)),
 			READ_ONCE(per_cpu(cis_alloc_selected, cpu)), READ_ONCE(per_cpu(cis_alloc_steps, cpu)),
-			READ_ONCE(per_cpu(cis_alloc_capped, cpu)), READ_ONCE(per_cpu(cis_alloc_irq_filtered, cpu)));
+			READ_ONCE(per_cpu(cis_alloc_capped, cpu)), READ_ONCE(per_cpu(cis_alloc_irq_filtered, cpu)),
+			READ_ONCE(per_cpu(cis_alloc_free_entries, cpu)), READ_ONCE(per_cpu(cis_alloc_free_items, cpu)),
+			READ_ONCE(per_cpu(cis_alloc_free_capped, cpu)));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_alloc_audit);
+
+void __cis_alloc_release(struct kmem_cache *cache, const char *name,
+		void **objects, int count, unsigned long caller)
+{
+	struct cis_alloc_release_sample sample;
+	int i;
+	preempt_disable();
+	this_cpu_inc(cis_alloc_free_entries);
+	if (!name || strcmp(name, alloc_cache))
+		goto out;
+	if (this_cpu_read(cis_in_trace) || in_nmi()) {
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	if (count > CIS_CA_STEPS) {
+		this_cpu_inc(cis_alloc_free_capped);
+		/* A missed release could join a later reuse to an old allocation. */
+		this_cpu_inc(cis_skipped);
+	}
+	this_cpu_write(cis_in_trace, true);
+	for (i = 0; i < min(count, CIS_CA_STEPS); i++) {
+		sample = (struct cis_alloc_release_sample) {
+			.time_ns = ktime_get_ns(), .cache = cache, .object = objects[i],
+			.caller = caller, .context = in_hardirq() ? 2 : in_serving_softirq() ? 1 : 0,
+		};
+		this_cpu_inc(cis_alloc_free_items);
+		trace_cis_alloc_release(&sample);
+	}
+	this_cpu_write(cis_in_trace, false);
+out:
+	preempt_enable();
+}
 
 void __cis_alloc_step(struct cis_alloc_ctx *ctx, u32 stage, void *object,
 		void *resource, int node, unsigned long count)

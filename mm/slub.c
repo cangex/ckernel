@@ -3846,6 +3846,8 @@ static __fastpath_inline void slab_free(struct kmem_cache *s, struct slab *slab,
 				      void *head, void *tail, void **p, int cnt,
 				      unsigned long addr)
 {
+	/* Before publishing objects for reuse; this is a release request, not its completion. */
+	cis_alloc_release(s, s->name, p, cnt, addr);
 	memcg_slab_free_hook(s, slab, p, cnt);
 	/*
 	 * With KASAN enabled slab_free_freelist_hook modifies the freelist

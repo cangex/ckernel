@@ -26,6 +26,21 @@ TRACE_EVENT(cis_alloc_step,
 	TP_printk("cache=%p stage=%u ordinal=%u", __entry->cache,
 		__entry->stage, __entry->ordinal)
 );
+TRACE_EVENT(cis_alloc_release,
+	TP_PROTO(const struct cis_alloc_release_sample *sample),
+	TP_ARGS(sample),
+	TP_STRUCT__entry(
+		__field(void *, cache)
+		__field(void *, object)
+		__field(unsigned int, context)
+	),
+	TP_fast_assign(
+		__entry->cache = sample->cache; __entry->object = sample->object;
+		__entry->context = sample->context;
+	),
+	TP_printk("cache=%p object=%p context=%u", __entry->cache,
+		__entry->object, __entry->context)
+);
 TRACE_EVENT(cis_counter_step,
 	TP_PROTO(const struct cis_counter_sample *sample),
 	TP_ARGS(sample),

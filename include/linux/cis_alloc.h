@@ -27,9 +27,24 @@ struct cis_alloc_sample {
 	u32 operation, stage, ordinal, sample_shift;
 	s32 requested_node, observed_node;
 };
+struct cis_alloc_release_sample {
+	u64 time_ns;
+	struct kmem_cache *cache;
+	void *object;
+	unsigned long caller;
+	u32 context;
+};
 #ifdef CONFIG_CIS_OBSERVE_ALLOC
 #include <linux/tracepoint-defs.h>
 DECLARE_TRACEPOINT(cis_alloc_step);
+DECLARE_TRACEPOINT(cis_alloc_release);
+void __cis_alloc_release(struct kmem_cache *, const char *, void **, int, unsigned long);
+static inline void cis_alloc_release(struct kmem_cache *cache, const char *name,
+		void **objects, int count, unsigned long caller)
+{
+	if (tracepoint_enabled(cis_alloc_release))
+		__cis_alloc_release(cache, name, objects, count, caller);
+}
 void __cis_alloc_start(struct cis_alloc_ctx *, struct kmem_cache *,
 		const char *, unsigned long, int, unsigned long, u32);
 void __cis_alloc_step(struct cis_alloc_ctx *, u32, void *, void *, int,
@@ -49,6 +64,8 @@ static inline void cis_alloc_step(struct cis_alloc_ctx *ctx, u32 stage,
 		__cis_alloc_step(ctx, stage, object, resource, node, count);
 }
 #else
+static inline void cis_alloc_release(struct kmem_cache *cache, const char *name,
+		void **objects, int count, unsigned long caller) { }
 static inline void cis_alloc_start(struct cis_alloc_ctx *ctx,
 		struct kmem_cache *cache, const char *name, unsigned long gfp,
 		int node, unsigned long requested, u32 operation) { ctx->start_ns = 0; }
