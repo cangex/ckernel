@@ -13,5 +13,6 @@
 /session_launch
 /sync_workload
 /fd_workload
+/fd_cross_workload
 __pycache__/
 *.pyc

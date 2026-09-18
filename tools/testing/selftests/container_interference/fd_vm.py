@@ -16,7 +16,7 @@ from fd_check import check
 from collector_audit import audit as scope_audit
 
 
-def run():
+def run(suite='basic'):
     os.umask(0o077);os.sched_setaffinity(0,{7})
     env=prototype_admission.environment();prototype_admission.check_environment(env)
     out=Path('/tmp/fd-evidence');out.mkdir(mode=0o700)
@@ -27,8 +27,10 @@ def run():
     source=source_manifest(args,env['boot_id'])
     permit=prototype_admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
-    plan=dict(schema='cis-fd-plan-v1',cases=['threads','private','native'],repetitions=3,roots=2,
+    if suite not in ('basic','lifecycle'): raise ValueError('unsupported suite')
+    plan=dict(schema='cis-fd-plan-v1',cases=['threads','private','native'] if suite=='basic' else ['cross','reuse'],repetitions=3,roots=2,
               window_ms=2000,operations_per_thread=16,fixture_hold_us=100,
+              suite=suite,reuse_generations=4,
               scope='selected FD adapter bridge; full X1 acceptance incomplete',performance_certification='NOT_ACCEPTED')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-fd.sock';log=(out/'controller.log').open('x')
@@ -60,6 +62,12 @@ def run():
              str(threads),str(index*2),str(start),str(native)],stdout=handle,stderr=handle)
         children.append(child);return child
 
+    def launch_cross(label,start):
+        handle=(out/(label+'-launcher.log')).open('x');handles.append(handle)
+        child=subprocess.Popen(['/fd_cross_workload',str(root/'root0'),str(root/'root1'),
+            str(out/(label+'-0.log')),str(out/(label+'-1.log')),str(start)],stdout=handle,stderr=handle)
+        children.append(child);return child
+
     try:
         deadline=time.monotonic()+10
         while not Path(endpoint).exists():
@@ -72,19 +80,32 @@ def run():
             start=time.monotonic_ns()+400_000_000
             running=[launch('off%d'%native,i,2,native,start) for i in range(2)]
             for child in running: assert child.wait(timeout=10)==0
+        if suite=='lifecycle':
+            child=launch_cross('offcross',time.monotonic_ns()+600_000_000)
+            assert child.wait(timeout=10)==0
         for repeat in range(3):
             for case in plan['cases']:
                 label=case+str(repeat)
                 sid=request('start',collector='owner',targets=targets,nonce=label,window_ms=2000)['session_id']
                 window=wait_record(sid,'window')['window'];start=max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000)
-                running=[launch(label,i,1 if case=='private' else 2,int(case=='native'),start) for i in range(2)]
-                for child in running: assert child.wait(timeout=10)==0
+                names=[];boundaries=[]
+                for generation in range(4 if case=='reuse' else 1):
+                    part=label+'g%d'%generation if case=='reuse' else label
+                    start=max(start,time.monotonic_ns()+100_000_000)
+                    if case=='cross': start=max(start,time.monotonic_ns()+600_000_000)
+                    before=time.monotonic_ns()
+                    running=([launch_cross(part,start)] if case=='cross' else
+                             [launch(part,i,1 if case=='private' else 2,int(case=='native'),start) for i in range(2)])
+                    for child in running: assert child.wait(timeout=10)==0
+                    boundaries.append(dict(generation=generation,start_ns=before,end_ns=time.monotonic_ns()))
+                    names += [part+'-%d.log'%i for i in range(2)]
                 assert time.monotonic_ns()<window['end_ns'],'workload overran measured window'
                 row=wait_record(sid,'finalized');assert row['state']=='IDLE' and row.get('objects_absent'),row
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 raw=(out/'records'/(sid+'.jsonl')).read_bytes()
                 report=explain(record,raw);scope=scope_audit(record,raw)
-                truth=check(report,[(out/('%s-%d.log'%(label,i))).read_text() for i in range(2)],case)
+                truth=check(report,[(out/name).read_text() for name in names],case)
+                (out/(label+'-boundaries.json')).write_text(json.dumps(dict(logs=names,groups=boundaries),indent=2))
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 (out/(label+'-truth.json')).write_text(json.dumps(truth,indent=2))
                 (out/(label+'-scope.json')).write_text(json.dumps(scope,indent=2))
@@ -108,4 +129,4 @@ def run():
         audit.close();log.close()
 
 
-if __name__=='__main__': run()
+if __name__=='__main__': run(os.environ.get('CIS_FD_SUITE','basic'))

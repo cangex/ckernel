@@ -35,6 +35,7 @@ cp "$source/tools/testing/selftests/container_interference/session_launch" "$des
 cp "$source/tools/testing/selftests/container_interference/workload" "$dest/root/container-root/"
 cp "$source/tools/testing/selftests/container_interference/sync_workload" "$dest/root/container-root/"
 cp "$source/tools/testing/selftests/container_interference/fd_workload" "$dest/root/container-root/"
+cp "$source/tools/testing/selftests/container_interference/fd_cross_workload" "$dest/root/"
 cp "$source/tools/testing/selftests/container_interference/storage_vm.py" "$dest/root/profile/"
 cp "$source/tools/testing/selftests/container_interference/identity_vm.py" "$dest/root/profile/"
 chmod 755 "$dest/root/init"
