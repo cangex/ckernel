@@ -16,6 +16,7 @@ int rwsem_state(struct bpf_raw_tracepoint_args *ctx)
 	if (!watch) {
 		struct cis_watch initial = {};
 		struct cis_target *target;
+		int result;
 		if (phase != 1 && phase != 2 && phase != 3 && phase != 14 && phase != 15) return 0;
 		if (!identity(task, &actor) || !allowed(&actor, CIS_DIAG_RWSEM, now)) return 0;
 		target = bpf_map_lookup_elem(&targets, &actor.id);
@@ -23,16 +24,20 @@ int rwsem_state(struct bpf_raw_tracepoint_args *ctx)
 		initial.id = actor.id; initial.generation = actor.generation;
 		initial.start_ns = now; initial.deadline_ns = target->deadline_ns;
 		initial.epoch = phase == 1 ? now : 0;
-		if (bpf_map_update_elem(&rwsem_watched, &object, &initial, BPF_NOEXIST)) {
-			COUNT(s, owner_watch_failed); return 0;
+		result = bpf_map_update_elem(&rwsem_watched, &object, &initial, BPF_NOEXIST);
+		if (result && result != -17) {
+			COUNT(s, owner_watch_failed); COUNT(s, rejected); return 0;
 		}
 		watch = bpf_map_lookup_elem(&rwsem_watched, &object);
-		if (!watch) return 0;
+		if (!watch || now >= watch->deadline_ns) {
+			COUNT(s, owner_watch_failed); COUNT(s, rejected); return 0;
+		}
+		if (result == -17) COUNT(s, owner_watch_races);
 	}
 	if (now < watch->start_ns || now >= watch->deadline_ns) return 0;
 	/* Objects are never evicted/rebound to conceal capacity or address reuse. */
 	if (__sync_fetch_and_add(&watch->events, 1) >= 1024) {
-		COUNT(s, owner_attempt_failed); return 0;
+		COUNT(s, owner_attempt_failed); COUNT(s, rejected); return 0;
 	}
 	if (phase == 1) watch->epoch = now;
 	if (!actor.id) identity(task, &actor);
