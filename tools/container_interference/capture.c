@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 26
+#define CIS_DIAGNOSTIC_LINKS 27
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
