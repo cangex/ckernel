@@ -17,7 +17,13 @@ from types import SimpleNamespace
 
 import collector_manifest
 import prototype_admission as admission
-from session import source_manifest
+from session import source_manifest, validate
+
+
+def crash_nonce(name):
+    nonce=name.replace('_','')
+    validate(dict(version=1,op='start',collector='ip',targets=['1:1'],nonce=nonce))
+    return nonce
 
 
 def run(expiry=False, fault=False, crashes=False):
@@ -127,7 +133,7 @@ def run(expiry=False, fault=False, crashes=False):
             note('stopped_controller_worker_deadline',session=sid)
             for both in (False,True):
                 name='both_crash' if both else 'controller_crash'
-                sid=request('start',collector='ip',targets=targets,nonce=name)['session_id']
+                sid=request('start',collector='ip',targets=targets,nonce=crash_nonce(name))['session_id']
                 row=window(sid);worker=row['worker_pid']
                 if both: inject(worker,signal.SIGKILL,sid,'worker')
                 inject(daemon.pid,signal.SIGKILL,sid,'controller');daemon.wait(timeout=10)
@@ -135,7 +141,7 @@ def run(expiry=False, fault=False, crashes=False):
                 while Path('/proc/%d'%worker).exists() and time.monotonic()<limit: time.sleep(.02)
                 assert not Path('/proc/%d'%worker).exists(),'orphan not reaped; do not bypass recovery guard'
                 daemon=start_daemon();assert request('status')['state']=='FAULTED'
-                request('start',rejected=True,collector='ip',targets=targets,nonce='blocked'+name)
+                request('start',rejected=True,collector='ip',targets=targets,nonce=crash_nonce('blocked'+name))
                 recovered=request('recover')
                 assert recovered['objects_absent'] and recovered['finalized'] and recovered['result']=='FAILED'
                 assert request('status')['prototype_sessions_started']==len(checks)+1

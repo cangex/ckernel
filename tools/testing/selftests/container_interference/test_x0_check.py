@@ -7,9 +7,14 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]/'container_interference'))
 from prototype_admission import SOURCE_KEYS
 from x0_check import check
+from collector_control_vm import crash_nonce
 
 
 class X0RawCheck(unittest.TestCase):
+    def test_crash_requests_pass_nonce_admission(self):
+        for name in ('both_crash','controller_crash','blockedboth_crash','blockedcontroller_crash'):
+            self.assertTrue(crash_nonce(name).isalnum())
+
     def serial(self, expired=True, complete=True, source_present=True):
         source = {key:'a'*64 for key in SOURCE_KEYS} if source_present else {}
         end = 1200*10**9+1
