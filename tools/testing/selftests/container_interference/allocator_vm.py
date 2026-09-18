@@ -83,7 +83,7 @@ def run(fixture=False):
             collecting = 'allocator' in label
             sid=None; source_before=snapshot()
             if collecting:
-                sid=request('start',collector='allocator',targets=targets,nonce=label,window_ms=2000)['session_id']
+                sid=request('start',collector='allocator',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
                 window=wait(sid,'window')['window']; active=observe('allocator')
             else:
                 now=time.monotonic_ns(); window=dict(start_ns=now,end_ns=now+2_000_000_000); active=observe(None)

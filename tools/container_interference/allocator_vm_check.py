@@ -73,15 +73,17 @@ def verify(serial,output,fixture=False):
             capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode()
             report=analyze(record,capture)
             identities=[record['root_identities'][key] for key in ev['targets']]
-            if record['nonce']!=label or record['window']!=ev['window'] or not record['objects_absent']:
+            if record['nonce']!=label.replace('-','') or record['window']!=ev['window'] or not record['objects_absent']:
                 errors.append('session_boundary_'+label)
-            validate(ev['active_sources'],'allocator',record['window']['start_ns'],record['window']['end_ns'])
+            # Sources are attached before the future common business window.
+            validate(ev['active_sources'],'allocator',record['receipt']['prepared_ns'],record['window']['end_ns'])
             validate(ev['idle_sources'],None,record['window']['end_ns'],2**64-1)
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
         result=check_case(label.split('-')[0],ev['window'],logs,report,identities) if fixture else check_work(ev['window'],logs,report,identities)
-        audit=source_delta(ev['source_before'],ev['source_after'])
+        audit=source_delta(ev['source_before'],ev['source_after'],
+                           shift=0 if fixture else 6, cache='cis_alloc_test' if fixture else 'maple_node')
         if 'off' in label and any(audit['totals'].values()): errors.append('off_not_quiet_'+label)
         if 'allocator' in label and audit['totals']['sampled']==0: errors.append('source_not_sampled_'+label)
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
