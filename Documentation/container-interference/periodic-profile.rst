@@ -277,3 +277,6 @@ windows, 256 registered roots, alternating target/bystander CPUs and an open-loo
 the upper confidence bounds separately from observed mean changes. Its sampled
 whole-VM CPU/memory residual is explicitly non-atomic and not complete observer
 attribution or a hard transient-memory bound. It does not issue P1 admission.
+
+See ``measurement-closure-20260918.rst`` for the independent OFF/OFF
+calibration, bounded raw failure/recovery evidence and remaining P1 gaps.
