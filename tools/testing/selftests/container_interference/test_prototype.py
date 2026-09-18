@@ -13,6 +13,8 @@ from explain import explain, markdown
 from owner_test import event
 import test_periodic_controller
 from schedule import Schedule
+from explanation_check import check_owner
+from diagnosis_plan import recommend
 
 
 class Prototype(unittest.TestCase):
@@ -57,6 +59,14 @@ class Prototype(unittest.TestCase):
             with self.assertRaises(ValueError):controller.request(dict(version=1,op='schedule_enable'))
         self.assertFalse(controller.schedule.enabled)
 
+    def test_model_fallback_does_not_clear_kernel_log(self):
+        with patch('prototype_admission.Path.is_file',return_value=False), \
+             patch('prototype_admission.os.open',return_value=7) as opened, \
+             patch('prototype_admission.os.read',return_value=b'6,1,0,-;Machine model: linux,dummy-virt\n'), \
+             patch('prototype_admission.os.close'):
+            self.assertEqual(proto.machine_model(),'linux,dummy-virt')
+            self.assertEqual(opened.call_args.args[0],'/dev/kmsg')
+
 
 class Explanations(unittest.TestCase):
     def record(self):
@@ -95,6 +105,16 @@ class Explanations(unittest.TestCase):
             report=explain(self.record(),json.dumps(dict(session_id='7',kind='E1',id=1,generation=1,detail=detail)).encode())
             self.assertEqual(report['finding_count'],0)
 
+    def test_sched_uses_interval_endpoint_and_known_identity(self):
+        record=self.record();record['collector']='sched'
+        record['receipt']['producer_recursion']=dict(required=True,valid=True,skipped=0)
+        for time,duration,expected in [(90,20,[70,90]),(10,20,None)]:
+            raw=json.dumps(dict(session_id='7',kind='E1',id=1,generation=1,
+                                detail='type=2 sample_time_ns=%s duration_ns=%s'%(time,duration))).encode()
+            report=explain(record,raw)
+            if expected:self.assertEqual(report['findings'][0]['interval_ns'],expected)
+            else:self.assertEqual(report['finding_count'],0)
+
     def test_hotspot_is_not_owner_or_causality(self):
         record=self.record()
         record['survey']=dict(roots={'1:1':dict(valid=True,status='REFERENCE',top_ip=[dict(symbol='page_counter_try_charge')])})
@@ -119,6 +139,23 @@ class Explanations(unittest.TestCase):
         report=explain(self.record(),b'')
         self.assertEqual(report['unknown'][0]['reason'],'no_raw_events')
         self.assertIsNone(report['total_interference_ns'])
+
+    def test_fixture_truth_checks_both_parties_and_epoch(self):
+        events=[event(1,3,1),event(2,2,2),event(5,4,1),event(6,3,2)]
+        logs=['CIS_TRUTH object=100 host_tid=101 cgroup_id=1 begin_ns=0 acquired_ns=1 released_ns=5\n'
+              'CIS_TRUTH object=100 host_tid=102 cgroup_id=2 begin_ns=2 acquired_ns=6 released_ns=7']
+        self.assertEqual(check_owner(events,logs)['status'],'PASS')
+        self.assertEqual(check_owner(events,[logs[0].replace('host_tid=101','host_tid=999')])['status'],'FAIL')
+        self.assertEqual(check_owner(events,logs+['CIS_RESET time_ns=3'])['status'],'FAIL')
+
+    def test_candidates_do_not_start_or_promote_unsupported_locks(self):
+        report=dict(session_id='7',quality=dict(status='PASS'),candidates=[dict(target='1:1',valid=True,
+                    top_ip=[dict(symbol='native_queued_spin_lock_slowpath')],rates={})])
+        self.assertFalse(recommend(report))
+        report['candidates'][0]['top_ip']=[dict(symbol='lockref_get')]
+        self.assertTrue(recommend(report)[0]['requires_confirmation'])
+        report['quality']['status']='FAIL'
+        self.assertFalse(recommend(report))
 
 
 if __name__=='__main__':unittest.main()

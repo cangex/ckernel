@@ -14,9 +14,10 @@ import prototype_admission
 from session import source_manifest
 from explain import explain, markdown
 from session_quality import assess
+from explanation_check import check_owner
 
 
-def run():
+def run(specialists=False):
     os.umask(0o077)
     env=prototype_admission.environment()
     prototype_admission.check_environment(env)
@@ -32,6 +33,10 @@ def run():
     plan=dict(owner_cases=['shared','private','reuse','preempt','nonTargetHolder'],
               periodic_slots=6,interval_s=60,window_ms=2000,roots=2,
               workload_seconds=385,performance_certification='NOT_ACCEPTED')
+    if specialists:
+        plan=dict(cases=['sched-shared','sched-private','sched-idle','reclaim-high',
+                         'reclaim-control','quota'],window_ms=2000,roots=2,
+                  performance_certification='NOT_ACCEPTED')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-prototype.sock'
     command=['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -96,6 +101,36 @@ def run():
         for i in range(2):
             path=root/('root%d'%i);path.mkdir()
             targets.append(request('register',path=str(path))['target'])
+        if specialists:
+            for label in plan['cases']:
+                collector='ip' if label=='quota' else label.split('-')[0]
+                for i in range(2):
+                    path=root/('root%d'%i)
+                    (path/'cpu.max').write_text('20000 100000' if label=='quota' and i==0 else 'max 100000')
+                    (path/'memory.high').write_text(str(16<<20) if label=='reclaim-high' and i==0 else 'max')
+                    (path/'memory.max').write_text(str(192<<20))
+                sid=request('start',collector=collector,targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
+                start=wait_window(sid)
+                running=[] if label=='sched-idle' else [launch(label,i,
+                    ['reclaim' if collector=='reclaim' else 'throughput','3',str(start)],
+                    cpu=0 if label=='sched-shared' else i*2) for i in range(2)]
+                for child in running:assert child.wait(timeout=20)==0
+                row,report=finish(sid)
+                assert report['quality']['status']=='PASS',report['quality']
+                findings=report['findings']
+                assert not any(e['kind']=='observed_holder_waiter' for e in findings)
+                if label=='sched-shared':assert any(e.get('observation')=='scheduler_wait' for e in findings)
+                if label=='reclaim-high':assert any(e.get('observation')=='memcg_reclaim_interval' for e in findings)
+                if label in ('sched-idle','reclaim-control'):assert not findings,findings
+                if label=='quota':assert any(e['kind']=='cpu_throttling_counter' for e in findings),report
+                expected_programs={'ip':1,'sched':1,'reclaim':4}[collector]
+                assert len(row['inventory']['programs'])==expected_programs,row['inventory']
+                assert (row['inventory']['ip_perf_cpus']>0)==(collector=='ip')
+            summary=dict(prototype_functional_status='PASS',cases=results,plan=plan,
+                         source=manifest,performance_certification='NOT_ACCEPTED')
+            (out/'result.json').write_text(json.dumps(summary,indent=2))
+            print('CIS_PROTOTYPE_RESULT '+json.dumps(summary),flush=True)
+            return
         for scenario in plan['owner_cases']:
             selected=targets[:1] if scenario=='nonTargetHolder' else targets
             sid=request('start',collector='owner',targets=selected,nonce=scenario,window_ms=2000)['session_id']
@@ -111,6 +146,10 @@ def run():
             if scenario=='nonTargetHolder':
                 a,b=[tuple(map(int,t.split(':'))) for t in targets]
                 assert any(tuple(e['waiter'][:2])==a and tuple(e['holder'][:2])==b for e in edges)
+            truth=check_owner([json.loads(line) for line in (out/'records'/(sid+'.jsonl')).read_text().splitlines()],
+                              [(out/('%s-%d.log'%(scenario,i))).read_text() for i in range(2)])
+            (out/(scenario+'-truth.json')).write_text(json.dumps(truth,indent=2))
+            assert truth['status']=='PASS',truth
 
         begin=time.monotonic_ns()+1_000_000_000
         running=[launch('periodic',i,['throughput',str(plan['workload_seconds']),str(begin)]) for i in range(2)]
@@ -161,4 +200,7 @@ def run():
         audit.close();controller_log.close()
 
 
-if __name__=='__main__':run()
+if __name__=='__main__':
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--specialists',action='store_true')
+    run(parser.parse_args().specialists)

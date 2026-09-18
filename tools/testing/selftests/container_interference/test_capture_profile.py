@@ -35,8 +35,24 @@ int main(void) {
     assert(cis_profile_map(2, "holder_tasks"));
     assert(cis_profile_map(2, "holders"));
     assert(cis_profile_map(2, "watched"));
-    assert(!cis_profile_map(3, "roots"));
+    assert(cis_profile_map(3, "roots"));
     assert(!cis_profile_program(3, "sample_ip"));
+    assert(cis_profile_program(3, "sched_wait"));
+    assert(!cis_profile_program(3, "reclaim_begin"));
+    assert(!cis_profile_map(3, "stacks"));
+    assert(!cis_profile_map(3, "pending"));
+    assert(cis_profile_map(3, "targets"));
+    assert(cis_profile_program(4, "reclaim_begin"));
+    assert(cis_profile_program(4, "reclaim_end"));
+    assert(cis_profile_program(4, "memcg_begin"));
+    assert(cis_profile_program(4, "memcg_end"));
+    assert(!cis_profile_program(4, "owner_state"));
+    assert(!cis_profile_program(4, "sched_wait"));
+    assert(cis_profile_map(4, "pending"));
+    assert(cis_profile_map(4, "stacks"));
+    assert(!cis_profile_map(4, "work_items"));
+    assert(!cis_profile_map(4, "watched"));
+    assert(!cis_profile_map(5, "roots"));
     return 0;
 }
 '''

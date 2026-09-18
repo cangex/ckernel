@@ -56,7 +56,8 @@ int main(int argc,char **argv)
 	if(!ctx || argc<9 || argc>8+CIS_MAX_ROOTS) return 2;
 	channel=atoi(argv[1]); ctx->output_fd=atoi(argv[2]);
 	ctx->session_id=strtoull(argv[3],NULL,10); window=atoi(argv[5]);
-	ctx->session_collector=!strcmp(argv[4],"ip")?1:!strcmp(argv[4],"owner")?2:0;
+	ctx->session_collector=!strcmp(argv[4],"ip")?1:!strcmp(argv[4],"owner")?2:
+		!strcmp(argv[4],"sched")?3:!strcmp(argv[4],"reclaim")?4:0;
 	if(!ctx->session_id || !ctx->session_collector || window<100 || window>10000) return 2;
 	ctx->output_limit=16ULL<<20; ctx->identity_only=1; ctx->psi_epoll=-1;
 	ctx->window_ms=window; ctx->ip_hz=1000; ctx->entry_rate_limit=200000;
@@ -92,7 +93,7 @@ int main(int argc,char **argv)
 		r->generation=gen; r->session_target=role=='t'; targets+=r->session_target; close(fd);
 	}
 	if(targets<1 || targets>2) { err=1; reason="TARGETS"; goto drain; }
-	if(ctx->session_collector==2) {
+	if(ctx->session_collector>=2) {
 		if(recursion_snapshot(&recursion_before)) { err=1; reason="RECURSION_BASELINE"; goto drain; }
 		recursion_started=1;
 	}
@@ -117,9 +118,10 @@ int main(int argc,char **argv)
 	start=cis_clock_ns()+100000000ULL; end=start+window*1000000ULL;
 	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used && ctx->roots[i].session_target) {
 		struct cis_root *r=&ctx->roots[i];
-		if(ctx->session_collector==2) {
-			r->diagnostic_kind=16; r->requested_start_ns=start;
-			if(cis_capture_diagnostic(ctx,r,1)) { err=1; reason="OWNER_ATTACH"; goto drain; }
+		if(ctx->session_collector>=2) {
+			r->diagnostic_kind=ctx->session_collector==2?16:ctx->session_collector==3?1:4;
+			r->requested_start_ns=start;
+			if(cis_capture_diagnostic(ctx,r,1)) { err=1; reason="DIAGNOSTIC_ATTACH"; goto drain; }
 			r->state=CIS_DIAGNOSING; ctx->diagnostic++;
 		}
 	}
@@ -148,7 +150,7 @@ int main(int argc,char **argv)
 drain:
 	notify(channel,"{\"state\":\"DRAIN\"}");
 	stop_error=cis_capture_quiesce(ctx);
-	if(ctx->session_collector==2 && recursion_started) {
+	if(ctx->session_collector>=2 && recursion_started) {
 		if(!recursion_snapshot(&recursion_after) &&
 		   !cis_recursion_delta(&recursion_before,&recursion_after,&recursion_skipped)) {
 			recursion_valid=1;
@@ -157,7 +159,7 @@ drain:
 	}
 	/* Source snapshot v3 waits out raw-tp callbacks before map/ring teardown.
 	 * A failed barrier cannot produce a valid terminal capture receipt. */
-	if(ctx->session_collector==2 && recursion_started && !recursion_valid && !stop_error)
+	if(ctx->session_collector>=2 && recursion_started && !recursion_valid && !stop_error)
 		stop_error=-EIO;
 	stopped=cis_clock_ns(); stop_cpu=cpu_ns();
 	cis_capture_stop(ctx);
@@ -165,8 +167,8 @@ drain:
 	 * observed source counter. Preserve that counter and audit the producer too. */
 	{
 		char detail[256];
-		snprintf(detail,sizeof(detail),"required=%u valid=%u skipped=%llu scope=quiescent_owner_session",
-			ctx->session_collector==2,recursion_valid,(unsigned long long)recursion_skipped);
+		snprintf(detail,sizeof(detail),"required=%u valid=%u skipped=%llu scope=quiescent_raw_tp_session",
+			ctx->session_collector>=2,recursion_valid,(unsigned long long)recursion_skipped);
 		cis_report(ctx,"producer_recursion",NULL,detail);
 	}
 	cis_registry_destroy(ctx); cis_symbols_free(ctx);
@@ -189,7 +191,7 @@ drain:
 		size_t n=strlen(packet);
 		if(n && packet[n-1]=='}')
 			snprintf(packet+n-1,sizeof(packet)-n+1,",\"producer_recursion\":{\"required\":%s,\"valid\":%s,\"skipped\":%llu}}",
-				ctx->session_collector==2?"true":"false",recursion_valid?"true":"false",
+				ctx->session_collector>=2?"true":"false",recursion_valid?"true":"false",
 				(unsigned long long)recursion_skipped);
 	}
 	notify(channel,packet); close(channel); free(ctx);

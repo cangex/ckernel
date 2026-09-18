@@ -13,7 +13,11 @@ echo 1 > /proc/sys/kernel/sched_schedstats
 touch /cis-disposable-vm
 insmod /cis_fixture.ko isolated_vm=1
 cp -a /dev/cis-fixture /container-root/cis-fixture
-/usr/bin/python3 /profile/prototype_vm.py
+if test -f /profile/specialists-mode; then
+    /usr/bin/python3 /profile/prototype_vm.py --specialists
+else
+    /usr/bin/python3 /profile/prototype_vm.py
+fi
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"
 find /tmp/prototype-evidence -type f | sort | while read -r f; do

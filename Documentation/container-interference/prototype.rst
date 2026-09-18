@@ -33,3 +33,24 @@ slots with two continuously running container workloads. Readiness precedes
 scheduling; every session must finalize, remove its BPF objects and meet
 evidence-quality checks. This test is not an OFF/ON performance experiment.
 Failure logs and protocol messages must be retained, not retried until green.
+
+On-demand profiles
+------------------
+
+The ``sched`` profile loads only ``sched_stat_wait`` and five maps. It reports
+the event task, not the executing scheduler's current task. The timestamp is
+the interval endpoint; a wait beginning before the window remains unknown.
+It has no waiting-task stack or interfering-owner identity. A schedstats-
+disabled guest cannot provide this coverage, even if attach succeeds.
+
+The ``reclaim`` profile loads direct and memcg reclaim begin/end tracepoints
+and seven maps. It records the begin identity and stack. Nested intervals,
+unmatched ends, expiry and incomplete windows are audited, not converted to
+zero-length events. Direct and memcg intervals can overlap and are not summed.
+Reclaim execution does not identify a memory-pressure-producing container.
+
+Both profiles use the same ARM, budget, cancel, drain and inventory protocol.
+The debugfs v3 snapshot is used as a raw-tracepoint unregister grace-period
+barrier, not as proof of generic BPF callback recursion coverage. Its skip
+counter covers the custom owner producer only. Generic tracepoint entry or
+recursion losses not measured by these counters remain a coverage limitation.

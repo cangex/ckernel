@@ -100,7 +100,7 @@ def analyze(text):
     for kind,values in repeat.items():
         passed=len(values)==100 and all(r['state']=='IDLE' and assess(r)['status']=='PASS' for r in values)
         summary['repeat'][kind]={'count':len(values),'status':'PASS' if passed else 'BLOCKED',
-            'independent_collector':all((r['inventory']['ip_perf_cpus']==0)==(kind=='owner') for r in values)}
+            'independent_collector':all((r['inventory']['ip_perf_cpus']==0)==(kind!='ip') for r in values)}
     for nonce in ('functionalowner','fixtureprivate','fixturereuse','fixturepreempt'):
         found=[r for r in records.values() if r['nonce']==nonce]
         if not found:continue

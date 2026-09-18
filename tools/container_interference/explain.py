@@ -6,10 +6,12 @@ from collections import Counter
 import hashlib
 import json
 from pathlib import Path
+import time
 
 from owner_report import analyze as owner_analyze, fields
 from session_quality import assess
 from attribution import classify
+from diagnosis_plan import recommend
 
 MAX_BYTES = 16*1024*1024
 MAX_FINDINGS = 128
@@ -42,6 +44,11 @@ def explain(record, raw):
     if loss:
         quality = dict(quality, status='FAIL', defects=quality['defects']+['raw_quality_event'])
     findings, candidates, unknown = [], [], []
+    stack_symbols = {}
+    for event in events:
+        if event.get('kind')=='stack_symbols' and ' leaf_to_root=' in event.get('detail',''):
+            detail=event['detail']
+            stack_symbols[fields(detail).get('stack_id',-1)]=detail.split(' leaf_to_root=',1)[1].split('>')
     identities = dict(record.get('root_identities', {}))
     identities.update(record.get('owner_identities', {}))
     known = {(v['id'], v['generation']) for v in identities.values()}
@@ -66,14 +73,19 @@ def explain(record, raw):
         if event.get('kind') in ('E1', 'incomplete'):
             item = classify(event)
             detail = fields(event.get('detail', ''))
-            begin, duration = detail.get('sample_time_ns'), detail.get('duration_ns')
-            valid_interval = (type(begin) is int and type(duration) is int and duration >= 0 and
-                              within_window(record, begin, begin+duration))
+            timestamp, duration = detail.get('sample_time_ns'), detail.get('duration_ns')
+            valid_interval = type(timestamp) is int and type(duration) is int and duration >= 0
+            if valid_interval:
+                # sched_stat_wait reports a completed duration at its end time.
+                begin = timestamp-duration if detail.get('type')==2 else timestamp
+                item['interval_ns'] = [begin, begin+duration]
+                valid_interval = within_window(record, begin, begin+duration)
             if (quality['status'] != 'PASS' or (event.get('id'), event.get('generation')) not in known
                     or event.get('kind') == 'incomplete' or not valid_interval
                     or item.get('observation') == 'unsupported'):
                 unknown.append(dict(reason='interval_quality_or_identity_incomplete', observation=item))
             else:
+                item['stack_leaf_to_root']=stack_symbols.get(detail.get('stack_id',-1),[])
                 findings.append(dict(kind='observed_interval', **item))
     for target, row in record.get('survey', {}).get('roots', {}).items():
         candidates.append(dict(target=target, kind='hotspot_and_pressure_only',
@@ -90,7 +102,7 @@ def explain(record, raw):
                 cause='quota event observed; external container not identified'))
     if not events:
         unknown.append(dict(reason='no_raw_events'))
-    return dict(schema='cis-explanation-v1', session_id=sid, collector=record.get('collector'),
+    result = dict(schema='cis-explanation-v1', session_id=sid, collector=record.get('collector'),
         source=record.get('source_identity'), raw_sha256=hashlib.sha256(raw).hexdigest(),
         window=record.get('window'), admission_policy=record.get('admission_policy', 'strict'),
         quality=quality, findings=findings[:MAX_FINDINGS], candidates=candidates,
@@ -98,10 +110,17 @@ def explain(record, raw):
         omitted_findings=max(0,len(findings)-MAX_FINDINGS), unknown_count=len(unknown),
         raw_counts=dict(Counter(e.get('kind', 'unknown') for e in events)),
         performance_certification='NOT_ACCEPTED', total_interference_ns=None,
+        explained_at_ns=time.monotonic_ns(),
+        resources=dict(worker=record.get('receipt'),process_budget=record.get('process_cpu_budget'),
+                       combined_rss_peak_bytes=record.get('combined_rss_peak_bytes'),
+                       kernel_inventory=[fields(e['detail']) for e in events if e.get('kind')=='kernel_memory_inventory'],
+                       total_cpu_complete=False,total_memory_complete=False),
         business_loss_causality=False,
         limits=['sampling absence is not absence of interference',
                 'hold/wait and holder off-CPU overlap; never add as disjoint time',
                 'bounded supported paths only; no full-kernel recall claim'])
+    result['manual_diagnosis_candidates']=recommend(result)
+    return result
 
 
 def markdown(report):
@@ -109,7 +128,7 @@ def markdown(report):
            '会话：`%s`；采集类型：`%s`。'%(report['session_id'],report['collector']),
            '证据质量：**%s**；性能认证：**未通过认证**。'%report['quality']['status'], '',
            '## 观察到的事实']
-    for item in report['findings']:
+    for item in report['findings'][:12]:
         if item['kind']=='observed_holder_waiter':
             w,h=item['waiter'],item['holder']
             relation='容器内部' if item['relation']=='container_internal' else '跨容器'
@@ -122,7 +141,14 @@ def markdown(report):
         elif item['kind']=='cpu_throttling_counter':
             lines.append('- `%s` 出现CPU配额节流；证据是边界计数，不表示另一个容器持锁。'%item['target'])
         else:
-            lines.append('- `%s`：观察到 `%s`，字段和调用栈索引见JSON；尚未识别阻塞方。'%(item.get('id'),item.get('observation')))
+            description={'scheduler_wait':'已可运行但尚未获得CPU',
+                         'direct_reclaim_interval':'业务线程进入直接内存回收',
+                         'memcg_reclaim_interval':'业务线程进入内存cgroup回收',
+                         'lock_contention_interval':'进入锁等待，但持有者尚未闭合'}.get(item.get('observation'),'未分类事件')
+            lines.append('- `%s:%s`：%s，区间 %.3f ms；尚未识别造成压力的其他容器。'%(item.get('id'),item.get('generation'),description,
+                         (item['interval_ns'][1]-item['interval_ns'][0])/1e6))
+    if report['finding_count']>12:
+        lines.append('这里只展示前12条，共%s条有效观察；完整字段及有界保留情况见JSON。'%report['finding_count'])
     if not report['findings']:
         lines.append('本窗口没有形成可验证的等待/持有者关系；不能据此认定没有干扰。')
     lines += ['', '## 热点与候选']
@@ -130,6 +156,8 @@ def markdown(report):
         lines.append('- `%s`：%s；热点 `%s`。这些仅是定位线索，不是根因结论。'%(row['target'],row['status'],
                      ', '.join(x.get('symbol','unknown') for x in row['top_ip'])))
     if not report['candidates']:lines.append('本会话未提供有效热点候选。')
+    for row in report.get('manual_diagnosis_candidates',[]):
+        lines.append('- 可人工选择 `%s` 专项检查 `%s`；候选不等于根因，不自动启动探针。'%(row['collector'],row['target']))
     lines += ['', '## 未知与边界',
               '未闭合或未知记录：%s；省略展示的关系：%s。完整证据见JSON。'%(report['unknown_count'],report['omitted_findings']),
               '这里只解释支持路径上实际观察到的关系，不推算总干扰率，也不归因全部业务吞吐损失。',

@@ -394,7 +394,7 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	if(libbpf_get_error(c->ring)) { c->ring=NULL; goto fail; }
 	snprintf(detail,sizeof(detail),"pages_per_cpu=%d possible_cpus=%d payload_bytes=%llu cap_bytes=4194304",pages,c->possible_cpus,(unsigned long long)pages*4096*c->possible_cpus);
 	cis_report(ctx,"buffer_budget",NULL,detail);
-	if(ctx->session_collector==2) { memory_inventory(c,pages); return 0; }
+	if(ctx->session_collector>=2) { memory_inventory(c,pages); return 0; }
 	p=bpf_object__find_program_by_name(c->object,"sample_ip");
 	if(!p) goto fail;
 	prog_fd=bpf_program__fd(p);
@@ -622,8 +622,10 @@ void cis_capture_stop(struct cis_context *ctx)
 	if(ctx->session_id && ctx->session_collector!=1 && c->object) for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
 		struct cis_root *r=&ctx->roots[i];
 		if(!r->session_target) continue;
-		if(ctx->session_collector!=2) { unfinished(c,r); unfinished_work(c,r); }
-		export_stacks(c,r); clear_watches(c,r);
+		if(c->pending>=0) unfinished(c,r);
+		if(mapfd(c,"work_items")>=0) unfinished_work(c,r);
+		if(c->stacks>=0) export_stacks(c,r);
+		if(mapfd(c,"watched")>=0) clear_watches(c,r);
 		bpf_map_delete_elem(c->targets,&r->id);
 	}
 	if(c->cpu_stats) {
