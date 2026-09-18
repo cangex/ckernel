@@ -25,6 +25,27 @@ static DEFINE_PER_CPU(bool, cis_in_trace);
 static DEFINE_PER_CPU(unsigned long, cis_skipped);
 static DEFINE_PER_CPU(unsigned long, cis_gate_filtered);
 
+#ifdef CONFIG_BLOCK
+DECLARE_TRACEPOINT(block_io_start);
+DECLARE_TRACEPOINT(block_rq_insert);
+DECLARE_TRACEPOINT(block_rq_issue);
+DECLARE_TRACEPOINT(block_rq_requeue);
+DECLARE_TRACEPOINT(block_rq_complete);
+DECLARE_TRACEPOINT(block_rq_merge);
+DECLARE_TRACEPOINT(block_rq_remap);
+#define CIS_BLOCK_ON(name) tracepoint_enabled(name)
+#else
+#define CIS_BLOCK_ON(name) 0
+#endif
+
+static bool cis_block_active(void)
+{
+	return CIS_BLOCK_ON(block_io_start) || CIS_BLOCK_ON(block_rq_insert) ||
+	       CIS_BLOCK_ON(block_rq_issue) || CIS_BLOCK_ON(block_rq_requeue) ||
+	       CIS_BLOCK_ON(block_rq_complete) || CIS_BLOCK_ON(block_rq_merge) ||
+	       CIS_BLOCK_ON(block_rq_remap);
+}
+
 /* Monotone one-bit membership: collisions only admit extra events. No deletes
  * while any probe is registered; another container's holder is never filtered
  * by its identity. BPF owner watches are created only by WAIT events. */
@@ -61,7 +82,7 @@ static bool cis_trace_active(void)
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
 	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
 	       trace_cis_alloc_release_enabled() || trace_cis_net_state_enabled() ||
-	       trace_cis_net_skb_release_enabled();
+	       trace_cis_net_skb_release_enabled() || cis_block_active();
 }
 
 static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
@@ -164,11 +185,14 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=5 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u\n",
+	seq_printf(m, "version=6 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
-		   trace_cis_net_skb_release_enabled());
+		   trace_cis_net_skb_release_enabled(), CIS_BLOCK_ON(block_io_start),
+		   CIS_BLOCK_ON(block_rq_insert), CIS_BLOCK_ON(block_rq_issue),
+		   CIS_BLOCK_ON(block_rq_requeue), CIS_BLOCK_ON(block_rq_complete),
+		   CIS_BLOCK_ON(block_rq_merge), CIS_BLOCK_ON(block_rq_remap));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
