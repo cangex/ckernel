@@ -36,3 +36,22 @@ X4 remains INCOMPLETE. Real backlog/service/skb-release validation, lifecycle
 reuse and transfer tests, ordinary application/cost coverage and the remaining
 scope limitations must be assessed separately. An accepted logical holder
 relationship is not proof of the unique cause of a throughput slowdown.
+
+Backlog first live run, preserved failure
+----------------------------------------
+
+``x34-backlog-lifetime-20260919/x4-backlog-20260919-024736.log`` correctly
+observed four actual loopback TCP backlog episodes, service on the receiving
+container task and three delayed softirq releases. The test incorrectly
+required release before recv returned; the final skb was still pending when
+the capture ended. This cohort FAILED and is retained.
+
+The native explanation is ``tcp_eat_recv_skb -> skb_attempt_defer_free``:
+the skb may be queued on its allocating CPU's softnet defer list, then freed
+by ``skb_defer_free_flush -> napi_consume_skb`` on a later NET_RX cycle.
+The revised test freezes four held 128-byte transfers plus one ordinary
+unheld, payload-verified transfer at +450 ms to exercise deferred draining.
+It does not change any global sysctl or force kernel reclamation. Per-episode
+release timing remains observed, with delayed release explicitly reported;
+the extra transfer does not prove complete systemwide drain. Runtime closure
+of this revision is still pending.

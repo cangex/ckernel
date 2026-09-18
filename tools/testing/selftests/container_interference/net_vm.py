@@ -49,6 +49,9 @@ def run(backlog=False):
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
         scope='logical lock fixture with deliberate bounded sleep while held, not ordinary application cost acceptance')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    if backlog:
+        plan.update(unheld_drain_transfers=1,drain_offset_ms=450,skb_release_not_bounded_by_recv_return=True)
+        (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-net.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
         '--worker',args.worker,'--residue',args.residue,'--bpf',args.bpf,'--admission-policy','prototype',

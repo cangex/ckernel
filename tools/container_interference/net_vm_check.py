@@ -25,6 +25,8 @@ def verify(serial,output):
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
     if (plan.get('order')!=case_order(cases) or plan.get('rounds')!=3 or
             plan.get('net_shift')!=0 or plan.get('hold_ms')!=30 or plan.get('operations')!=4): errors.append('frozen_plan')
+    if cases==('backlog',) and (plan.get('unheld_drain_transfers')!=1 or plan.get('drain_offset_ms')!=450 or
+                              plan.get('skb_release_not_bounded_by_recv_return') is not True): errors.append('drain_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
     for label in case_order(cases):
         ev=value(label+'-evidence.json'); logs=[files[prefix+label+'-%d.log'%i] for i in range(2)]

@@ -104,3 +104,22 @@ are unchanged. Allocator/network stack maps use 2048 fixed slots (1 MiB value
 payload at depth 64), rather than 256; this reduces but cannot eliminate hash
 collisions. Export reads the actual bounded map capacity. Runtime cost and
 coverage of this revision still need fresh verification.
+
+Fresh lifetime cohort
+---------------------
+
+Evidence ``/root/cis-20260916-232524/evidence/x34-backlog-lifetime-20260919``
+uses the a63f83cc2 kernel and 1298aa7bb tools. Serial logs
+``x3-allocator-20260919-024821.log`` and ``x3-fixture-20260919-024911.log``
+passed independent six-state ordinary VMA and 36-state fixture verification.
+The three ordinary captures joined 840 sampled release entries; the 18 fixture
+captures joined 744. All reported program recursion misses were zero, and no
+release stack capture errors occurred in this new cohort. Historical failures
+are unchanged. The latest source-only same-release nested guard is NOT part of
+this kernel build; kernel and tool source hashes are separately recorded.
+
+Peak observer-process CAPTURING CPU: ordinary 15.61661 ms, fixture 13.99556 ms.
+Peak combined observer RSS: 32,632,832 and 38,088,704 bytes, respectively.
+These remain engineering counters, not total native source/background cost,
+production acceptance, complete allocator lock ownership, or arbitrary
+pressure/failure/cpuset coverage. X3 broader scope remains explicitly open.

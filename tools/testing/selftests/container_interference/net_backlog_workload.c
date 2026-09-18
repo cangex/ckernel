@@ -76,5 +76,16 @@ int main(int argc, char **argv)
 			i, actor, (unsigned long long)cookie, (unsigned long long)begin, (unsigned long long)end);
 		fflush(stdout);
 	}
+	/* A final, ordinary unheld transfer lets NET_RX drain deferred frees.
+	 * Receiving payload is not proof that its skb has already been freed. */
+	if (until(start + 450000000ULL)) return 9;
+	{
+		uint64_t begin = now(), end;
+		if (transfer(fd, actor, 4)) return 10;
+		end = now();
+		printf("CIS_PACKET_DRAIN actor=%u cookie=%llu begin_ns=%llu end_ns=%llu bytes=128 valid=1\n",
+			actor, (unsigned long long)cookie, (unsigned long long)begin, (unsigned long long)end);
+		fflush(stdout);
+	}
 	return device >= 0 && close(device) ? 8 : 0;
 }
