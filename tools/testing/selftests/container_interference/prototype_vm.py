@@ -17,7 +17,7 @@ from session_quality import assess
 from explanation_check import check_owner
 
 
-def run(specialists=False):
+def run(specialists=False, bridge=False, costs=False):
     os.umask(0o077)
     env=prototype_admission.environment()
     prototype_admission.check_environment(env)
@@ -38,6 +38,12 @@ def run(specialists=False):
                          'reclaim-control','quota'],window_ms=2000,roots=2,
                   memory_high_release='after completed capture, before business drain',
                   performance_certification='NOT_ACCEPTED')
+    if bridge:
+        plan=dict(cases=['dentryShared','dentryPrivate','fileShared','filePrivate','unregisteredHolder'],
+                  window_ms=2000,roots=2,performance_certification='NOT_ACCEPTED')
+    if costs:
+        plan=dict(pairs=3,modes=['off','ip','owner','sched','reclaim'],workloads=['throughput','open-loop'],
+                  seconds=4,window_ms=2000,role_rotation=True,performance_certification='NOT_ACCEPTED')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-prototype.sock'
     command=['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -102,6 +108,57 @@ def run(specialists=False):
         for i in range(2):
             path=root/('root%d'%i);path.mkdir()
             targets.append(request('register',path=str(path))['target'])
+        if bridge:
+            for label in plan['cases']:
+                if label=='unregisteredHolder':request('unregister',target=targets[1])
+                selected=targets[:1] if label=='unregisteredHolder' else targets
+                sid=request('start',collector='owner',targets=selected,nonce=label,window_ms=2000)['session_id']
+                start=wait_window(sid)
+                if label.startswith('dentry'):
+                    args=['dentry','0',str(start),'private' if label.endswith('Private') else 'shared']
+                elif label=='unregisteredHolder':args=['fixture','0',str(start),'shared']
+                else:args=['file-private' if label.endswith('Private') else 'throughput','3',str(start)]
+                running=[launch(label,i,args) for i in range(2)]
+                row,report=finish(sid)
+                for child in running:assert child.wait(timeout=20)==0
+                assert report['quality']['status']=='PASS',report['quality']
+                if label=='dentryShared':assert any(e.get('resource')=='lockref' for e in report['findings'])
+                if label=='dentryPrivate':assert not report['findings']
+                if label=='unregisteredHolder':
+                    assert not report['findings']
+                    assert any(e['reason']=='unregistered_or_unresolved_owner_identity' for e in report['unknown'])
+            summary=dict(prototype_functional_status='PASS',cases=results,plan=plan,
+                         source=manifest,performance_certification='NOT_ACCEPTED')
+            (out/'result.json').write_text(json.dumps(summary,indent=2))
+            print('CIS_PROTOTYPE_RESULT '+json.dumps(summary),flush=True)
+            return
+        if costs:
+            measurements=[]
+            for workload in plan['workloads']:
+                for repetition in range(plan['pairs']):
+                    modes=plan['modes'] if repetition%2==0 else list(reversed(plan['modes']))
+                    for mode in modes:
+                        label='%s%d%s'%(workload.replace('-',''),repetition,mode)
+                        begin=time.monotonic_ns()+500_000_000
+                        args=[workload,str(plan['seconds']),str(begin)]
+                        if workload=='open-loop':args+=['2000']
+                        running=[launch(label,i,args) for i in range(2)]
+                        time.sleep(max(0,(begin-time.monotonic_ns())/1e9)+.25)
+                        assert all(child.poll() is None for child in running)
+                        if mode!='off':
+                            sid=request('start',collector=mode,targets=[targets[repetition%2]],nonce=label,window_ms=2000)['session_id']
+                            row,report=finish(sid)
+                            assert report['quality']['status']=='PASS',report['quality']
+                            assert begin<row['window']['start_ns']<row['window']['end_ns']<begin+4_000_000_000
+                        for child in running:assert child.wait(timeout=20)==0
+                        measurements.append(dict(label=label,mode=mode,repetition=repetition,
+                                                 workload=workload,target=repetition%2,start_ns=begin))
+            summary=dict(prototype_functional_status='PASS',cases=results,plan=plan,measurements=measurements,
+                         source=manifest,performance_certification='NOT_ACCEPTED',
+                         scope='fixed 3-pair exploratory costs; whole 4s workload encloses 2s profile, not steady-state certification')
+            (out/'result.json').write_text(json.dumps(summary,indent=2))
+            print('CIS_PROTOTYPE_RESULT '+json.dumps(summary),flush=True)
+            return
         if specialists:
             for label in plan['cases']:
                 collector='ip' if label=='quota' else label.split('-')[0]
@@ -211,4 +268,8 @@ def run(specialists=False):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--specialists',action='store_true')
-    run(parser.parse_args().specialists)
+    parser.add_argument('--bridge',action='store_true')
+    parser.add_argument('--costs',action='store_true')
+    args=parser.parse_args()
+    if sum((args.specialists,args.bridge,args.costs))>1:parser.error('one frozen protocol per guest')
+    run(args.specialists,args.bridge,args.costs)

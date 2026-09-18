@@ -312,7 +312,8 @@ class Controller:
             snapshot = copy.deepcopy(active['record'])
             def journal():
                 self.persist(snapshot)
-                return {key: survey.snapshot(self.roots[key]) for key in snapshot['targets']} if self.schedule else None
+                return ({key: survey.snapshot(self.roots[key]) for key in snapshot['targets']}
+                        if self.schedule or getattr(self,'admission_policy','strict')=='prototype' else None)
             self.submit_io('arm_inventory', journal, self.arm_after_journal)
 
     def arm_after_journal(self, boundary):
@@ -828,7 +829,8 @@ class Controller:
         elif not record.get('window'):
             # No ARM acknowledgment without a durably recorded inventory.
             verified = True
-        after = {key: survey.snapshot(root) for key, root in roots.items()} if self.schedule else None
+        after = ({key: survey.snapshot(root) for key, root in roots.items()}
+                 if self.schedule or getattr(self,'admission_policy','strict')=='prototype' else None)
         return dict(verified=verified, after=after)
 
     def finish_verified(self, verification):

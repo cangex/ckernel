@@ -33,10 +33,12 @@ static int order(const void *a,const void *b)
     return (x>y)-(x<y);
 }
 
+static const char *operation_path="/sample";
+
 static int one_operation(void)
 {
     struct stat st;
-    int fd=open("/sample",O_RDONLY|O_CLOEXEC);
+    int fd=open(operation_path,O_RDONLY|O_CLOEXEC);
     if(fd<0) return 1;
     int ret=fstat(fd,&st);
     return close(fd) || ret;
@@ -239,6 +241,11 @@ int main(int argc, char **argv)
         if(ready>=start) return 16;
     }
     if(!strcmp(argv[1],"internal-phase")) return internal_phase(start,seconds);
+    if(!strcmp(argv[1],"file-private")) {
+        operation_path="/tmp/private-sample";
+        int private_fd=open(operation_path,O_CREAT|O_RDWR|O_CLOEXEC,0600);
+        if(private_fd<0 || close(private_fd)) return 5;
+    }
     if(!strcmp(argv[1],"reclaim")) {
         until(start);
         const size_t bytes=64ULL<<20;

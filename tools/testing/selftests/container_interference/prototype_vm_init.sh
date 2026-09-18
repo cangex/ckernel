@@ -13,7 +13,11 @@ echo 1 > /proc/sys/kernel/sched_schedstats
 touch /cis-disposable-vm
 insmod /cis_fixture.ko isolated_vm=1
 cp -a /dev/cis-fixture /container-root/cis-fixture
-if test -f /profile/specialists-mode; then
+if test -f /profile/costs-mode; then
+    /usr/bin/python3 /profile/prototype_vm.py --costs
+elif test -f /profile/bridge-mode; then
+    /usr/bin/python3 /profile/prototype_vm.py --bridge
+elif test -f /profile/specialists-mode; then
     /usr/bin/python3 /profile/prototype_vm.py --specialists
 else
     /usr/bin/python3 /profile/prototype_vm.py

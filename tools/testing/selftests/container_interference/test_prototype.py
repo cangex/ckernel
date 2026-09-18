@@ -140,6 +140,14 @@ class Explanations(unittest.TestCase):
         self.assertEqual(report['unknown'][0]['reason'],'no_raw_events')
         self.assertIsNone(report['total_interference_ns'])
 
+    def test_quota_fact_does_not_require_ip_minimum(self):
+        record=self.record()
+        record['survey']=dict(roots={'1:1':dict(valid=False,status='INSUFFICIENT',counters=dict(status='VALID',
+            files={'cpu.stat':dict(delta=dict(nr_throttled=3),read_intervals_ns=[[1,2],[10,11]])}))})
+        report=explain(record,b'{"session_id":"7","kind":"IP"}\n')
+        self.assertEqual(report['findings'][0]['kind'],'cpu_throttling_counter')
+        self.assertFalse(report['candidates'][0]['valid'])
+
     def test_fixture_truth_checks_both_parties_and_epoch(self):
         events=[event(1,3,1),event(2,2,2),event(5,4,1),event(6,3,2)]
         logs=['CIS_TRUTH object=100 host_tid=101 cgroup_id=1 begin_ns=0 acquired_ns=1 released_ns=5\n'

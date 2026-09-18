@@ -46,8 +46,9 @@ def analyze(log, output):
         if record['collector']=='owner':
             nonce=record['nonce']
             logs=[files.get('/tmp/prototype-evidence/%s-%d.log'%(nonce,i),'') for i in range(2)]
-            check=check_owner([json.loads(line) for line in event_raw.splitlines()],logs)
-            result['truth'].append(dict(nonce=nonce,**check))
+            if any('CIS_TRUTH ' in text for text in logs):
+                check=check_owner([json.loads(line) for line in event_raw.splitlines()],logs)
+                result['truth'].append(dict(nonce=nonce,**check))
     declared=files.get('/tmp/prototype-evidence/result.json')
     result['declared_result']=json.JSONDecoder().raw_decode(declared.lstrip())[0] if declared else None
     result['status']=('PASS' if result['declared_result'] and result['sessions'] and

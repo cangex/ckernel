@@ -57,6 +57,10 @@ def explain(record, raw):
         if any(fields(e['detail']).get('resource') not in (1, 2) for e in events if e.get('kind') == 'OWNER'):
             raise ValueError('unsupported owner resource protocol')
         owner = owner_analyze(events)
+        unknown_actors=sum(not all(fields(e['detail']).get(k,0) for k in ('actor_id','actor_generation'))
+                           for e in events if e.get('kind')=='OWNER')
+        if unknown_actors:
+            unknown.append(dict(reason='unregistered_or_unresolved_owner_identity',count=unknown_actors))
         for edge in owner['edges']:
             valid = quality['status'] == 'PASS' and edge['level'] == 'E2'
             valid &= tuple(edge['waiter'][:2]) in known and tuple(edge['holder'][:2]) in known
@@ -94,7 +98,7 @@ def explain(record, raw):
             changes=row.get('reasons', []), status=row.get('status'),
             statement='hot IP or pressure change does not identify a competing owner'))
         cpu = row.get('counters', {}).get('files', {}).get('cpu.stat', {})
-        if (quality['status']=='PASS' and row.get('valid') and
+        if (quality['status']=='PASS' and row.get('counters',{}).get('status') in ('VALID','PARTIAL') and
                 cpu.get('delta', {}).get('nr_throttled', 0)>0):
             findings.append(dict(kind='cpu_throttling_counter', target=target, evidence='E1-counter',
                 delta=cpu['delta'], intervals=cpu['read_intervals_ns'],
