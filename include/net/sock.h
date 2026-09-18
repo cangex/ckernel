@@ -70,6 +70,7 @@
 #include <net/l3mdev.h>
 #include <uapi/linux/socket.h>
 #include <linux/kabi.h>
+#include <linux/cis_net.h>
 
 /*
  * This structure really needs to be cleaned up.
@@ -1094,6 +1095,7 @@ static inline void __sk_add_backlog(struct sock *sk, struct sk_buff *skb)
 
 	WRITE_ONCE(sk->sk_backlog.tail, skb);
 	skb->next = NULL;
+	cis_net_event(sk, skb, CIS_CN_QUEUED);
 }
 
 /*
@@ -1816,6 +1818,7 @@ static inline void unlock_sock_fast(struct sock *sk, bool slow)
 		__release(&sk->sk_lock.slock);
 	} else {
 		mutex_release(&sk->sk_lock.dep_map, _RET_IP_);
+		cis_net_event(sk, NULL, CIS_CN_FAST_RELEASED);
 		spin_unlock_bh(&sk->sk_lock.slock);
 	}
 }
@@ -1867,6 +1870,7 @@ static inline bool sock_owned_by_user_nocheck(const struct sock *sk)
 static inline void sock_release_ownership(struct sock *sk)
 {
 	if (sock_owned_by_user_nocheck(sk)) {
+		cis_net_event(sk, NULL, CIS_CN_RELEASED);
 		sk->sk_lock.owned = 0;
 
 		/* The sk_lock has mutex_unlock() semantics: */

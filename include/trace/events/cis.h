@@ -6,11 +6,31 @@
 #include <linux/tracepoint.h>
 #include <linux/cis_counter.h>
 #include <linux/cis_alloc.h>
+#include <linux/cis_net.h>
 struct task_struct;
 int cis_observe_register(void);
 void cis_observe_unregister(void);
 int cis_fd_observe_register(void);
 void cis_fd_observe_unregister(void);
+DECLARE_EVENT_CLASS(cis_net_class,
+	TP_PROTO(const struct cis_net_sample *sample),
+	TP_ARGS(sample),
+	TP_STRUCT__entry(
+		__field(u64, cookie)
+		__field(unsigned int, phase)
+		__field(void *, skb)
+	),
+	TP_fast_assign(
+		__entry->cookie = sample->cookie; __entry->phase = sample->phase;
+		__entry->skb = sample->skb;
+	),
+	TP_printk("cookie=%llu phase=%u skb=%p", __entry->cookie,
+		__entry->phase, __entry->skb)
+);
+DEFINE_EVENT(cis_net_class, cis_net_state,
+	TP_PROTO(const struct cis_net_sample *sample), TP_ARGS(sample));
+DEFINE_EVENT(cis_net_class, cis_net_skb_release,
+	TP_PROTO(const struct cis_net_sample *sample), TP_ARGS(sample));
 TRACE_EVENT(cis_alloc_step,
 	TP_PROTO(const struct cis_alloc_sample *sample),
 	TP_ARGS(sample),

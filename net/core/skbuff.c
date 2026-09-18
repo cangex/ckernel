@@ -1054,6 +1054,7 @@ void skb_release_head_state(struct sk_buff *skb)
 static void skb_release_all(struct sk_buff *skb, enum skb_drop_reason reason,
 			    bool napi_safe)
 {
+	cis_net_skb_release(skb);
 	skb_release_head_state(skb);
 	if (likely(skb->head))
 		skb_release_data(skb, reason, napi_safe);

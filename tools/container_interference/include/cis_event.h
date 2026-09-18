@@ -12,10 +12,12 @@
 #define CIS_DIAG_OWNER 16
 #define CIS_DIAG_COUNTER 32
 #define CIS_DIAG_ALLOCATOR 64
+#define CIS_DIAG_NET 128
 #define CIS_OWNER_EVENT 12
 #define CIS_COUNTER_EVENT 13
 #define CIS_ALLOC_EVENT 14
 #define CIS_ALLOC_RELEASE_EVENT 15
+#define CIS_NET_EVENT 16
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -63,6 +65,12 @@ struct cis_alloc_release_event {
 	struct cis_event base;
 	__u64 cache, allocation_task_start, executor_start, executor_id, executor_generation;
 };
+struct cis_net_event {
+	struct cis_event base;
+	__u64 cookie, skb, actor_id, actor_generation, actor_start;
+	__u32 phase, netns, bytes, backlog_bytes, packet_flags, reserved;
+};
+struct cis_net_service_key { __u64 cookie, skb, tid, task_start; };
 struct cis_object_key { __u64 object; __u32 kind, reserved; };
 struct cis_watch { __u64 id, generation, start_ns, deadline_ns, epoch, events; };
 struct cis_owner_record { __u64 id, generation, tid, task_start, acquired_ns, epoch; };

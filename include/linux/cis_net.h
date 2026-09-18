@@ -1,0 +1,39 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _LINUX_CIS_NET_H
+#define _LINUX_CIS_NET_H
+#include <linux/types.h>
+struct sock;
+struct sk_buff;
+enum cis_net_phase {
+	CIS_CN_WAIT = 1, CIS_CN_ACQUIRED, CIS_CN_RELEASED,
+	CIS_CN_FAST_ACQUIRED, CIS_CN_FAST_RELEASED,
+	CIS_CN_QUEUED, CIS_CN_SERVICE_BEGIN, CIS_CN_SERVICE_END,
+	CIS_CN_SKB_RELEASE,
+};
+struct cis_net_sample {
+	u64 time_ns, cookie;
+	struct sock *sk;
+	struct sk_buff *skb;
+	u32 phase, context, netns, bytes, backlog_bytes, flags;
+};
+#ifdef CONFIG_CIS_OBSERVE_NET
+#include <linux/tracepoint-defs.h>
+DECLARE_TRACEPOINT(cis_net_state);
+DECLARE_TRACEPOINT(cis_net_skb_release);
+void __cis_net_event(struct sock *, struct sk_buff *, u32);
+void __cis_net_skb_release(struct sk_buff *);
+static inline void cis_net_event(struct sock *sk, struct sk_buff *skb, u32 phase)
+{
+	if (tracepoint_enabled(cis_net_state))
+		__cis_net_event(sk, skb, phase);
+}
+static inline void cis_net_skb_release(struct sk_buff *skb)
+{
+	if (tracepoint_enabled(cis_net_skb_release))
+		__cis_net_skb_release(skb);
+}
+#else
+static inline void cis_net_event(struct sock *sk, struct sk_buff *skb, u32 phase) { }
+static inline void cis_net_skb_release(struct sk_buff *skb) { }
+#endif
+#endif

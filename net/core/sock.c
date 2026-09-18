@@ -2974,6 +2974,7 @@ void __lock_sock(struct sock *sk)
 {
 	DEFINE_WAIT(wait);
 
+	cis_net_event(sk, NULL, CIS_CN_WAIT);
 	for (;;) {
 		prepare_to_wait_exclusive(&sk->sk_lock.wq, &wait,
 					TASK_UNINTERRUPTIBLE);
@@ -3002,7 +3003,10 @@ void __release_sock(struct sock *sk)
 			prefetch(next);
 			DEBUG_NET_WARN_ON_ONCE(skb_dst_is_noref(skb));
 			skb_mark_not_on_list(skb);
+			cis_net_event(sk, skb, CIS_CN_SERVICE_BEGIN);
 			sk_backlog_rcv(sk, skb);
+			/* skb may have been freed; the event only copies its address. */
+			cis_net_event(sk, skb, CIS_CN_SERVICE_END);
 
 			cond_resched();
 
@@ -3537,6 +3541,7 @@ void lock_sock_nested(struct sock *sk, int subclass)
 	if (sock_owned_by_user_nocheck(sk))
 		__lock_sock(sk);
 	sk->sk_lock.owned = 1;
+	cis_net_event(sk, NULL, CIS_CN_ACQUIRED);
 	spin_unlock_bh(&sk->sk_lock.slock);
 }
 EXPORT_SYMBOL(lock_sock_nested);
@@ -3581,11 +3586,13 @@ bool __lock_sock_fast(struct sock *sk) __acquires(&sk->sk_lock.slock)
 		 * mutex_release() has to happen in the fast path of
 		 * unlock_sock_fast().
 		 */
+		cis_net_event(sk, NULL, CIS_CN_FAST_ACQUIRED);
 		return false;
 	}
 
 	__lock_sock(sk);
 	sk->sk_lock.owned = 1;
+	cis_net_event(sk, NULL, CIS_CN_ACQUIRED);
 	__acquire(&sk->sk_lock.slock);
 	spin_unlock_bh(&sk->sk_lock.slock);
 	return true;

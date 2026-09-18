@@ -20,7 +20,7 @@ struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(k
 #if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 7 || CIS_PROFILE == 8
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 9
 struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,CIS_STACKS); __type(key,__u32); __type(value,__u64[CIS_STACK_DEPTH]); } stacks SEC(".maps");
 #endif
 #if CIS_PROFILE == 0
@@ -28,6 +28,11 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u
 #endif
 #if CIS_PROFILE == 8
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_alloc_live_key); __type(value,struct cis_alloc_live); } alloc_live SEC(".maps");
+#endif
+#if CIS_PROFILE == 9
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,__u64); __type(value,struct cis_watch); } net_watched SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u64); __type(value,struct cis_net_event); } net_skb SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,struct cis_net_service_key); __type(value,struct cis_net_event); } net_service SEC(".maps");
 #endif
 #if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 6
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");
@@ -104,6 +109,100 @@ static __always_inline void emit(void *ctx,struct cis_event *e)
 	if(bpf_perf_event_output(ctx,&events,BPF_F_CURRENT_CPU,e,sizeof(*e))) COUNT(s,lost);
 	else COUNT(s,emitted);
 }
+
+#if CIS_PROFILE == 9
+static __always_inline void net_actor(void *ctx, struct cis_net_event *e, u32 context)
+{
+	struct task_struct *task = (void *)bpf_get_current_task();
+	struct cis_identity actor = {};
+	e->base.flags = context; e->base.cpu = bpf_get_smp_processor_id();
+	e->base.tid = 0; e->actor_start = 0; e->actor_id = 0; e->actor_generation = 0;
+	if (!context) {
+		e->base.tid = bpf_get_current_pid_tgid();
+		e->actor_start = BPF_CORE_READ(task, start_boottime);
+		if (identity(task, &actor)) { e->actor_id = actor.id; e->actor_generation = actor.generation; }
+	}
+	e->base.stack_id = bpf_get_stackid(ctx, &stacks, 0);
+}
+static __always_inline void net_emit(void *ctx, struct cis_net_event *e)
+{
+	struct cis_bpf_stats *s = statistics();
+	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, e, sizeof(*e))) COUNT(s, lost);
+	else COUNT(s, emitted);
+}
+SEC("raw_tp/cis_net_state")
+int net_state(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct cis_net_sample *sample = (void *)ctx->args[0];
+	struct cis_net_event e = {};
+	struct cis_bpf_stats *s = statistics();
+	struct cis_watch *watch, new_watch = {};
+	struct cis_net_service_key key = {};
+	struct cis_net_event *queued;
+	u64 now = BPF_CORE_READ(sample, time_ns), cookie = BPF_CORE_READ(sample, cookie);
+	u32 phase = BPF_CORE_READ(sample, phase), context = BPF_CORE_READ(sample, context);
+	COUNT(s, received);
+	if (!cookie || context > 2 || phase < 1 || phase > 8) { COUNT(s, rejected); return 0; }
+	net_actor(ctx, &e, context);
+	watch = bpf_map_lookup_elem(&net_watched, &cookie);
+	if (!watch && phase <= 5 && e.actor_id) {
+		struct cis_identity actor = { .id = e.actor_id, .generation = e.actor_generation };
+		struct cis_target *target;
+		if (!allowed(&actor, CIS_DIAG_NET, now)) return 0;
+		target = bpf_map_lookup_elem(&targets, &actor.id);
+		if (!target) return 0;
+		new_watch.id = actor.id; new_watch.generation = actor.generation;
+		new_watch.start_ns = target->start_ns; new_watch.deadline_ns = target->deadline_ns;
+		new_watch.epoch = now;
+		bpf_map_update_elem(&net_watched, &cookie, &new_watch, BPF_NOEXIST);
+		watch = bpf_map_lookup_elem(&net_watched, &cookie);
+		if (!watch) { COUNT(s, rejected); return 0; }
+	}
+	if (!watch) return 0;
+	if (now < watch->start_ns || now >= watch->deadline_ns) { COUNT(s, expired); return 0; }
+	e.base.id = watch->id; e.base.generation = watch->generation;
+	e.base.time_ns = now; e.base.type = CIS_NET_EVENT;
+	e.base.object = (u64)BPF_CORE_READ(sample, sk); e.cookie = cookie;
+	e.skb = (u64)BPF_CORE_READ(sample, skb); e.phase = phase;
+	e.netns = BPF_CORE_READ(sample, netns); e.bytes = BPF_CORE_READ(sample, bytes);
+	e.backlog_bytes = BPF_CORE_READ(sample, backlog_bytes); e.packet_flags = BPF_CORE_READ(sample, flags);
+	key.cookie = cookie; key.skb = e.skb; key.tid = e.base.tid; key.task_start = e.actor_start;
+	if (phase == 6) {
+		e.base.sequence_ns = now;
+		if (!e.skb || bpf_map_update_elem(&net_skb, &e.skb, &e, BPF_NOEXIST)) { COUNT(s, rejected); return 0; }
+	} else if (phase == 7) {
+		queued = bpf_map_lookup_elem(&net_skb, &e.skb);
+		if (!queued || queued->cookie != cookie) { COUNT(s, unmatched); return 0; }
+		e.base.sequence_ns = queued->base.sequence_ns;
+		if (bpf_map_update_elem(&net_service, &key, &e, BPF_NOEXIST)) { COUNT(s, rejected); return 0; }
+	} else if (phase == 8) {
+		queued = bpf_map_lookup_elem(&net_service, &key);
+		if (!queued) { COUNT(s, unmatched); return 0; }
+		e.base.sequence_ns = queued->base.sequence_ns;
+		bpf_map_delete_elem(&net_service, &key);
+	}
+	net_emit(ctx, &e);
+	return 0;
+}
+SEC("raw_tp/cis_net_skb_release")
+int net_release(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct cis_net_sample *sample = (void *)ctx->args[0];
+	u64 skb = (u64)BPF_CORE_READ(sample, skb), now = BPF_CORE_READ(sample, time_ns);
+	struct cis_net_event *queued, e = {};
+	struct cis_bpf_stats *s = statistics();
+	COUNT(s, received);
+	queued = bpf_map_lookup_elem(&net_skb, &skb);
+	if (!queued) return 0;
+	e = *queued;
+	bpf_map_delete_elem(&net_skb, &skb);
+	if (!same_window(&e.base, CIS_DIAG_NET, now)) { COUNT(s, expired); return 0; }
+	e.base.time_ns = now; e.phase = 9;
+	net_actor(ctx, &e, BPF_CORE_READ(sample, context));
+	net_emit(ctx, &e);
+	return 0;
+}
+#endif
 
 #if CIS_PROFILE == 8
 SEC("raw_tp/cis_alloc_step")

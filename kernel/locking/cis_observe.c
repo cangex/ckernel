@@ -15,6 +15,9 @@
 #include <linux/hash.h>
 #include <linux/page_counter.h>
 #include <linux/ktime.h>
+#ifdef CONFIG_CIS_OBSERVE_NET
+#include <linux/sock_diag.h>
+#endif
 #define CREATE_TRACE_POINTS
 #include <linux/cis_observe.h>
 
@@ -57,7 +60,8 @@ static bool cis_trace_active(void)
 {
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
 	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
-	       trace_cis_alloc_release_enabled();
+	       trace_cis_alloc_release_enabled() || trace_cis_net_state_enabled() ||
+	       trace_cis_net_skb_release_enabled();
 }
 
 static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
@@ -160,10 +164,11 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=4 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u\n",
+	seq_printf(m, "version=5 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
-		   trace_cis_alloc_release_enabled());
+		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
+		   trace_cis_net_skb_release_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -173,6 +178,9 @@ static const struct file_operations cis_counter_audit_fops;
 #endif
 #ifdef CONFIG_CIS_OBSERVE_ALLOC
 static const struct file_operations cis_alloc_audit_fops;
+#endif
+#ifdef CONFIG_CIS_OBSERVE_NET
+static const struct file_operations cis_net_audit_fops;
 #endif
 
 static int __init cis_diag_init(void)
@@ -184,6 +192,9 @@ static int __init cis_diag_init(void)
 #endif
 #ifdef CONFIG_CIS_OBSERVE_ALLOC
 	debugfs_create_file("cis_alloc_audit", 0400, NULL, NULL, &cis_alloc_audit_fops);
+#endif
+#ifdef CONFIG_CIS_OBSERVE_NET
+	debugfs_create_file("cis_net_audit", 0400, NULL, NULL, &cis_net_audit_fops);
 #endif
 	return 0;
 }
@@ -458,6 +469,101 @@ out:
 	if (ctx->start_ns)
 		__cis_alloc_step(ctx, CIS_CA_BEGIN, NULL, NULL, node, 0);
 }
+#endif
+
+#ifdef CONFIG_CIS_OBSERVE_NET
+static unsigned int net_shift = 6;
+module_param(net_shift, uint, 0400);
+MODULE_PARM_DESC(net_shift, "Select TCP socket lives by native cookie low bits (clamped to 16)");
+static DEFINE_PER_CPU(unsigned long, cis_net_entries);
+static DEFINE_PER_CPU(unsigned long, cis_net_eligible);
+static DEFINE_PER_CPU(unsigned long, cis_net_selected);
+static DEFINE_PER_CPU(unsigned long, cis_net_releases);
+static DEFINE_PER_CPU(unsigned long, cis_net_skipped);
+
+static int cis_net_audit_show(struct seq_file *m, void *unused)
+{
+	int cpu;
+
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+	seq_printf(m, "version=1 active=%u release_active=%u shift=%u source_counter_bytes_per_cpu=%zu snapshot=non_atomic\n",
+		trace_cis_net_state_enabled(), trace_cis_net_skb_release_enabled(),
+		min(net_shift, 16U), 5 * sizeof(unsigned long));
+	for_each_possible_cpu(cpu)
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu selected=%lu releases=%lu skipped=%lu\n", cpu,
+			READ_ONCE(per_cpu(cis_net_entries, cpu)), READ_ONCE(per_cpu(cis_net_eligible, cpu)),
+			READ_ONCE(per_cpu(cis_net_selected, cpu)), READ_ONCE(per_cpu(cis_net_releases, cpu)),
+			READ_ONCE(per_cpu(cis_net_skipped, cpu)));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(cis_net_audit);
+
+static u32 cis_net_context(void)
+{
+	return in_hardirq() ? 2 : in_serving_softirq() ? 1 : 0;
+}
+
+void __cis_net_event(struct sock *sk, struct sk_buff *skb, u32 phase)
+{
+	struct cis_net_sample sample = { };
+	u64 cookie;
+
+	preempt_disable();
+	this_cpu_inc(cis_net_entries);
+	if ((sk->sk_family != AF_INET && sk->sk_family != AF_INET6) ||
+	    sk->sk_protocol != IPPROTO_TCP)
+		goto out;
+	this_cpu_inc(cis_net_eligible);
+	if (in_nmi() || this_cpu_read(cis_in_trace)) {
+		this_cpu_inc(cis_net_skipped);
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	/* Native socket-life identity, not an observation epoch or owner ID. */
+	cookie = __sock_gen_cookie(sk);
+	if (!cookie || (cookie & ((1ULL << min(net_shift, 16U)) - 1)))
+		goto out;
+	this_cpu_write(cis_in_trace, true);
+	this_cpu_inc(cis_net_selected);
+	sample = (struct cis_net_sample) {
+		.time_ns = ktime_get_ns(), .cookie = cookie, .sk = sk, .skb = skb,
+		.phase = phase, .context = cis_net_context(), .netns = sock_net(sk)->ns.inum,
+		.backlog_bytes = READ_ONCE(sk->sk_backlog.len),
+	};
+	/* SERVICE_END may carry an already-freed skb address. Never dereference it. */
+	if (skb && (phase == CIS_CN_QUEUED || phase == CIS_CN_SERVICE_BEGIN)) {
+		sample.bytes = skb->len;
+		sample.flags = (skb_cloned(skb) ? 1 : 0) |
+			(skb_is_gso(skb) ? 2 : 0) | (skb_is_nonlinear(skb) ? 4 : 0);
+	}
+	trace_cis_net_state(&sample);
+	this_cpu_write(cis_in_trace, false);
+out:
+	preempt_enable();
+}
+EXPORT_SYMBOL_GPL(__cis_net_event);
+
+void __cis_net_skb_release(struct sk_buff *skb)
+{
+	struct cis_net_sample sample;
+
+	preempt_disable();
+	this_cpu_inc(cis_net_releases);
+	if (in_nmi() || this_cpu_read(cis_in_trace)) {
+		this_cpu_inc(cis_net_skipped);
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	this_cpu_write(cis_in_trace, true);
+	sample = (struct cis_net_sample) { .time_ns = ktime_get_ns(),
+		.skb = skb, .phase = CIS_CN_SKB_RELEASE, .context = cis_net_context() };
+	trace_cis_net_skb_release(&sample);
+	this_cpu_write(cis_in_trace, false);
+out:
+	preempt_enable();
+}
+EXPORT_SYMBOL_GPL(__cis_net_skb_release);
 #endif
 
 void __cis_mutex_wait(struct mutex *lock)

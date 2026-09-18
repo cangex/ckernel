@@ -3095,3 +3095,12 @@ config CIS_OBSERVE_ALLOC
 	  boot-selected cache. Stage wall time includes observation and
 	  preemption; it is not spin cycles or proof of a blocking container.
 	  Cache algorithms, GFP handling and accounting remain unchanged.
+
+config CIS_OBSERVE_NET
+	bool "Observe selected TCP socket ownership and backlog lifetimes"
+	depends on CIS_OBSERVE && INET && !PREEMPT_RT
+	default n
+	help
+	  Disabled tracepoints for native socket logical ownership, selected
+	  backlog entries and release requests. Cookies identify socket lives,
+	  not application owners. No protocol, queue or locking change.
