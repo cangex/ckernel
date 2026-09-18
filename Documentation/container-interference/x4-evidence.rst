@@ -55,3 +55,19 @@ It does not change any global sysctl or force kernel reclamation. Per-episode
 release timing remains observed, with delayed release explicitly reported;
 the extra transfer does not prove complete systemwide drain. Runtime closure
 of this revision is still pending.
+Native backlog and deferred release cohort
+-----------------------------------------
+
+``x4-backlog-drain-20260919`` used kernel a63f83cc2 and tools 419251efe.
+Independent ``net_vm_check.py`` accepted six fixed OFF/ON n=3 states with
+four payload-verified TCP transfers per state. A fifth unheld transfer at
+the frozen 450 ms offset lets native deferred skb frees drain. The original
+failed cohort remains preserved: application recv completion was wrongly
+used as a release deadline, whereas native remote-CPU NET_RX deferred frees
+can occur later. No kernel behavior or capture budget was changed.
+
+Three captures matched queue entry, service and release-entry episodes.
+Maximum combined-process CAPTURING CPU was 9.62383 ms, maximum combined RSS
+33,726,464 bytes, with zero per-program recursion misses. Release entry is
+not final backend completion, and packet creation/clone ownership remains
+unknown. Broader network counterexamples and total cost are still open.

@@ -45,6 +45,9 @@ from schedule import Schedule
 import survey
 import prototype_admission
 import collector_manifest
+from diagnosis_queue import DiagnosisQueue
+from diagnosis_plan import recommend
+from session_quality import assess
 
 
 def now():
@@ -87,7 +90,8 @@ def source_manifest(args, boot):
             'bpf_sha256': digest(bundle), 'bpf_binding': 'collector_bundle_v1',
             'support_sha256': digest({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
                 for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py',
-                             'child_usage.py', 'prototype_admission.py', 'collector_manifest.py')}),
+                             'child_usage.py', 'prototype_admission.py', 'collector_manifest.py',
+                             'diagnosis_queue.py','diagnosis_plan.py','session_quality.py')}),
             'collector_bundle': bundle, 'collector_bundle_sha256': digest(bundle),
             'kernel_release': os.uname().release,
             'kernel_notes_sha256': hashlib.sha256(Path('/sys/kernel/notes').read_bytes()).hexdigest(),
@@ -124,7 +128,9 @@ def validate(request):
               'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject'},
               'schedule_configure': {'plan'}, 'schedule_enable': set(),
               'schedule_pause': set(), 'schedule_status': {'offset'},
-              'survey_epoch': set(), 'survey_report': {'target'}}
+              'survey_epoch': set(), 'survey_report': {'target'},
+              'diagnosis_status': set(), 'diagnosis_offer': {'session'},
+              'diagnosis_run': {'candidate_id'}, 'diagnosis_auto': {'enabled'}}
     if op not in fields or set(request) - fields[op] - {'version', 'op'}:
         raise ValueError('unknown command or field')
     if op == 'start':
@@ -151,6 +157,14 @@ def validate(request):
             raise ValueError('invalid nonce epoch')
     if op == 'schedule_configure':
         validate_plan(request.get('plan'))
+    if op=='diagnosis_auto' and type(request.get('enabled')) is not bool:
+        raise ValueError('explicit boolean automatic mode required')
+    if op=='diagnosis_run' and (not isinstance(request.get('candidate_id'),str) or
+                               not re.fullmatch('[0-9a-f]{24}',request['candidate_id'])):
+        raise ValueError('invalid diagnosis candidate id')
+    if op=='diagnosis_offer' and (not isinstance(request.get('session'),str) or
+            not re.fullmatch('[0-9]{1,24}',request['session'])):
+        raise ValueError('invalid source session')
     if op == 'schedule_status' and (type(request.get('offset', 0)) is not int or not 0 <= request.get('offset', 0) <= MAX_ROOTS):
         raise ValueError('invalid status offset')
     return request
@@ -178,6 +192,7 @@ class Controller:
         self.io = None
         self.children = ChildProcesses()
         self.schedule = None
+        self.diagnoses = DiagnosisQueue(now)
         self.surveys = {}
         self.references = {}
         self.boundary_reads = 0
@@ -221,6 +236,7 @@ class Controller:
         if meta_file.exists():
             saved = json.loads(meta_file.read_text())
             if saved.get('boot_id') == self.boot:
+                self.diagnoses=DiagnosisQueue(now,saved.get('diagnosis_ledger'))
                 self.prototype_sessions_started = saved.get('prototype_sessions_started', 0)
                 if type(self.prototype_sessions_started) is not int or self.prototype_sessions_started < 0:
                     raise ValueError('invalid prototype session ledger')
@@ -254,6 +270,7 @@ class Controller:
                survey_epoch=self.survey_epoch, nonce_epoch=self.nonce_epoch,
                boot_id=self.boot, last_admit_ns=self.schedule.last_admit_ns if self.schedule else None,
                prototype_sessions_started=getattr(self, 'prototype_sessions_started', 0),
+               diagnosis_ledger=self.diagnoses.ledger(),
                restart_policy='paused; explicit register and admission required'))
 
     def submit_io(self, name, function, callback):
@@ -439,7 +456,7 @@ class Controller:
         if self.schedule:
             if request.get('window_ms', WINDOW_MS) > self.schedule.plan['window_ms']:
                 raise ValueError('manual window exceeds shared host budget')
-            self.schedule.admit(request['targets'], manual=planned is None)
+            self.schedule.admit(request['targets'], manual=planned is None or planned.get('kind')=='manual_diagnosis')
         cpu_begin = self.process_cpu()
         sid = str(secrets.randbits(63) or 1)
         record = dict(self.manifest, session_id=sid, nonce=request['nonce'], request_hash=fingerprint,
@@ -464,6 +481,12 @@ class Controller:
         record['config_hash'] = hashlib.sha256(encoded({'request': request, 'manifest': self.manifest,
                                                        'identities': record['owner_identities']})).hexdigest()
         self.history[sid] = record
+        if planned and planned.get('diagnosis'):
+            self.diagnoses.admitted(planned['diagnosis'])
+        elif request['collector']=='ip':
+            self.diagnoses.ordinary_admitted()
+        else:
+            self.diagnoses.last_specialist=True
         if getattr(self, 'admission_policy', 'strict') == 'prototype':
             self.prototype_sessions_started += 1
         # No worker exists during file I/O. Retain the host admission slot so a
@@ -586,7 +609,8 @@ class Controller:
         validate(req)
         op = req['op']
         if (self.active or self.admission or self.io) and op in (
-                'register', 'unregister', 'schedule_configure', 'schedule_enable', 'survey_epoch', 'recover'):
+                'register', 'unregister', 'schedule_configure', 'schedule_enable', 'survey_epoch', 'recover',
+                'diagnosis_offer','diagnosis_auto','diagnosis_run'):
             raise OSError(errno.EBUSY, 'drain admission and its IO before changing controller metadata')
         if op == 'register':
             if getattr(self, 'admission_policy', 'strict') == 'prototype' and len(self.roots) >= prototype_admission.LIMITS['registered_roots']:
@@ -602,6 +626,7 @@ class Controller:
                 self.schedule.remove(key)
             self.surveys.pop(key, None)
             self.references.pop(key, None)
+            self.diagnoses.prune(self.roots,self.survey_epoch)
             return {'removed': key}
         if op == 'start':
             return compact_record(self.start(req))
@@ -614,6 +639,9 @@ class Controller:
             if self.schedule:
                 proposed.last_admit_ns = self.schedule.last_admit_ns
             self.schedule = proposed
+            self.survey_epoch+=1
+            self.surveys.clear(); self.references.clear()
+            self.diagnoses.prune(self.roots,self.survey_epoch)
             self.nonce_epoch = secrets.token_hex(16)
             self.save_metadata()
             return dict(plan=proposed.plan, capacity=capacity(proposed.plan, len(self.roots)), nonce_epoch=self.nonce_epoch)
@@ -660,6 +688,7 @@ class Controller:
             self.survey_epoch += 1
             self.surveys.clear()
             self.references.clear()
+            self.diagnoses.prune(self.roots,self.survey_epoch)
             if self.schedule:
                 for value in self.schedule.roots.values():
                     value['valid_ns'] = None
@@ -668,6 +697,20 @@ class Controller:
             return dict(survey_epoch=self.survey_epoch)
         if op == 'survey_report':
             return self.surveys.get(req['target'], dict(status='NOT_OBSERVED'))
+        if op=='diagnosis_status':
+            return self.diagnoses.status(self.roots,self.survey_epoch,self.diagnosis_ready())
+        if op=='diagnosis_offer':
+            return dict(offered=self.diagnosis_offer(self.history[req['session']]))
+        if op=='diagnosis_auto':
+            if (self.faulted or getattr(self,'admission_policy','strict')!='prototype' or not self.schedule):
+                raise ValueError('automatic specialists require a configured, nonfaulted prototype controller')
+            self.diagnoses.enabled=req['enabled']
+            return dict(enabled=self.diagnoses.enabled)
+        if op=='diagnosis_run':
+            if not self.schedule: raise ValueError('specialist queue requires shared periodic interval budget')
+            item=self.diagnoses.select(self.roots,self.survey_epoch,self.diagnosis_ready(),candidate_id=req['candidate_id'])
+            if item is None: raise ValueError('specialist cooldown or no current-source validated collector')
+            return compact_record(self.start_diagnosis(item))
         if op == 'recover':
             if self.active or self.io:
                 raise OSError(errno.EBUSY, 'worker not reaped')
@@ -930,7 +973,36 @@ class Controller:
                     reference = self.references.get(key)
                     if value.get('valid') and (reference is None or reference['epoch'] != value['epoch']):
                         self.references[key] = copy.deepcopy(value)
+        if record.get('collector')=='ip' and record.get('finalized'):
+            self.diagnosis_offer(record)
         self.release_active()
+
+    def diagnosis_ready(self):
+        return {r['collector'] for r in self.history.values() if r.get('finalized') and r.get('collector')!='ip'
+                and all(k in r and k in self.manifest and r[k]==self.manifest[k] for k in prototype_admission.SOURCE_KEYS)
+                and assess(r)['status']=='PASS' and not r.get('collector_contract_error')}
+
+    def diagnosis_offer(self,record):
+        if (self.faulted or record.get('collector')!='ip' or not record.get('finalized') or
+                record.get('survey_epoch')!=self.survey_epoch or assess(record)['status']!='PASS'):
+            return []
+        report=dict(quality=assess(record),session_id=record['session_id'],window=record.get('window'),
+            survey_epoch=record['survey_epoch'],candidates=[dict(v,target=k) for k,v in
+                record.get('survey',{}).get('roots',{}).items() if v.get('valid')])
+        offered=[]
+        for p in recommend(report):
+            try:
+                key=self.diagnoses.offer(p,self.roots,self.survey_epoch)
+                if key: offered.append(key)
+            except ValueError:
+                self.diagnoses.skipped['stale_or_unregistered_source']+=1
+        return offered
+
+    def start_diagnosis(self,item,proposal=None):
+        planned=dict(proposal or {},kind='automatic_diagnosis' if item['automatic'] else 'manual_diagnosis',diagnosis=item)
+        request=dict(version=VERSION,op='start',collector=item['collector'],targets=[item['target']],
+            window_ms=min(2000,self.schedule.plan['window_ms']),nonce='diag'+item['candidate_id'],nonce_epoch=self.nonce_epoch)
+        return self.start(request,planned=planned)
 
     def release_active(self, faulted=False):
         active = self.active
@@ -955,8 +1027,12 @@ class Controller:
                     self.prototype_environment, now(), len(self.roots), self.prototype_sessions_started, self.schedule.plan['window_ms'])
             except (ValueError, PermissionError) as error:
                 self.schedule.pause()
+                self.diagnoses.items.clear(); self.diagnoses.enabled=False
+                self.diagnoses.skipped['permit_rejected']+=1
                 self.schedule.recent.append(dict(time_ns=now(), reason=str(error)))
                 return
+        if self.faulted:
+            self.diagnoses.items.clear(); self.diagnoses.enabled=False
         reason = 'faulted' if self.faulted else 'active_or_draining' if self.active or self.admission or self.io else None
         proposal = self.schedule.poll(reason)
         if proposal is None:
@@ -964,7 +1040,11 @@ class Controller:
         request = dict(version=VERSION, op='start', collector='ip', targets=proposal['targets'],
                        window_ms=self.schedule.plan['window_ms'], nonce=secrets.token_hex(16), nonce_epoch=self.nonce_epoch)
         try:
-            self.start(request, planned=proposal)
+            specialist=self.diagnoses.select(self.roots,self.survey_epoch,self.diagnosis_ready(),automatic=True)
+            if specialist:
+                self.start_diagnosis(specialist,proposal)
+            else:
+                self.start(request, planned=proposal)
         except (OSError, ValueError, KeyError) as error:
             self.schedule.skips['admission_rejected'] += 1
             self.schedule.recent.append(dict(time_ns=now(), reason=str(error)))

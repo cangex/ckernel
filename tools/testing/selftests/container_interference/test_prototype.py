@@ -169,7 +169,8 @@ class Explanations(unittest.TestCase):
     def test_candidates_do_not_start_or_promote_unsupported_locks(self):
         report=dict(session_id='7',quality=dict(status='PASS'),candidates=[dict(target='1:1',valid=True,
                     top_ip=[dict(symbol='native_queued_spin_lock_slowpath')],rates={})])
-        self.assertFalse(recommend(report))
+        self.assertEqual(recommend(report)[0]['collector'],'sync')
+        self.assertTrue(recommend(report)[0]['requires_confirmation'])
         report['candidates'][0]['top_ip']=[dict(symbol='lockref_get')]
         self.assertTrue(recommend(report)[0]['requires_confirmation'])
         report['quality']['status']='FAIL'

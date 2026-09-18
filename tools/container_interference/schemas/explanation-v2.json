@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIS bounded specialist explanation",
+  "type": "object",
+  "required": ["schema", "boot_id", "session_id", "collector", "quality", "relations", "raw_sha256", "source", "timing", "total_interference_ns"],
+  "properties": {
+    "schema": {"const": "cis-explanation-v2"},
+    "collector": {"enum": ["ip", "owner", "fd", "sync", "sched", "reclaim", "counter", "allocator", "net", "block"]},
+    "relations": {
+      "type": "array", "maxItems": 128,
+      "items": {
+        "type": "object",
+        "required": ["relation", "evidence", "affected_actor", "resource", "participants", "interval_ns", "chain_leaf_to_root", "unknown", "causal"],
+        "properties": {"evidence": {"enum": ["E0", "E1", "E1-counter", "E2"]}, "causal": {"const": "NOT_ESTABLISHED"}}
+      }
+    },
+    "total_interference_ns": {"type": "null"},
+    "performance_certification": {"const": "NOT_ACCEPTED"}
+  }
+}
