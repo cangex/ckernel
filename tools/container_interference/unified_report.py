@@ -65,9 +65,13 @@ def analyze(record,raw):
             for sock in specialist['sockets']:
                 resource=dict(kind='tcp_socket',cookie=sock['cookie'],netns=sock['netns'])
                 for f in sock['waits']:
-                    add('socket_holder_waiter','E2' if f['observed_holders'] else 'E1',f['waiter'],resource,
-                        [h['holder'] for h in f['observed_holders'] if h['holder']],f['interval_ns'],f['stack_leaf_to_root'],
-                        ['logical ownership wait; not slock spin cycles'],observed_holders=f['observed_holders'],unexplained_wait_ns=f['unexplained_wait_ns'])
+                    known=[h['holder'] for h in f['observed_holders'] if h['evidence']=='E2' and h['holder']]
+                    unknown=['logical ownership wait; not slock spin cycles']
+                    if len(known)!=len(f['observed_holders']):
+                        unknown.append('some observed holders have unknown container identity')
+                    add('socket_holder_waiter','E2' if known else 'E1',f['waiter'],resource,
+                        known,f['interval_ns'],f['stack_leaf_to_root'],unknown,
+                        observed_holders=f['observed_holders'],unexplained_wait_ns=f['unexplained_wait_ns'])
                 for f in sock['backlog']:
                     add('backlog_service_release','E2',None,dict(resource,skb=f['skb_address'],queue_epoch_ns=f['queue_epoch_ns']),[],
                         [f['queue_epoch_ns'],f['release_entry_ns']],[],['packet origin and unique blocker unknown'],queue_episode=f)
@@ -77,6 +81,7 @@ def analyze(record,raw):
                     [],f['episode_interval_ns'],f['start_stack_leaf_to_root'],
                     ['initial submitter is not a merge/writeback owner; device peers are not proven blockers'],
                     devices=f['devices'],queue_intervals_ns=f['queue_intervals_ns'],service_intervals=f['service_intervals'],
+                    head_bio_origins=f['head_bio_origins'],origin_coverage=f['origin_coverage'],
                     uncertainty=f['uncertainty'],terminal=f['terminal'])
     result=dict(schema='cis-explanation-v2',boot_id=record.get('boot_id'),session_id=record['session_id'],collector=collector,
         window=record.get('window'),quality=quality,scope_audit=scope,relations=relations,omitted_relations=omitted,

@@ -42,7 +42,8 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        result=check_case(label.split('-')[0],ev['window'],logs,report,identities)
+        result=check_case(label.split('-')[0],ev['window'],logs,report,identities,
+            verify_blkcg=plan.get('verify_head_bio_blkcg',False))
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],

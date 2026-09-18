@@ -111,13 +111,14 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 		char d[1400];
 		r=cis_registry_lookup(ctx,e->id,e->generation);
 		if(!r) {ctx->unknown++;return;}
-		snprintf(d,sizeof(d),"protocol=1 sample_time_ns=%llu request=0x%llx episode_ns=%llu submitter_tid=%llu submitter_start=%llu queue=0x%llx bio=0x%llx phase=%u dev_major=%u dev_minor=%u remaining=%u completed=%u operation=%u multi_bio=%u context=%u status=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu cpu=%u stack_id=%d",
+		snprintf(d,sizeof(d),"protocol=2 sample_time_ns=%llu request=0x%llx episode_ns=%llu submitter_tid=%llu submitter_start=%llu queue=0x%llx bio=0x%llx phase=%u dev_major=%u dev_minor=%u remaining=%u completed=%u operation=%u multi_bio=%u context=%u status=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu cpu=%u stack_id=%d bio_cgroup=%llu bio_owner_id=%llu bio_owner_generation=%llu bio_bytes=%u bio_origin_overdepth=%u",
 			(unsigned long long)e->time_ns,(unsigned long long)e->object,(unsigned long long)e->sequence_ns,
 			(unsigned long long)e->tid,(unsigned long long)v->submitter_start,(unsigned long long)v->queue,
 			(unsigned long long)v->bio,v->phase,v->dev_major,v->dev_minor,v->remaining,v->completed,
 			v->operation,v->multi_bio,v->context,v->status,(unsigned long long)v->actor_tid,
 			(unsigned long long)v->actor_start,(unsigned long long)v->actor_id,(unsigned long long)v->actor_generation,
-			e->cpu,e->stack_id);
+			e->cpu,e->stack_id,(unsigned long long)v->bio_cgroup,(unsigned long long)v->bio_owner_id,
+			(unsigned long long)v->bio_owner_generation,v->bio_bytes,v->bio_origin_overdepth);
 		cis_report(ctx,"BLOCK",r,d);return;
 	}
 	if(size>=sizeof(struct cis_net_event) && size<=sizeof(struct cis_net_event)+7 && e->type==CIS_NET_EVENT) {

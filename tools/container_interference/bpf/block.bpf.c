@@ -43,6 +43,23 @@ static __always_inline int block_event(void *ctx, struct request *rq,
 	e.remaining = BPF_CORE_READ(rq, __data_len); e.operation = BPF_CORE_READ(rq, cmd_flags);
 	bio = BPF_CORE_READ(rq, bio); e.bio = (__u64)bio;
 	e.multi_bio = bio && BPF_CORE_READ(bio, bi_next) != 0;
+	e.bio_cgroup=0; e.bio_owner_id=0; e.bio_owner_generation=0;
+	e.bio_bytes=0; e.bio_origin_overdepth=0;
+	if (bio) {
+		struct kernfs_node *kn=BPF_CORE_READ(bio,bi_blkg,blkcg,css.cgroup,kn);
+		e.bio_cgroup=BPF_CORE_READ(kn,id);
+		e.bio_bytes=BPF_CORE_READ(bio,bi_iter.bi_size);
+#pragma clang loop unroll(disable)
+		for (int i=0;i<32;i++) {
+			struct cis_identity *origin;
+			__u64 cg;
+			if (!kn) break;
+			cg=BPF_CORE_READ(kn,id); origin=bpf_map_lookup_elem(&roots,&cg);
+			if (origin) {e.bio_owner_id=origin->id; e.bio_owner_generation=origin->generation; kn=NULL; break;}
+			kn=BPF_CORE_READ(kn,parent);
+		}
+		if (kn) e.bio_origin_overdepth=1;
+	}
 	e.actor_id = 0; e.actor_generation = 0; e.actor_tid = 0; e.actor_start = 0;
 	if (!context) {
 		e.actor_tid = bpf_get_current_pid_tgid(); e.actor_start = BPF_CORE_READ(task, start_boottime);

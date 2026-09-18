@@ -3,6 +3,7 @@ import json
 import unittest
 import test_block_report
 import test_counter_report
+import test_net_report
 from unified_report import analyze,markdown
 
 
@@ -40,3 +41,14 @@ class UnifiedReport(unittest.TestCase):
         f=test_block_report.BlockReport(); record=f.record(); record['receipt']['dropped']=1
         result=analyze(record,encode([f.row(10,1),f.row(20,3),f.row(30,5)]))
         self.assertFalse(result['relations']); self.assertEqual(result['quality']['status'],'FAIL')
+
+    def test_unknown_socket_holder_stays_e1(self):
+        f=test_net_report.NetReport()
+        raw=encode([f.row(10,2,who=0),f.row(20,1,who=2),f.row(30,3,who=0),
+                    f.row(40,2,who=2),f.row(50,3,who=2)])
+        result=analyze(f.record(),raw)
+        self.assertEqual(result['quality']['status'],'PASS',result)
+        relation=result['relations'][0]
+        self.assertEqual(relation['evidence'],'E1')
+        self.assertFalse(relation['participants'])
+        self.assertIn('unknown container identity',' '.join(relation['unknown']))

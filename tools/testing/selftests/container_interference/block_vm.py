@@ -23,7 +23,7 @@ def run():
     out=Path('/tmp/block-evidence'); out.mkdir(mode=0o700)
     root=Path('/sys/fs/cgroup/cis-block'); root.mkdir(); (root/'management').mkdir()
     (root/'management/cgroup.procs').write_text(str(os.getpid()))
-    (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
+    (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset +io')
     roots=[]
     for i in range(2):
         p=root/('root%d'%i); p.mkdir(); (p/'memory.max').write_text(str(64<<20)); roots.append(p)
@@ -31,7 +31,7 @@ def run():
     source=source_manifest(args,env['boot_id']); permit=prototype_admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
     plan=dict(order=case_order(),rounds=3,operations_per_actor=8,window_ms=2000,cpu=[0,1],management_cpu=7,
-        devices=['/dev/vda','/dev/vdb'],device_bytes=16<<20,direct=True,bytes_per_io=4096,
+        devices=['/dev/vda','/dev/vdb'],device_bytes=16<<20,direct=True,bytes_per_io=4096,verify_head_bio_blkcg=True,
         scope='two disposable virtual disks, independent offsets; shared device is not a proven blocker')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     fds=[]
@@ -98,7 +98,7 @@ def run():
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            result=check_case(case,window,logs,report,identities)
+            result=check_case(case,window,logs,report,identities,verify_blkcg=True)
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,exit_codes=codes,result=result)
             (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2)); results.append(evidence)

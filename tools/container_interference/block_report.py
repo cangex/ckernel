@@ -12,6 +12,7 @@ from owner_report import fields
 REQUIRED = {'protocol','sample_time_ns','request','episode_ns','submitter_tid','submitter_start',
     'queue','bio','phase','dev_major','dev_minor','remaining','completed','operation','multi_bio',
     'context','status','actor_tid','actor_start','actor_id','actor_generation','cpu','stack_id'}
+ORIGIN={'bio_cgroup','bio_owner_id','bio_owner_generation','bio_bytes','bio_origin_overdepth'}
 
 
 def actor(row):
@@ -21,7 +22,7 @@ def actor(row):
 def episode(rows):
     start=rows[0]; problems=Counter(); uncertainty=Counter(); queued=None; issued=None
     queue_intervals=[]; service_intervals=[]; completions=[]; terminal=None; expected=None
-    devices=set(); queues=set(); flags=set(); remapped=False
+    devices=set(); queues=set(); flags=set(); remapped=False; bio_origins=[]
     if start['phase']!=1 or start['sample_time_ns']!=start['episode_ns']:
         return None, {'missing_episode_start':1}
     submitter=(start['id'],start['generation'],start['submitter_tid'],start['submitter_start'])
@@ -30,6 +31,12 @@ def episode(rows):
         devices.add((row['dev_major'],row['dev_minor'])); queues.add(row['queue']); flags.add(row['operation'])
         if terminal is not None: problems['event_after_terminal']+=1; continue
         if row['multi_bio']: uncertainty['multiple_bios']+=1
+        if row['protocol']==2:
+            origin=(row['bio_owner_id'],row['bio_owner_generation'])
+            bio_origins.append(dict(time_ns=now,bio=row['bio'],cgroup_id=row['bio_cgroup'],
+                registered_container=list(origin) if all(origin) else None,bytes=row['bio_bytes'],
+                ancestor_overdepth=bool(row['bio_origin_overdepth'])))
+            if not all(origin): uncertainty['head_bio_origin_unresolved']+=1
         if (row['id'],row['generation'],row['submitter_tid'],row['submitter_start'])!=submitter:
             problems['submitter_changed']+=1
         if phase==1:
@@ -76,6 +83,7 @@ def episode(rows):
         initial_bio=start['bio'],operation=start['operation'],queue_intervals_ns=queue_intervals,
         service_intervals=service_intervals,completions=completions,uncertainty=dict(uncertainty),
         ownership='initial_submitter_only' if uncertainty or remapped else 'observed_request_submitter',
+        head_bio_origins=bio_origins,origin_coverage='observed_head_bio_only' if bio_origins else 'HISTORICAL_NOT_RECORDED',
         blocking_container=None,causal='NOT_ESTABLISHED',evidence='E2',request_memory_free='UNOBSERVED'),{}
 
 
@@ -91,11 +99,16 @@ def analyze(record,raw):
         if item.get('kind')!='BLOCK': continue
         count+=1
         if count>16384: excluded['report_capacity']+=1; continue
-        if (not REQUIRED<=d.keys() or any(type(d[k]) is not int or d[k]<0 for k in REQUIRED-{'stack_id'})
-                or d['stack_id'] < -4095 or d['protocol']!=1 or not 1<=d['phase']<=7
+        required=REQUIRED | (ORIGIN if d.get('protocol')==2 else set())
+        if (not required<=d.keys() or any(type(d[k]) is not int or d[k]<0 for k in required-{'stack_id'})
+                or d['stack_id'] < -4095 or d['protocol'] not in (1,2) or not 1<=d['phase']<=7
                 or not 0<=d['context']<=3 or d['multi_bio'] not in (0,1)
                 or not all(d[k] for k in ('request','episode_ns','queue','submitter_tid','submitter_start'))):
             excluded['schema']+=1; continue
+        if d['protocol']==2 and (d['bio_origin_overdepth'] not in (0,1) or
+                (d['bio_owner_id'],d['bio_owner_generation'])!=(0,0) and
+                (d['bio_owner_id'],d['bio_owner_generation']) not in known):
+            excluded['bio_origin_identity']+=1; continue
         d.update(id=item.get('id'),generation=item.get('generation')); who=actor(d)
         if ((d['id'],d['generation']) not in known or who[:2]!=(0,0) and who[:2] not in known
                 or d['context'] and any(who) or not d['context'] and not all(who[2:])
@@ -110,6 +123,8 @@ def analyze(record,raw):
     if not excluded and base['quality']['status']=='PASS' and scope['status']=='PASS':
         for key,rows in sorted(groups.items()):
             rows.sort(key=lambda r:r['sample_time_ns'])
+            if len({r['protocol'] for r in rows})!=1:
+                excluded['mixed_episode_protocol']+=1; continue
             result,problems=episode(rows); excluded.update(problems)
             if result:
                 result['start_stack_leaf_to_root']=stacks.get(rows[0]['stack_id'],[])

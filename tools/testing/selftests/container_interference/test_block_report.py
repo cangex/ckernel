@@ -91,3 +91,25 @@ class BlockReport(unittest.TestCase):
         record=self.record(); record['receipt']['producer_recursion']['skipped']=1
         r=self.run_rows([self.row(10,1),self.row(20,3),self.row(30,5)],record)
         self.assertEqual(r['quality']['status'],'FAIL'); self.assertFalse(r['requests'])
+
+    def test_bio_cgroup_is_distinct_from_submitter_and_irq_executor(self):
+        def row(time,phase,**changes):
+            return self.row(time,phase,protocol=2,bio_cgroup=2,bio_owner_id=2,bio_owner_generation=1,
+                bio_bytes=4096,bio_origin_overdepth=0,**changes)
+        r=self.run_rows([row(10,1),row(20,3),row(30,5,context=1)])
+        self.assertEqual(r['quality']['status'],'PASS',r)
+        req=r['requests'][0]
+        self.assertEqual(req['submitter'][0],1)
+        self.assertEqual(req['head_bio_origins'][0]['registered_container'],[2,1])
+        self.assertIsNone(req['completions'][0]['executor'])
+        self.assertEqual(req['origin_coverage'],'observed_head_bio_only')
+        self.assertIsNone(req['blocking_container'])
+
+    def test_bio_origin_unknown_and_generation_mismatch(self):
+        def rows(owner):
+            return [self.row(t,p,protocol=2,bio_cgroup=9,bio_owner_id=owner,bio_owner_generation=1 if owner else 0,
+                bio_bytes=4096,bio_origin_overdepth=0) for t,p in ((10,1),(20,3),(30,5))]
+        unknown=self.run_rows(rows(0)); self.assertEqual(unknown['quality']['status'],'PASS')
+        self.assertIsNone(unknown['requests'][0]['head_bio_origins'][0]['registered_container'])
+        self.assertIn('head_bio_origin_unresolved',unknown['requests'][0]['uncertainty'])
+        wrong=self.run_rows(rows(9)); self.assertEqual(wrong['quality']['status'],'FAIL'); self.assertFalse(wrong['requests'])

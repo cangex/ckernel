@@ -8,7 +8,7 @@ mkdir -p /sys/fs/cgroup /sys/kernel/tracing /sys/kernel/debug /run
 mount -t cgroup2 none /sys/fs/cgroup
 mount -t tracefs none /sys/kernel/tracing
 mount -t debugfs none /sys/kernel/debug
-echo '+cpu +memory +pids +cpuset' > /sys/fs/cgroup/cgroup.subtree_control
+echo '+cpu +memory +pids +cpuset +io' > /sys/fs/cgroup/cgroup.subtree_control
 echo 1 > /proc/sys/kernel/sched_schedstats
 touch /cis-disposable-vm
 if ! insmod /virtio_blk.ko; then
