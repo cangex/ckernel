@@ -87,3 +87,14 @@ correct device, submitter, operation and byte count. Parser counterexamples cove
 partial completion, requeue, merge, remap, pointer reuse and IRQ identity.
 This is a lifecycle prototype, not saturated-device causality or performance
 acceptance; pre-request tag waits and device-internal scheduling remain unknown.
+
+Protocol 2 head-bio origin
+-------------------------
+
+The initial submitting task and the observed head bio's blkcg are separate
+fields. A bounded 32-parent walk maps ``bio->bi_blkg->blkcg->css.cgroup`` to
+a registered root, retaining the raw leaf ID, matched generation, bio byte
+count and overflow. Unknown blkcg is not replaced with current. A head bio is
+not the complete source set of a merged request; multi-bio uncertainty remains.
+Protocol 1 evidence remains readable with HISTORICAL_NOT_RECORDED coverage,
+not an invented origin or a retroactive claim that this check ran.

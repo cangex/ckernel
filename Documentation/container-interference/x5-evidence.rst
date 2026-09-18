@@ -30,3 +30,12 @@ The native cohort validates simple direct I/O, not runtime positive examples
 of all those transitions. Buffered-writeback origin sets, tag exhaustion,
 multi-origin merge ownership and unique device-blocker causality remain
 UNVERIFIED/NOT_IMPLEMENTED. X5 is not declared complete by this cohort.
+
+``x5-blkcg-20260919`` used tools 5443b7964 on the same 1eb5bfeda kernel.
+All 12 newly frozen states passed independent verification, now also checking
+the head bio's real blkcg against the registered container and 4096-byte
+payload. This is not inference from the completion worker. Six captures
+matched 96/96 operations; maximum CAPTURING process CPU was 8.84622 ms,
+maximum combined RSS 39,014,400 bytes, recursion misses zero. Serial SHA256:
+990629a3f43c1e5b36b8dcc2b6a3b79d8ce4f880b92806c6fc6523f4897e7f29.
+Buffered-writeback and all-bio merge provenance remain outside this cohort.

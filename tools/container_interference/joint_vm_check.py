@@ -74,7 +74,8 @@ def check(serial,output):
             validate(evidence['active_sources'],mode,record['receipt']['prepared_ns'],record['window']['end_ns'])
             validate(evidence['idle_sources'],None,record['window']['end_ns'],2**64-1)
             relations=report['relations']; cost=dict(process_cpu=record.get('process_cpu_budget'),
-                memory=record.get('memory'),rss_bytes=record.get('combined_rss_peak_bytes'),
+                controller_cpu_ns=record.get('controller_cpu_ns'),reaped_children_cpu_ns=record.get('reaped_children_cpu_ns'),
+                memory_total_complete=record.get('memory_total_complete'),rss_bytes=record.get('combined_rss_peak_bytes'),
                 explicit_unknown=['business-context callback CPU not separately measured','kernel asynchronous memory not complete'])
             (output/(label+'-explanation.json')).write_text(json.dumps(report,indent=2))
         else:

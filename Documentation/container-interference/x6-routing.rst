@@ -45,3 +45,30 @@ cooldown, fairness, stale epochs, restart counts and false relation promotion.
 Native queue routing, automatic interleave and failure recovery still require
 their own isolated VM evidence. This implementation does not close X1--X5
 coverage gaps or establish production performance acceptance.
+
+Evidence replay and lifecycle checks
+-----------------------------------
+
+``coverage_matrix.py INDEX NEW_OUTPUT`` pins serial-file SHA256, invokes only
+allowlisted independent checkers, and emits a scoped coverage table. A matching
+word PASS in a log, an empty matrix, or a successful narrow test cannot certify
+X7. Discovery, object identity, participants, causal boundaries and pending
+items are separate. A backlog-only cohort cannot be relabelled as logical
+Socket ownership coverage. Historical cohorts remain bound to their own source.
+
+``x6-control-20260919`` at tools 493eed9b2/kernel 1eb5bfeda passed independent
+replay of 14 controls and 12 sessions, including all ten selective collectors,
+real missed slots, shared manual interval, restart and unregister. This is
+control/lifecycle evidence, not full data-plane or cost certification.
+
+The first real routing cohort ``x6-routing-20260919`` at 80ddeb0c2 executed
+ten sessions: readiness, reference, real CPU-pressure survey, one manual
+specialist and six real 60-second periodic slots. The latter were IP, sched,
+IP, sched, IP, IP. Queue choices and surveys reproduced from raw records;
+the final independent test nevertheless FAILED because the harness signalled
+launchers, yielding four -SIGTERM exits before business counters were delivered.
+No performance gate or capture result was changed to conceal this failure.
+The corrected harness opens pidfds for verified owned child PIDs, stops those
+children gracefully, checks real workload coverage and only publishes PASS
+after all four launchers exit normally. Its runtime result must be recorded
+separately; implementation alone is not acceptance.
