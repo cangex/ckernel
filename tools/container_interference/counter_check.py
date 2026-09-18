@@ -23,6 +23,7 @@ def check(report, logs, shared=True, failure=False, identities=None):
         for op in expected:
             eligible += 1
             found = [c for c in fixture_calls if c['leaf_address']==t['leaf'] and c['operation']==op and
+                     c['actor'][2] & 0xffffffff == t['host_pid'] and
                      t['begin_ns'] <= c['interval_ns'][0] <= c['interval_ns'][1] <= t['end_ns']]
             if len(found) != 1:
                 defects.append('missing_or_duplicate_call'); continue
@@ -34,7 +35,7 @@ def check(report, logs, shared=True, failure=False, identities=None):
             if observed != {t['leaf'], t['parent']}: defects.append('wrong_actual_hierarchy')
             if failure and c['failure_address'] != t['failed']: defects.append('wrong_failure_ancestor')
             matched += 1
-    extra=[c for c in fixture_calls if not any(t['leaf']==c['leaf_address'] and
+    extra=[c for c in fixture_calls if not any(t['leaf']==c['leaf_address'] and c['actor'][2] & 0xffffffff == t['host_pid'] and
             t['begin_ns']<=c['interval_ns'][0]<=c['interval_ns'][1]<=t['end_ns'] for t in truth)]
     if extra: defects.append('outside_truth_call')
     fixture_addresses=fixture_leaves | {r['parent'] for r in truth}
