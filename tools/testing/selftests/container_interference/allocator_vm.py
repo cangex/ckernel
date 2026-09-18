@@ -13,17 +13,19 @@ from session import source_manifest
 from source_switches import observe
 from allocator_report import analyze
 from allocator_vm_check import check_work
+from allocator_fixture_check import CASES, check_case, case_order
 
 ORDER=['off0','allocator0','allocator1','off1','off2','allocator2']
 
 
-def run():
+def run(fixture=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
-    for name,value in (('alloc_shift','6'),('alloc_cache','maple_node')):
+    selection = [('alloc_shift','0'),('alloc_cache','cis_alloc_test')] if fixture else [('alloc_shift','6'),('alloc_cache','maple_node')]
+    for name,value in selection:
         if Path('/sys/module/cis_observe/parameters/'+name).read_text().strip()!=value:
             raise ValueError('frozen source selection')
-    out=Path('/tmp/allocator-evidence'); out.mkdir(mode=0o700)
+    out=Path('/tmp/allocator-fixture-evidence' if fixture else '/tmp/allocator-evidence'); out.mkdir(mode=0o700)
     root=Path('/sys/fs/cgroup/cis-allocator'); root.mkdir()
     (root/'management').mkdir(); (root/'management/cgroup.procs').write_text(str(os.getpid()))
     (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
@@ -36,6 +38,11 @@ def run():
     plan=dict(order=ORDER,operations=8,split_regions=128,roots=2,sample_shift=6,cache='maple_node',
               window_ms=2000,cpu=[0,1],management_cpu=7,memory_max_bytes=64<<20,
               scope='ordinary VMA split/merge bridge; no independent allocator-event recall or cost acceptance')
+    if fixture:
+        plan = dict(order=case_order(),cases=list(CASES),rounds=3,operations=4,roots=2,
+            sample_shift=0,cache='cis_alloc_test',window_ms=2000,cpu=[0,1],free_migration_cpu=[2,3],
+            management_cpu=7,memory_max_bytes=64<<20,
+            scope='test-only native allocation truth; full-rate selected cache, no production recall or free ownership claim')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-allocator.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -71,9 +78,11 @@ def run():
             if daemon.poll() is not None or time.monotonic()>deadline: raise RuntimeError('daemon readiness')
             time.sleep(.02)
         targets=[request('register',path=str(p))['target'] for p in roots]
-        for label in ORDER:
+        for label in plan['order']:
+            case = label.split('-')[0] if fixture else None
+            collecting = 'allocator' in label
             sid=None; source_before=snapshot()
-            if label.startswith('allocator'):
+            if collecting:
                 sid=request('start',collector='allocator',targets=targets,nonce=label,window_ms=2000)['session_id']
                 window=wait(sid,'window')['window']; active=observe('allocator')
             else:
@@ -82,7 +91,8 @@ def run():
             before=snapshot(); running=[]
             for i,p in enumerate(roots):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle)
-                child=subprocess.Popen(['/session_launch',str(p),str(i),'/allocator_workload',str(start)],stdout=handle,stderr=handle)
+                command = ['/allocator_fixture_workload',case,str(start),str(int(case=='private' and i==1)),str(i)] if fixture else ['/allocator_workload',str(start)]
+                child=subprocess.Popen(['/session_launch',str(p),str(i),*command],stdout=handle,stderr=handle)
                 children.append(child); running.append(child)
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()
             if codes!=[0,0] or after['time_ns']>=window['end_ns']: raise ValueError('workload completion/window')
@@ -91,11 +101,13 @@ def run():
                 row=wait(sid,'finalized'); idle=observe(None)
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 report=analyze(record,(out/'records'/(sid+'.jsonl')).read_bytes())
-                result=check_work(window,logs,report,[record['root_identities'][t] for t in targets])
+                identities = [record['root_identities'][t] for t in targets]
+                result=check_case(case,window,logs,report,identities) if fixture else check_work(window,logs,report,identities)
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else:
-                idle=observe(None); result=check_work(window,logs)
+                idle=observe(None)
+                result=check_case(case,window,logs) if fixture else check_work(window,logs)
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,source_before=source_before,source_after=snapshot(),exit_codes=codes,result=result)
             (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2)); results.append(evidence)

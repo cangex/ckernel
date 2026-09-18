@@ -11,6 +11,7 @@ from session_check import extract
 from source_switches import validate
 from prototype_admission import SOURCE_KEYS
 from allocator_source_audit import delta as source_delta
+from allocator_fixture_check import CASES, case_order, check_case
 
 ORDER=['off0','allocator0','allocator1','off1','off2','allocator2']
 
@@ -43,21 +44,28 @@ def check_work(window,logs,report=None,identities=None):
                 recall=None,performance_certification='NOT_ACCEPTED')
 
 
-def verify(serial,output):
+def verify(serial,output,fixture=False):
     if serial.stat().st_size>128<<20: raise ValueError('serial capacity')
-    raw=serial.read_bytes(); text=raw.decode(); files=extract(text); prefix='/tmp/allocator-evidence/'
+    raw=serial.read_bytes(); text=raw.decode(); files=extract(text)
+    prefix='/tmp/allocator-fixture-evidence/' if fixture else '/tmp/allocator-evidence/'
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
-    if (plan.get('order')!=ORDER or plan.get('sample_shift')!=6 or plan.get('cache')!='maple_node' or
-            plan.get('operations')!=8 or plan.get('split_regions')!=128): errors.append('frozen_plan')
+    order=case_order() if fixture else ORDER
+    if fixture:
+        if (plan.get('order')!=order or plan.get('sample_shift')!=0 or plan.get('cache')!='cis_alloc_test' or
+                plan.get('operations')!=4 or plan.get('cases')!=list(CASES) or plan.get('rounds')!=3):
+            errors.append('frozen_plan')
+        if 'CIS_ALLOC_FIXTURE_UNLOAD=0' not in text.splitlines(): errors.append('fixture_cleanup')
+    elif (plan.get('order')!=order or plan.get('sample_shift')!=6 or plan.get('cache')!='maple_node' or
+          plan.get('operations')!=8 or plan.get('split_regions')!=128): errors.append('frozen_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
-    for label in ORDER:
+    for label in order:
         ev=value(label+'-evidence.json'); logs=[files[prefix+label+'-%d.log'%i] for i in range(2)]
         report=None; identities=None
-        if label.startswith('allocator'):
+        if 'allocator' in label:
             sid=str(ev['session_id'])
             if not sid.isascii() or not sid.isdigit(): raise ValueError('session id')
             record=value('records/'+sid+'.json')
@@ -72,20 +80,21 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        result=check_work(ev['window'],logs,report,identities)
+        result=check_case(label.split('-')[0],ev['window'],logs,report,identities) if fixture else check_work(ev['window'],logs,report,identities)
         audit=source_delta(ev['source_before'],ev['source_after'])
-        if label.startswith('off') and any(audit['totals'].values()): errors.append('off_not_quiet_'+label)
-        if label.startswith('allocator') and audit['totals']['sampled']==0: errors.append('source_not_sampled_'+label)
+        if 'off' in label and any(audit['totals'].values()): errors.append('off_not_quiet_'+label)
+        if 'allocator' in label and audit['totals']['sampled']==0: errors.append('source_not_sampled_'+label)
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result,source_audit=audit))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
-        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='ordinary VMA bridge only',
+        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native allocator fixture only' if fixture else 'ordinary VMA bridge only',
         x3_status='INCOMPLETE',performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result
 
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(); p.add_argument('serial',type=Path); p.add_argument('output',type=Path)
-    args=p.parse_args(); r=verify(args.serial,args.output)
+    p.add_argument('--fixture',action='store_true')
+    args=p.parse_args(); r=verify(args.serial,args.output,args.fixture)
     print(json.dumps(dict(status=r['status'],errors=r['errors'],states=len(r['states']))))
     raise SystemExit(r['status']!='PASS')
