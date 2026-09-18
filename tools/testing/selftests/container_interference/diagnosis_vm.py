@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path
+import signal
 import socket
 import subprocess
 import time
@@ -40,13 +41,19 @@ def run():
         '--worker',args.worker,'--residue',args.residue,'--bpf',args.bpf,'--admission-policy','prototype',
         '--prototype-permit',str(out/'permit.json'),'daemon']
     daemon=subprocess.Popen(command,stdout=log,stderr=log)
-    audit=(out/'requests.jsonl').open('x'); children=[]; handles=[]; cases=[]; records={}
+    audit=(out/'requests.jsonl').open('x'); children=[]; handles=[]; cases=[]; records={}; pidfds=[]
 
     def request(op,rejected=False,**fields):
         message=dict(version=1,op=op,**fields); before=time.monotonic_ns()
         with socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET) as sock:
             sock.settimeout(15); sock.connect(endpoint); sock.send(json.dumps(message).encode()); answer=json.loads(sock.recv(16384))
-        audit.write(json.dumps(dict(before_ns=before,after_ns=time.monotonic_ns(),request=message,response=answer))+'\n'); audit.flush()
+        retained=answer
+        if op=='status' and answer.get('ok'):
+            # Full immutable records already have a separate artifact. Avoid
+            # repeating source manifests on every idle readiness poll.
+            retained=dict(answer,data={k:answer['data'][k] for k in
+                ('state','session_id','finalized','prototype_sessions_started') if k in answer['data']})
+        audit.write(json.dumps(dict(before_ns=before,after_ns=time.monotonic_ns(),request=message,response=retained))+'\n'); audit.flush()
         if answer['ok'] is rejected: raise RuntimeError(answer)
         return answer if rejected else answer['data']
 
@@ -77,6 +84,21 @@ def run():
         path=out/('%s-%d.log'%(mode,role)); handle=path.open('x'); handles.append(handle)
         p=subprocess.Popen(['/session_launch',str(roots[role]),str(cpu),'/diagnosis_workload',mode,'680',str(time.monotonic_ns()+100_000_000)],
             stdout=handle,stderr=handle); children.append(p)
+        deadline=time.monotonic()+10
+        while time.monotonic()<deadline:
+            lines=[v for v in path.read_text().splitlines() if v.startswith('CIS_SESSION_CONTAINER host_pid=')]
+            if len(lines)==1:
+                pid=int(lines[0].split('=')[1]); fd=os.pidfd_open(pid)
+                try:
+                    parent=int(Path('/proc/%d/stat'%pid).read_text().rsplit(')',1)[1].split()[1])
+                    cg=Path('/proc/%d/cgroup'%pid).read_text().strip()
+                    if parent!=p.pid or cg!='0::'+str(roots[role]).removeprefix('/sys/fs/cgroup'):
+                        raise ValueError('test child provenance changed')
+                except BaseException: os.close(fd); raise
+                pidfds.append((p,fd)); break
+            if p.poll() is not None: raise ValueError('workload failed before readiness')
+            time.sleep(.01)
+        else: raise TimeoutError('workload PID acknowledgement')
         return p.pid
 
     try:
@@ -141,21 +163,29 @@ def run():
         assert not state['enabled'] and not state['items'] and state['auto_started']==2
         assert status['prototype_sessions_started']==count
         note('restart_preserves_auto_budget_but_pauses',queue=state)
-        (out/'result.json').write_text(json.dumps(dict(schema='cis-x6-result-v1',status='PASS',source=source,
-            checks=cases,sessions=list(records),idle_sources=observe(None)),indent=2))
+        completed=dict(schema='cis-x6-result-v1',status='PASS',source=source,
+            checks=cases,sessions=list(records),idle_sources=observe(None))
     finally:
+        for p,fd in pidfds:
+            if p.poll() is None:
+                try: signal.pidfd_send_signal(fd,signal.SIGTERM)
+                except ProcessLookupError: pass
+        covered={p for p,fd in pidfds}
         for p in children:
-            if p.poll() is None: p.terminate()
+            if p not in covered and p.poll() is None: p.terminate()
         exits=[]
         for p in children:
             try: exits.append(p.wait(timeout=5))
             except subprocess.TimeoutExpired: p.kill(); exits.append(p.wait())
         (out/'workload-exits.json').write_text(json.dumps(exits))
+        for p,fd in pidfds: os.close(fd)
         if daemon.poll() is None: daemon.terminate()
         try: daemon.wait(timeout=15)
         except subprocess.TimeoutExpired: daemon.kill(); daemon.wait()
         for h in handles: h.close()
         audit.close(); log.close()
+    if exits!=[0]*4: raise ValueError(('workload did not exit correctly',exits))
+    (out/'result.json').write_text(json.dumps(completed,indent=2))
 
 
 if __name__=='__main__': run()

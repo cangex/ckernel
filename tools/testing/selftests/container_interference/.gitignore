@@ -16,5 +16,11 @@
 /fd_cross_workload
 /counter_workload
 /counter_mem_workload
+/allocator_workload
+/allocator_fixture_workload
+/net_workload
+/net_backlog_workload
+/block_workload
+/diagnosis_workload
 __pycache__/
 *.pyc
