@@ -17,18 +17,20 @@ def audit(record, raw):
              'terminal_scope': ('unknown', 'overdepth', 'unmatched', 'nested', 'expired', 'irq_context'),
              'owner_entry_stages': ('owner_entries', 'sched_entries', 'target_waits', 'watch_events')}
     found = {}
+    optional = {'owner_map_updates': ('watch_races', 'watch_failed', 'holder_failed', 'attempt_failed')}
     for line in raw.splitlines():
         if len(line) > 8192: raise ValueError('audit record length')
         row = json.loads(line)
         if not isinstance(row, dict): raise ValueError('audit record must be an object')
         if str(row.get('session_id')) != str(record['session_id']): raise ValueError('audit session mismatch')
         kind = row.get('kind')
-        if kind not in names: continue
+        if kind not in names and kind not in optional: continue
         if kind in found: raise ValueError('duplicate terminal counter group')
         detail = row.get('detail', '')
         if not isinstance(detail, str): raise ValueError('audit detail must be text')
         fields = dict(re.findall(r'(\w+)=(\d+)(?:\s|$)', detail))
-        found[kind] = {name: int(fields[name]) if name in fields else None for name in names[kind]}
+        found[kind] = {name: int(fields[name]) if name in fields else None
+                       for name in names.get(kind,optional.get(kind))}
     missing = [kind for kind in names if kind not in found]
     for kind, fields in names.items():
         found.setdefault(kind, {name: None for name in fields})

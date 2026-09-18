@@ -28,6 +28,7 @@ struct cis_bpf_stats {
 	__u64 received, emitted, lost, unknown, overdepth, unmatched, nested, rejected,
 	      expired, phase_changes, irq_context, owner_seen, owner_skip_base, owner_skipped;
 	__u64 owner_entries, owner_sched_entries, owner_target_waits, owner_watch_events;
+	__u64 owner_watch_races, owner_watch_failed, owner_holder_failed, owner_attempt_failed;
 };
 struct cis_owner_event {
 	struct cis_event base;
@@ -40,6 +41,6 @@ struct cis_owner_event {
 struct cis_attempt { __u64 start_ns, epoch, id, generation; };
 struct cis_object_key { __u64 object; __u32 kind, reserved; };
 struct cis_watch { __u64 id, generation, start_ns, deadline_ns, epoch, events; };
-struct cis_owner_record { __u64 id, generation, tid, task_start, acquired_ns; };
-struct cis_owner_task { struct cis_object_key key; __u64 task_start; };
+struct cis_owner_record { __u64 id, generation, tid, task_start, acquired_ns, epoch; };
+struct cis_owner_task { struct cis_object_key key; __u64 task_start, epoch; };
 #endif

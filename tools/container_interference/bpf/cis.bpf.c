@@ -365,17 +365,22 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		COUNT(s,owner_target_waits);
 		if(!t) return 0;
 		if(!w) {
+			long result;
 			create.id=actor.id;create.generation=actor.generation;
 			create.start_ns=t->start_ns;create.deadline_ns=t->deadline_ns;create.epoch=now;
-			if(bpf_map_update_elem(&watched,&key,&create,BPF_NOEXIST)) {COUNT(s,rejected);return 0;}
-			bpf_map_delete_elem(&holders,&key);
+			result=bpf_map_update_elem(&watched,&key,&create,BPF_NOEXIST);
+			/* Concurrent target waiters may publish the same object. Only
+			 * EEXIST plus a live lookup is benign; capacity failures stay fatal. */
+			if(result && result!=-17) {COUNT(s,owner_watch_failed);COUNT(s,rejected);return 0;}
 			w=bpf_map_lookup_elem(&watched,&key);
+			if(!live_watch(w,now)) {COUNT(s,owner_watch_failed);COUNT(s,rejected);return 0;}
+			if(result==-17) COUNT(s,owner_watch_races);
 		}
 	}
 	if(phase==3 && w) {
 		rec.id=actor.id;rec.generation=actor.generation;rec.tid=tid;
-		rec.task_start=BPF_CORE_READ(task,start_boottime);rec.acquired_ns=now;
-		if(bpf_map_update_elem(&holders,&key,&rec,BPF_ANY)) COUNT(s,rejected);
+		rec.task_start=BPF_CORE_READ(task,start_boottime);rec.acquired_ns=now;rec.epoch=w->epoch;
+		if(bpf_map_update_elem(&holders,&key,&rec,BPF_ANY)) {COUNT(s,owner_holder_failed);COUNT(s,rejected);}
 	}
 	if(w) {
 		COUNT(s,owner_watch_events);
@@ -400,7 +405,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 				.id=w->id,.generation=w->generation};
 			if(phase==2) {
 				/* A new WAIT replaces only this task's attempt. No global sequence. */
-				if(bpf_map_update_elem(&owner_attempts,&pk,&attempt,BPF_ANY)) COUNT(s,rejected);
+				if(bpf_map_update_elem(&owner_attempts,&pk,&attempt,BPF_ANY)) {COUNT(s,owner_attempt_failed);COUNT(s,rejected);}
 			}
 			a=bpf_map_lookup_elem(&owner_attempts,&pk);
 			if(a && a->epoch==w->epoch) e.attempt_ns=a->start_ns;
@@ -416,8 +421,8 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		if(phase!=5) owner_emit(ctx,&e);
 		if(phase==2 || phase==3) {
 			struct cis_owner_record *h=bpf_map_lookup_elem(&holders,&key);
-			if(h) {
-				struct cis_owner_task ht={.key=key,.task_start=h->task_start};
+			if(h && h->epoch==w->epoch) {
+				struct cis_owner_task ht={.key=key,.task_start=h->task_start,.epoch=w->epoch};
 				bpf_map_update_elem(&holder_tasks,&h->tid,&ht,BPF_ANY);
 			}
 		}
@@ -446,7 +451,8 @@ static __always_inline void owner_schedule(void *ctx,struct task_struct *task,__
 	if(!ht || ht->task_start!=BPF_CORE_READ(task,start_boottime)) return;
 	w=bpf_map_lookup_elem(&watched,&ht->key);
 	h=bpf_map_lookup_elem(&holders,&ht->key);
-	if(!live_watch(w,now) || (ht->key.kind==2 && w->events>64) || !h || h->tid!=tid || h->task_start!=ht->task_start) return;
+	if(!live_watch(w,now) || (ht->key.kind>=2 && w->events>64) || !h ||
+	   h->epoch!=w->epoch || ht->epoch!=w->epoch || h->tid!=tid || h->task_start!=ht->task_start) return;
 	e.base.id=w->id;e.base.generation=w->generation;e.base.sequence_ns=w->epoch;
 	e.base.time_ns=now;e.base.type=CIS_OWNER_EVENT;e.base.object=ht->key.object;
 	e.base.tid=tid;e.base.cpu=bpf_get_smp_processor_id();e.base.flags=flags;
