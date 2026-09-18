@@ -3,6 +3,7 @@
 #include "include/cis.h"
 #include "include/cis_trigger.h"
 #include "include/cis_capture_profile.h"
+#include "include/cis_prog_info.h"
 #include <linux/types.h>
 #include "include/cis_event.h"
 #include <bpf/bpf.h>
@@ -683,14 +684,14 @@ static void terminal_program_audit(struct capture *c)
 	if (!c->object)
 		return;
 	bpf_object__for_each_program(program, c->object) {
-		struct bpf_prog_info info = {0};
+		struct cis_prog_recursion_info info = {0};
 		__u32 size = sizeof(info);
 		int valid;
 		if (!bpf_program__autoload(program))
 			continue;
 		ctx->program_audit_count++;
 		valid = !bpf_obj_get_info_by_fd(bpf_program__fd(program), &info, &size) &&
-			size >= offsetof(struct bpf_prog_info, recursion_misses) + sizeof(info.recursion_misses);
+			size >= sizeof(info);
 		if (!valid)
 			missing++;
 		else
