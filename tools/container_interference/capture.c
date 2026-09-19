@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 33
+#define CIS_DIAGNOSTIC_LINKS 34
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -195,6 +195,19 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 			(unsigned long long)e->ip,(unsigned long long)e->weight,e->flags);
 		cis_report(ctx,"BLOCK",r,d);return;
 	}
+	if(size>=sizeof(struct cis_net_tx_event) && size<=sizeof(struct cis_net_tx_event)+7 && e->type==CIS_NET_TX_EVENT) {
+		struct cis_net_tx_event *v=data;
+		char d[1100];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 sample_time_ns=%llu begin_ns=%llu backend_ns=%llu tid=%llu task_start=%llu skb=0x%llx cookie=%llu socket=0x%llx phase=%u context=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu cpu=%u netns=%u gfp=%u requested=%u stack_id=%d",
+			(unsigned long long)e->time_ns,(unsigned long long)e->sequence_ns,(unsigned long long)v->backend_ns,
+			(unsigned long long)e->tid,(unsigned long long)v->task_start,(unsigned long long)e->object,
+			(unsigned long long)v->cookie,(unsigned long long)v->socket,v->phase,e->flags,
+			(unsigned long long)v->actor_tid,(unsigned long long)v->actor_start,(unsigned long long)v->actor_id,
+			(unsigned long long)v->actor_generation,e->cpu,v->netns,v->gfp,v->requested,e->stack_id);
+		cis_report(ctx,"NET_TX",r,d);return;
+	}
 	if(size>=sizeof(struct cis_net_event) && size<=sizeof(struct cis_net_event)+7 && e->type==CIS_NET_EVENT) {
 		struct cis_net_event *v=data;
 		char d[1100];
@@ -362,7 +375,7 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"work_cancel_begin",8},{"work_cancel_end",8},
 		{"memcg_begin",4},{"memcg_end",4},
 		{"owner_state",16},{"owner_switch",16},{"counter_step",32},
-		{"alloc_step",64},{"alloc_release",64},{"maple_context",64},{"net_state",128},{"net_release",128},
+		{"alloc_step",64},{"alloc_release",64},{"maple_context",64},{"net_state",128},{"net_release",128},{"net_tx",128},
 		{"block_start",256},{"block_insert",256},{"block_issue",256},
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
 		{"block_tag",256},{"block_link",256},

@@ -35,6 +35,8 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_alloc_live_key); __type(value,struct cis_alloc_live); } alloc_live SEC(".maps");
 #endif
 #if CIS_PROFILE == 9
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u64); __type(value,struct cis_net_tx_event); } net_tx_live SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,struct cis_maple_key); __type(value,struct cis_net_tx_event); } net_tx_pending SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,__u64); __type(value,struct cis_watch); } net_watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u64); __type(value,struct cis_net_event); } net_skb SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,struct cis_net_service_key); __type(value,struct cis_net_event); } net_service SEC(".maps");
@@ -129,6 +131,7 @@ static __always_inline void emit(void *ctx,struct cis_event *e)
 #endif
 
 #if CIS_PROFILE == 9
+#include "net_tx.bpf.h"
 static __always_inline void net_actor(struct cis_net_event *e, u32 context)
 {
 	struct task_struct *task = (void *)bpf_get_current_task();
@@ -210,6 +213,7 @@ int net_release(struct bpf_raw_tracepoint_args *ctx)
 	struct cis_net_event *queued, e = {};
 	struct cis_bpf_stats *s = statistics();
 	COUNT(s, received);
+	net_tx_release(ctx, sample);
 	queued = bpf_map_lookup_elem(&net_skb, &skb);
 	if (!queued) return 0;
 	e = *queued;

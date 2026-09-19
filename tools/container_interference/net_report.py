@@ -8,6 +8,7 @@ from pathlib import Path
 from collector_audit import audit
 from explain import explain, within_window
 from owner_report import fields
+from net_tx_report import correlate as tx_correlate
 
 REQUIRED={'protocol','sample_time_ns','cookie','socket','skb','queue_ns','phase','context',
           'actor_tid','actor_start','actor_id','actor_generation','cpu','netns','bytes',
@@ -174,11 +175,14 @@ def analyze(record,raw):
                 observed_actors=[list(a) for a in sorted({actor(r) for r in rows if all(actor(r))})]))
     quality=dict(base['quality'])
     if excluded: quality.update(status='FAIL',defects=quality['defects']+list(excluded))
+    tx=tx_correlate(record,raw,quality,scope)
+    if tx['status']=='FAIL': quality.update(status='FAIL',defects=quality['defects']+['net_tx_invalid'])
     if quality['status']!='PASS' or scope['status']!='PASS': sockets=[]
     return dict(schema='cis-net-report-v1',boot_id=record.get('boot_id'),session_id=record.get('session_id'),
-        quality=quality,scope_audit=scope,sockets=sockets,excluded=dict(excluded),stack_capture_errors=dict(stack_errors),
+        quality=quality,scope_audit=scope,sockets=sockets,tx=tx,excluded=dict(excluded),stack_capture_errors=dict(stack_errors),
         raw_sha256=hashlib.sha256(raw).hexdigest(),source=base['source'],
-        analysis_source_sha256=dict(base['analysis_source_sha256'],**{'net_report.py':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}),
+        analysis_source_sha256=dict(base['analysis_source_sha256'],**{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            for name in ('net_report.py','net_tx_report.py')}),
         performance_certification='NOT_ACCEPTED',
         limits=['logical lock wait is wall time, not slock spin cycles',
                 'window-before or unclosed holders remain unknown',

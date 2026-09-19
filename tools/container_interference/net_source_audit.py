@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 FIELDS={'entries','eligible','selected','releases','skipped'}
+TX_FIELDS={'tx_entries','tx_selected','tx_callbacks','tx_callback_ns','tx_callback_max_ns'}
 
 
 def parse(text):
@@ -7,16 +8,21 @@ def parse(text):
     lines=text.splitlines()
     if not lines: raise ValueError('source audit empty')
     header=dict(p.split('=',1) for p in lines[0].split())
-    if (set(header)!={'version','active','release_active','shift','source_counter_bytes_per_cpu','snapshot'}
-            or header['version']!='1' or header['snapshot']!='non_atomic'):
+    v=header.get('version')
+    expected={'version','active','release_active','shift','source_counter_bytes_per_cpu','snapshot'}
+    if v=='2': expected.add('tx_active')
+    if (set(header)!=expected or v not in ('1','2') or header['snapshot']!='non_atomic'):
         raise ValueError('source audit schema')
     for key in ('active','release_active','shift','source_counter_bytes_per_cpu'): header[key]=int(header[key])
+    if v=='2':
+        header['tx_active']=int(header['tx_active'])
+        if header['tx_active'] not in (0,1): raise ValueError('TX source state')
     if (header['active'] not in (0,1) or header['release_active'] not in (0,1)
             or not 0<=header['shift']<=16 or header['source_counter_bytes_per_cpu']<=0): raise ValueError('source state')
     cpus={}
     for line in lines[1:]:
         row={k:int(v) for k,v in (p.split('=',1) for p in line.split())}
-        if set(row)!=FIELDS|{'cpu'} or min(row.values())<0: raise ValueError('source row')
+        if set(row)!=FIELDS|{'cpu'}|(TX_FIELDS if v=='2' else set()) or min(row.values())<0: raise ValueError('source row')
         cpu=row.pop('cpu')
         if cpu in cpus or cpu>=4096: raise ValueError('source CPU')
         cpus[cpu]=row
@@ -27,13 +33,18 @@ def parse(text):
 def delta(before,after,shift=0):
     a,ac=parse(before['source_audit']); b,bc=parse(after['source_audit'])
     if (a!=b or ac.keys()!=bc.keys() or before['time_ns']>after['time_ns'] or a['active'] or
-            a['release_active'] or a['shift']!=shift): raise ValueError('source boundary')
-    totals={k:0 for k in FIELDS}
+            a['release_active'] or a.get('tx_active',0) or a['shift']!=shift): raise ValueError('source boundary')
+    totals={k:0 for k in FIELDS|(TX_FIELDS if a['version']=='2' else set())}
     for cpu in ac:
-        for key in FIELDS:
+        for key in totals:
             diff=bc[cpu][key]-ac[cpu][key]
             if diff<0: raise ValueError('source counter reset')
-            totals[key]+=diff
+            if key=='tx_callback_max_ns': totals[key]=max(totals[key],bc[cpu][key])
+            else: totals[key]+=diff
     if not totals['entries']>=totals['eligible']>=totals['selected']: raise ValueError('source order')
-    return dict(totals=totals,counter_bytes=a['source_counter_bytes_per_cpu']*len(ac),
+    if a['version']=='2' and totals['tx_selected']>totals['tx_entries']: raise ValueError('TX source order')
+    high_water=totals.pop('tx_callback_max_ns',None)
+    return dict(totals=totals,tx_callback_boot_max_ns=high_water,counter_bytes=a['source_counter_bytes_per_cpu']*len(ac),
+                callback_max_scope='boot high water, not window maximum',
+                callback_ns_scope='TX callback body only; wrappers, filters, release and IRQ cost not fully separated',
                 total_cost='UNKNOWN',scope='all source TCP entries and skb releases, not only target containers')

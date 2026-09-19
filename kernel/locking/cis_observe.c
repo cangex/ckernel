@@ -116,7 +116,7 @@ static bool cis_trace_active(void)
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
 	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
 	       trace_cis_alloc_release_enabled() || trace_cis_maple_alloc_enabled() || trace_cis_net_state_enabled() ||
-	       trace_cis_net_skb_release_enabled() || trace_cis_rwsem_state_enabled() ||
+	       trace_cis_net_skb_release_enabled() || trace_cis_net_tx_enabled() || trace_cis_rwsem_state_enabled() ||
 	       trace_cis_slublock_state_enabled() || cis_block_active();
 }
 
@@ -224,7 +224,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=13 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u\n",
+	seq_printf(m, "version=14 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -236,7 +236,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_tag_wait), cis_rwsem_filter_active(),
 		   CIS_BLOCK_ON(block_merge_link), CIS_BLOCK_ON(writeback_dirty_folio),
 		   CIS_BLOCK_ON(writeback_single_inode_start), CIS_BLOCK_ON(writeback_single_inode),
-		   trace_cis_maple_alloc_enabled());
+		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -695,6 +695,11 @@ static DEFINE_PER_CPU(unsigned long, cis_net_eligible);
 static DEFINE_PER_CPU(unsigned long, cis_net_selected);
 static DEFINE_PER_CPU(unsigned long, cis_net_releases);
 static DEFINE_PER_CPU(unsigned long, cis_net_skipped);
+static DEFINE_PER_CPU(unsigned long, cis_tx_entries);
+static DEFINE_PER_CPU(unsigned long, cis_tx_selected);
+static DEFINE_PER_CPU(unsigned long, cis_tx_callbacks);
+static DEFINE_PER_CPU(unsigned long, cis_tx_callback_ns);
+static DEFINE_PER_CPU(unsigned long, cis_tx_callback_max_ns);
 
 static int cis_net_audit_show(struct seq_file *m, void *unused)
 {
@@ -702,17 +707,78 @@ static int cis_net_audit_show(struct seq_file *m, void *unused)
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-	seq_printf(m, "version=1 active=%u release_active=%u shift=%u source_counter_bytes_per_cpu=%zu snapshot=non_atomic\n",
+	seq_printf(m, "version=2 active=%u release_active=%u tx_active=%u shift=%u source_counter_bytes_per_cpu=%zu snapshot=non_atomic\n",
 		trace_cis_net_state_enabled(), trace_cis_net_skb_release_enabled(),
-		min(net_shift, 16U), 5 * sizeof(unsigned long));
+		trace_cis_net_tx_enabled(), min(net_shift, 16U), 10 * sizeof(unsigned long));
 	for_each_possible_cpu(cpu)
-		seq_printf(m, "cpu=%d entries=%lu eligible=%lu selected=%lu releases=%lu skipped=%lu\n", cpu,
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu selected=%lu releases=%lu skipped=%lu tx_entries=%lu tx_selected=%lu tx_callbacks=%lu tx_callback_ns=%lu tx_callback_max_ns=%lu\n", cpu,
 			READ_ONCE(per_cpu(cis_net_entries, cpu)), READ_ONCE(per_cpu(cis_net_eligible, cpu)),
 			READ_ONCE(per_cpu(cis_net_selected, cpu)), READ_ONCE(per_cpu(cis_net_releases, cpu)),
-			READ_ONCE(per_cpu(cis_net_skipped, cpu)));
+			READ_ONCE(per_cpu(cis_net_skipped, cpu)),
+			READ_ONCE(per_cpu(cis_tx_entries, cpu)), READ_ONCE(per_cpu(cis_tx_selected, cpu)),
+			READ_ONCE(per_cpu(cis_tx_callbacks, cpu)), READ_ONCE(per_cpu(cis_tx_callback_ns, cpu)),
+			READ_ONCE(per_cpu(cis_tx_callback_max_ns, cpu)));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_net_audit);
+
+void __cis_net_tx_begin(struct cis_net_tx_sample *sample, struct sock *sk,
+		       u32 gfp, u32 requested)
+{
+	u64 cookie;
+
+	preempt_disable();
+	this_cpu_inc(cis_tx_entries);
+	if (in_interrupt() || this_cpu_read(cis_in_trace)) {
+		this_cpu_inc(cis_net_skipped);
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	if ((sk->sk_family != AF_INET && sk->sk_family != AF_INET6) ||
+	    sk->sk_protocol != IPPROTO_TCP || sk->sk_type != SOCK_STREAM)
+		goto out;
+	cookie = __sock_gen_cookie(sk);
+	if (!cookie || (cookie & ((1ULL << min(net_shift, 16U)) - 1)))
+		goto out;
+	this_cpu_inc(cis_tx_selected);
+	*sample = (struct cis_net_tx_sample) {
+		.cookie = cookie, .sk = sk, .netns = sock_net(sk)->ns.inum,
+		.gfp = gfp, .requested = requested,
+	};
+	/* Backend interval includes scheduling/interrupts, not exclusive CPU. */
+	sample->start_ns = ktime_get_ns();
+out:
+	preempt_enable();
+}
+
+void __cis_net_tx_step(struct cis_net_tx_sample *sample, struct sk_buff *skb,
+		      u32 phase)
+{
+	u64 now = ktime_get_ns(), begin, elapsed;
+
+	preempt_disable();
+	if (in_interrupt() || this_cpu_read(cis_in_trace)) {
+		this_cpu_inc(cis_net_skipped);
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	sample->time_ns = now;
+	sample->phase = phase;
+	sample->skb = skb;
+	if (phase == CIS_TX_BACKEND || phase == CIS_TX_FAILED)
+		sample->backend_ns = now;
+	this_cpu_write(cis_in_trace, true);
+	this_cpu_inc(cis_tx_callbacks);
+	begin = ktime_get_ns();
+	trace_cis_net_tx(sample);
+	elapsed = ktime_get_ns() - begin;
+	this_cpu_add(cis_tx_callback_ns, elapsed);
+	if (elapsed > this_cpu_read(cis_tx_callback_max_ns))
+		this_cpu_write(cis_tx_callback_max_ns, elapsed);
+	this_cpu_write(cis_in_trace, false);
+out:
+	preempt_enable();
+}
 
 static u32 cis_net_context(void)
 {

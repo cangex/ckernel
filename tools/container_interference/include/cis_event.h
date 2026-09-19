@@ -27,6 +27,7 @@
 #define CIS_BLOCK_BIO_EVENT 21
 #define CIS_WRITEBACK_EVENT 22
 #define CIS_MAPLE_EVENT 23
+#define CIS_NET_TX_EVENT 24
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -96,6 +97,13 @@ struct cis_net_event {
 	__u32 phase, netns, bytes, backlog_bytes, packet_flags, reserved;
 };
 struct cis_net_service_key { __u64 cookie, skb, tid, task_start; };
+struct cis_net_tx_event {
+	/* object=skb, sequence_ns=allocation start; owner never changes on free. */
+	struct cis_event base;
+	__u64 cookie, socket, backend_ns, task_start;
+	__u64 actor_id, actor_generation, actor_tid, actor_start;
+	__u32 phase, netns, gfp, requested;
+};
 struct cis_block_event {
 	/* BLOCK does not sample IP/weight: base.ip/weight hold the immutable
 	 * submitter id/generation, base.flags its task flags, base.reserved the

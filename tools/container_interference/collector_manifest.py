@@ -72,6 +72,10 @@ COLLECTORS = {
 
 LEGACY_BLOCK = deepcopy(COLLECTORS['block'])
 LEGACY_ALLOCATOR = deepcopy(COLLECTORS['allocator'])
+LEGACY_NET = deepcopy(COLLECTORS['net'])
+COLLECTORS['net']['programs'].append('net_tx')
+COLLECTORS['net']['maps'] += ['net_tx_live', 'net_tx_pending']
+COLLECTORS['net']['source_filter'] += '; selected TCP send allocation brackets and 256 original skb-header lifetimes; fclone backend wall interval, memory admission and release executor separate; no packet payload origin, clone lineage or allocator lock holder inference'
 COLLECTORS['allocator']['programs'].append('maple_context')
 COLLECTORS['allocator']['maps'].append('maple_pending')
 COLLECTORS['allocator']['source_filter'] += '; 256 task-start keyed Maple allocation brackets join sampled backend calls to destination tree addresses; no lifetime across brackets or inferred tree owner'
@@ -128,6 +132,10 @@ def validate_inventory(name, inventory):
 def validate_record_inventory(record):
     """Historical reads only; live admission always requires the current maps."""
     name=record['collector']; expected=contract(name); inventory=record.get('inventory')
+    if name=='net' and isinstance(inventory,dict) and 'net_tx' not in inventory.get('program_names',[]):
+        for key,value in LEGACY_NET.items(): expected[key]=deepcopy(value)
+        if record.get('collector_contract_sha256')!=digest(expected):
+            raise ValueError('unproven historical network contract')
     if name=='allocator' and isinstance(inventory,dict) and 'maple_context' not in inventory.get('program_names',[]):
         for key,value in LEGACY_ALLOCATOR.items(): expected[key]=deepcopy(value)
         if record.get('collector_contract_sha256')!=digest(expected):

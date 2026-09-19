@@ -34,7 +34,7 @@ static inline int cis_profile_program(unsigned int profile, const char *name)
 	if (profile == 8)
 		return !strcmp(name, "alloc_step") || !strcmp(name, "alloc_release") || !strcmp(name, "maple_context");
 	if (profile == 9)
-		return !strcmp(name, "net_state") || !strcmp(name, "net_release");
+		return !strcmp(name, "net_state") || !strcmp(name, "net_release") || !strcmp(name, "net_tx");
 	if (profile == 10)
 		return !strcmp(name,"block_start") || !strcmp(name,"block_insert") ||
 		       !strcmp(name,"block_issue") || !strcmp(name,"block_requeue") ||
@@ -60,7 +60,8 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 		return 1;
 	if (profile == 9)
 		return !strcmp(name, "targets") || !strcmp(name, "stacks") ||
-		       !strcmp(name, "net_watched") || !strcmp(name, "net_skb") || !strcmp(name, "net_service");
+		       !strcmp(name, "net_watched") || !strcmp(name, "net_skb") || !strcmp(name, "net_service") ||
+		       !strcmp(name, "net_tx_live") || !strcmp(name, "net_tx_pending");
 	if (profile == 10)
 		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"block_watched") || !strcmp(name,"tag_pending") || !strcmp(name,"wb_pending");
 	if (profile == 11)

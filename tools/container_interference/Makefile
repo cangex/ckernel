@@ -22,7 +22,7 @@ bpf/vmlinux.h:
 	test -r "$(VMLINUX_BTF)"
 	$(BPFTOOL) btf dump file $(VMLINUX_BTF) format c > $@.tmp
 	mv $@.tmp $@
-bpf/%.bpf.o: bpf/%.bpf.c bpf/cis.bpf.c bpf/rwsem_collect.h bpf/writeback.bpf.h bpf/maple.bpf.h bpf/vmlinux.h include/cis_event.h
+bpf/%.bpf.o: bpf/%.bpf.c bpf/cis.bpf.c bpf/rwsem_collect.h bpf/writeback.bpf.h bpf/maple.bpf.h bpf/net_tx.bpf.h bpf/vmlinux.h include/cis_event.h
 	$(CLANG) -O2 -g -target bpf -D__TARGET_ARCH_arm64 -Wall -Werror -c $< -o $@
 clean:
 	rm -f cisd cisctl session-worker session-residue $(BPF_OBJECTS) bpf/vmlinux.h bpf/vmlinux.h.tmp

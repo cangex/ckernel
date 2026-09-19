@@ -76,6 +76,12 @@ def analyze(record,raw):
                     ['release entry is not backend completion or memcg billing'],release_executor=f['release_executor'],
                     allocation_tree_context=f['allocation_tree_context'])
         elif collector=='net':
+            for tx in specialist['tx']['episodes']:
+                add('tcp_send_allocation','E2',tx['requester'],
+                    dict(kind='original_tcp_skb_header',address=tx['skb_address'],cookie=tx['cookie'],
+                         netns=tx['netns'],episode_ns=tx['begin_ns']),[],
+                    [tx['begin_ns'],tx['release_entry_ns'] or tx['terminal_ns']],[],
+                    ['packet payload owner, allocator holder and unique blocker unknown'],allocation=tx)
             for sock in specialist['sockets']:
                 resource=dict(kind='tcp_socket',cookie=sock['cookie'],netns=sock['netns'])
                 for name in ('creation_observation','accept_observation'):

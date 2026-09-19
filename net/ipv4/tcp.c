@@ -253,6 +253,7 @@
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/skbuff.h>
+#include <linux/cis_net.h>
 #include <linux/scatterlist.h>
 #include <linux/splice.h>
 #include <linux/net.h>
@@ -876,8 +877,11 @@ struct sk_buff *tcp_stream_alloc_skb(struct sock *sk, gfp_t gfp,
 				     bool force_schedule)
 {
 	struct sk_buff *skb;
+	struct cis_net_tx_sample cis_sample;
 
+	cis_net_tx_begin(&cis_sample, sk, gfp, MAX_TCP_HEADER);
 	skb = alloc_skb_fclone(MAX_TCP_HEADER, gfp);
+	cis_net_tx_step(&cis_sample, skb, skb ? CIS_TX_BACKEND : CIS_TX_FAILED);
 	if (likely(skb)) {
 		bool mem_scheduled;
 
@@ -892,9 +896,12 @@ struct sk_buff *tcp_stream_alloc_skb(struct sock *sk, gfp_t gfp,
 			skb_reserve(skb, MAX_TCP_HEADER);
 			skb->ip_summed = CHECKSUM_PARTIAL;
 			INIT_LIST_HEAD(&skb->tcp_tsorted_anchor);
+			cis_net_tx_step(&cis_sample, skb, CIS_TX_ADMITTED);
 			return skb;
 		}
 		__kfree_skb(skb);
+		/* The address is an identity token here, never dereferenced. */
+		cis_net_tx_step(&cis_sample, skb, CIS_TX_REJECTED);
 	} else {
 		sk->sk_prot->enter_memory_pressure(sk);
 		sk_stream_moderate_sndbuf(sk);

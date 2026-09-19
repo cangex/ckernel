@@ -36,6 +36,13 @@ DEFINE_EVENT(cis_net_class, cis_net_state,
 	TP_PROTO(const struct cis_net_sample *sample), TP_ARGS(sample));
 DEFINE_EVENT(cis_net_class, cis_net_skb_release,
 	TP_PROTO(const struct cis_net_sample *sample), TP_ARGS(sample));
+
+TRACE_EVENT(cis_net_tx,
+	TP_PROTO(const struct cis_net_tx_sample *sample), TP_ARGS(sample),
+	TP_STRUCT__entry(__field(u64, time_ns) __field(u32, phase)),
+	TP_fast_assign(__entry->time_ns = sample->time_ns; __entry->phase = sample->phase;),
+	TP_printk("time_ns=%llu phase=%u", __entry->time_ns, __entry->phase)
+);
 TRACE_EVENT(cis_maple_alloc,
 	TP_PROTO(const struct cis_maple_sample *sample),
 	TP_ARGS(sample),
