@@ -6,7 +6,7 @@ import json
 import re
 from collections import defaultdict
 
-RESOURCES = {1: 'mutex', 2: 'lockref', 3: 'files_struct_lock'}
+RESOURCES = {1: 'mutex', 2: 'lockref', 3: 'files_struct_lock', 4: 'slub_node_list_lock'}
 
 
 def fields(detail):
@@ -47,8 +47,17 @@ def analyze(records):
         loss |= bool(e.get("skipped", 0))
         groups[(e["resource"], e["object"], e["epoch"])].append(e)
     edges, incomplete, snapshots, resets, aborted = [], 0, 0, 0, 0
+    cache_identity_errors = 0
     legacy = any(e.get("protocol", 1) != 2 for es in groups.values() for e in es)
     for key, events in groups.items():
+        cache = None
+        if key[0] == 4:
+            # Scheduler records do not carry a cache address.
+            caches = {e.get('cache', 0) for e in events if e['phase'] not in (9, 10)}
+            if len(caches) != 1 or 0 in caches:
+                cache_identity_errors += 1
+                continue
+            cache = hex(next(iter(caches)))
         # Duplicate cached acquires are the same observation, not new ownership.
         unique = {(e["sample_time_ns"], e["phase"], actor(e)): e for e in events}
         events = sorted(unique.values(), key=lambda e: (e["sample_time_ns"], e["phase"]))
@@ -119,7 +128,8 @@ def analyze(records):
                               "epoch": key[2], "waiter": waiter, "holder": holder,
                               "relation": "container_internal" if waiter[:2] == holder[:2] else "cross_container",
                               "relation_type": "holder_waiter", "causal": False,
-                              "wait_metric": "acquisition_attempt_wall_interval" if key[0] == 3 else "observed_wait_wall_interval",
+                              "wait_metric": "acquisition_attempt_wall_interval" if key[0] in (3, 4) else "observed_wait_wall_interval",
+                              "cache_address": cache,
                               "process_scope": ("UNKNOWN" if not (waiter[2] >> 32) or not (holder[2] >> 32)
                                                 else "same_tgid" if (waiter[2] >> 32) == (holder[2] >> 32)
                                                 else "different_tgid"),
@@ -133,13 +143,16 @@ def analyze(records):
                               "level": "INCOMPLETE" if loss or legacy else "E2",
                               "meaning": ("FD acquisition attempt overlaps observed ownership; may include pre-lock scheduling and instrumentation"
                                           if key[0] == 3 else
+                                          "SLUB node-lock acquisition attempt overlaps observed inner ownership; not pure spin cycles, full holder history or measured causal delay"
+                                          if key[0] == 4 else
                                           "observed exclusive ownership overlaps observed wait; not total wait or CPU burn")})
     return {"version": 2, "edges": edges, "incomplete_intervals": incomplete, "point_snapshots": snapshots,
             "aborted_attempts": aborted, "legacy_protocol": legacy,
             "bounded_prefix_limits": sum(e["phase"]==11 for events in groups.values() for e in events),
             "lifecycle_boundaries": resets, "loss_or_recursion_gap": loss,
             "unsupported_resource_events": unsupported_resources,
-            "scope": "explicit non-RT mutex, lockref fallback and configured files_struct adapter; missing intervals unknown"}
+            "cache_identity_errors": cache_identity_errors,
+            "scope": "explicit non-RT mutex, lockref fallback, configured files_struct and boot-selected SLUB node-lock adapters; missing intervals unknown"}
 
 
 def read_records(path):

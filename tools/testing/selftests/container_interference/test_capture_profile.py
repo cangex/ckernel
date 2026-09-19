@@ -101,7 +101,14 @@ int main(void) {
     assert(cis_profile_program(11, "rwsem_state"));
     assert(!cis_profile_program(11, "owner_state"));
     assert(!cis_profile_map(11, "holders"));
-    assert(!cis_profile_map(12, "roots"));
+    assert(cis_profile_map(12, "roots"));
+    assert(cis_profile_map(12, "watched"));
+    assert(cis_profile_map(12, "owner_attempts"));
+    assert(!cis_profile_map(12, "alloc_live"));
+    assert(cis_profile_program(12, "owner_state"));
+    assert(cis_profile_program(12, "owner_switch"));
+    assert(!cis_profile_program(12, "alloc_step"));
+    assert(!cis_profile_map(13, "roots"));
     return 0;
 }
 '''

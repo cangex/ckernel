@@ -5,10 +5,10 @@ import time
 
 
 def expected_fields(version, collector):
-    if version not in ('1', '2', '3', '4', '5', '6', '7'):
+    if version not in ('1', '2', '3', '4', '5', '6', '7', '8'):
         raise ValueError('unsupported source-switch version')
     v = int(version)
-    if v < {'counter':2, 'allocator':3, 'net':5, 'block':6, 'rwsem':7}.get(collector, 1):
+    if v < {'counter':2, 'allocator':3, 'net':5, 'block':6, 'rwsem':7, 'slub':8}.get(collector, 1):
         raise ValueError('unsupported source-switch version')
     result = dict(version=version, owner=str(int(collector=='owner')), fd=str(int(collector=='fd')))
     if v >= 2: result['counter'] = str(int(collector=='counter'))
@@ -19,6 +19,7 @@ def expected_fields(version, collector):
         result.update({name:str(int(collector=='block')) for name in (
             'block_start','block_insert','block_issue','block_requeue','block_complete','block_merge','block_remap')})
     if v >= 7: result['rwsem'] = str(int(collector=='rwsem'))
+    if v >= 8: result['slub'] = str(int(collector=='slub'))
     return result
 
 

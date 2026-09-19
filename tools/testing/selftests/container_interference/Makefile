@@ -8,6 +8,7 @@ TEST_GEN_PROGS_EXTENDED := logic_test budget_test metrics_test fast_test recursi
 TEST_GEN_PROGS += allocator_placement_workload
 TEST_GEN_PROGS += allocator_failure_workload
 TEST_GEN_PROGS += allocator_rollback_workload
+TEST_GEN_PROGS += slub_workload
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
@@ -22,6 +23,7 @@ allocator_failure_workload: ../../../../include/uapi/linux/cis_alloc_test.h
 allocator_rollback_workload: allocator_fixture/rollback_uapi.h
 net_workload net_backlog_workload: net_fixture/uapi.h
 rwsem_workload: rwsem_fixture/uapi.h
+slub_workload: slub_fixture/uapi.h
 run_tests: all
 	./logic_test
 	./budget_test

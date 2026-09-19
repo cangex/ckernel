@@ -60,7 +60,7 @@ def explain(record, raw):
     identities.update(record.get('owner_identities', {}))
     known = {(v['id'], v['generation']) for v in identities.values()}
     owner = None
-    if record.get('collector') in ('owner','fd'):
+    if record.get('collector') in ('owner','fd','slub'):
         if any(fields(e['detail']).get('resource') not in RESOURCES for e in events if e.get('kind') == 'OWNER'):
             raise ValueError('unsupported owner resource protocol')
         owner = owner_analyze(events)
@@ -80,6 +80,8 @@ def explain(record, raw):
             unknown.append(dict(reason='unclosed_owner_intervals', count=owner['incomplete_intervals']))
         if owner['bounded_prefix_limits']:
             unknown.append(dict(reason='bounded_owner_prefix', count=owner['bounded_prefix_limits']))
+        if owner.get('cache_identity_errors'):
+            unknown.append(dict(reason='inconsistent_slub_cache_identity', count=owner['cache_identity_errors']))
     for event in events:
         if event.get('kind') in ('E1', 'incomplete'):
             item = classify(event)

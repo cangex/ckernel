@@ -42,6 +42,8 @@ struct cis_bpf_stats {
 	__u64 owner_watch_races, owner_watch_failed, owner_holder_failed, owner_attempt_failed;
 };
 struct cis_owner_event {
+	/* OWNER resource 4 uses the otherwise unused base.ip as a u64 cache
+	 * address. It is not a sampled IP or the 32-bit flags field. */
 	struct cis_event base;
 	__u64 actor_id, actor_generation, actor_start;
 	__u64 holder_id, holder_generation, holder_tid, holder_start;

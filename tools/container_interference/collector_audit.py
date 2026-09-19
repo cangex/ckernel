@@ -42,6 +42,8 @@ def audit(record, raw):
         missing.extend(kind+'.'+name for name, value in found[kind].items() if value is None)
     if record.get('collector')=='fd' and owner_resources-{3}:
         errors.append('FD source emitted another resource kind')
+    if record.get('collector')=='slub' and owner_resources-{4}:
+        errors.append('SLUB source emitted another resource kind')
     if (record.get('collector')=='owner' and contract and
             record.get('collector_contract_sha256')==contract and owner_resources-{1,2}):
         errors.append('owner source emitted another resource kind')

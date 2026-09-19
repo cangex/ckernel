@@ -24,6 +24,7 @@ class BlockSources(unittest.TestCase):
         self.assertTrue(all(v=='0' for k,v in expected_fields('6',None).items() if k!='version'))
         with self.assertRaises(ValueError): expected_fields('5','block')
         text=(ROOT/'kernel/locking/cis_observe.c').read_text()
-        self.assertIn('trace_cis_rwsem_state_enabled() || cis_block_active()',text)
+        self.assertIn('trace_cis_rwsem_state_enabled() ||',text)
+        self.assertIn('trace_cis_slublock_state_enabled() || cis_block_active()',text)
         self.assertIn('trace_cis_net_skb_release_enabled() ||',text)
         self.assertIn('tracepoint_synchronize_unregister()',text)

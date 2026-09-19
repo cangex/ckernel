@@ -28,7 +28,7 @@ def analyze(record,raw):
             causal='NOT_ESTABLISHED',details=detail))
 
     if quality['status']=='PASS' and scope.get('status','PASS')=='PASS':
-        if collector in ('ip','owner','fd','sched','reclaim'):
+        if collector in ('ip','owner','fd','slub','sched','reclaim'):
             for f in base['findings']:
                 if f['kind']=='observed_holder_waiter':
                     add('holder_waiter','E2',f['waiter'],dict(kind=f['resource'],address=f['object']),

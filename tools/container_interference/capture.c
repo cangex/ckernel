@@ -193,12 +193,13 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 		char d[1100];
 		r=cis_registry_lookup(ctx,e->id,e->generation);
 		if(!r) {ctx->unknown++;return;}
-		snprintf(d,sizeof(d),"protocol=2 sample_time_ns=%llu object=0x%llx epoch=%llu phase=%u resource=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu holder_tid=%llu holder_start=%llu holder_id=%llu holder_generation=%llu cpu=%u flags=%u skipped=%llu stack_id=%d attempt_ns=%llu result=%d",
+		snprintf(d,sizeof(d),"protocol=2 sample_time_ns=%llu object=0x%llx epoch=%llu phase=%u resource=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu holder_tid=%llu holder_start=%llu holder_id=%llu holder_generation=%llu cpu=%u flags=%u skipped=%llu stack_id=%d attempt_ns=%llu result=%d cache=0x%llx",
 			(unsigned long long)e->time_ns,(unsigned long long)e->object,(unsigned long long)e->sequence_ns,o->phase,o->resource,
 			(unsigned long long)e->tid,(unsigned long long)o->actor_start,(unsigned long long)o->actor_id,(unsigned long long)o->actor_generation,
 			(unsigned long long)o->holder_tid,(unsigned long long)o->holder_start,(unsigned long long)o->holder_id,(unsigned long long)o->holder_generation,
 			e->cpu,e->flags,(unsigned long long)o->skipped,e->stack_id,
-			(unsigned long long)o->attempt_ns,o->phase==12?(int)e->flags:0);
+			(unsigned long long)o->attempt_ns,o->phase==12?(int)e->flags:0,
+			(unsigned long long)(o->resource==4?e->ip:0));
 		cis_report(ctx,"OWNER",r,d);return;
 	}
 	/* PERF_SAMPLE_RAW includes trailing alignment bytes in its reported size. */
