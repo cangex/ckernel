@@ -46,5 +46,17 @@ class SlubFixture(unittest.TestCase):
         for i in (1,3,4): a[0][i]['detail']=a[0][i]['detail'].replace('object=100','object=200')
         self.assertEqual(check(*a)['status'],'PASS')
 
+    def test_missing_acquire_not_converted_to_holder_from_release(self):
+        a=list(self.data()); a[4]='unseenHolder'; a[0]=a[0][1:]
+        out=check(*a)
+        self.assertEqual(out['status'],'PASS',out)
+        self.assertEqual(out['edges'],0)
+        self.assertTrue(out['unobserved_acquire_negative'])
+
+    def test_actual_unseen_holder_must_exist_for_negative_credit(self):
+        a=list(self.data()); a[4]='unseenHolder'; a[0]=a[0][1:]
+        a[2]['0']=a[2]['0'].replace('release_ns=500000','release_ns=150000')
+        self.assertIn('unobserved_acquire_not_exercised',check(*a)['errors'])
+
 
 if __name__=='__main__': unittest.main()

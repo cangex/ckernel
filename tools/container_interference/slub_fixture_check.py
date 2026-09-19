@@ -69,6 +69,9 @@ def check(events, jobs, logs, identities, case, window):
             errors.append('wrong_container'); continue
         captured.add(pair)
     if case=='private' and report['edges']: errors.append('private_nodes_promoted')
+    if case=='unseenHolder':
+        if report['edges']: errors.append('unobserved_acquire_promoted')
+        if not eligible or not report['incomplete_intervals']: errors.append('unobserved_acquire_not_exercised')
     positive=case in ('shared','switch','recreate')
     if positive and not eligible: errors.append('no_eligible_overlap')
     if positive and len(set(eligible)&captured)/max(1,len(set(eligible)))<.9: errors.append('eligible_recall')
@@ -78,5 +81,6 @@ def check(events, jobs, logs, identities, case, window):
     return dict(status='FAIL' if errors else 'PASS',errors=sorted(set(errors)),operations=len(operations),
         eligible=len(set(eligible)),captured_eligible=len(set(eligible)&captured),edges=len(report['edges']),
         same_address_reuse_observed=reused,lifecycle_boundaries=report['lifecycle_boundaries'],
+        unobserved_acquire_negative=(case=='unseenHolder'),
         ordinary_native_bridge=(case=='native'),native_holder_truth=(case!='native'),
         scope='fixture overlaps >=100us; native bridge has no holder-recall credit; no causal or production claim')

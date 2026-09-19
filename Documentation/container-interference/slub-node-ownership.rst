@@ -49,7 +49,9 @@ not insert delays into production paths.  Controlled contention is not a claim
 about how frequently production containers contend on this lock.
 
 ``slub_vm.py`` freezes three alternating OFF/ON rounds of shared, private-node,
-holder-switch, cache-recreation and ordinary alloc/free/shrink cases.  The
+holder-switch, cache-recreation, unobserved-acquire and ordinary alloc/free/shrink
+cases.  The new-object positive first opens a target watch; a separate negative
+starts a non-target holder before that watch and must keep it unknown.  The
 ordinary native bridge has no independently timed holder oracle, and thus
 receives no holder-recall credit.  Actual repeated addresses are reported, not
 assumed after recreation.  ``slub_vm_check.py`` independently joins container

@@ -24,7 +24,10 @@ CONTRACT={
         pending=['选定祖先汇总已做采样事件级验证；高事件率待测','全量更新计数不由采样推算','硬件cacheline证据（条件项）']),
     'allocator': dict(name='SLUB/Maple',collector='allocator',discovered='指定cache的分配阶段和释放入口',
         object='cache/节点/已观测分配代次',participants='分配请求方与释放执行方；后端锁持有者未知',
-        pending=['允许节点放置、原生failslab拒绝及fail_page_alloc部分回滚已有专项；并发策略变化和真实压力待验证','后端共享锁关系','Maple树归属']),
+        pending=['允许节点放置、原生failslab拒绝及fail_page_alloc部分回滚已有专项；并发策略变化和真实压力待验证','SLUB节点锁关系由独立专项核验；其余后端锁仍未知','Maple树归属']),
+    'slub': dict(name='SLUB节点锁专项',collector='slub',discovered='指定cache的实际节点锁尝试、获取、释放与回收边界',
+        object='完整cache指针、节点锁地址和watch代次',participants='已观察持有者与等待者；不含窗口前或中断持有者',
+        pending=['受控节点锁不代表生产发生率','普通分配路径没有独立持有者召回分母','其他SLUB锁与Maple树归属','完整入口及后台成本与联合回归']),
     'net': dict(name='Socket逻辑锁',collector='net',discovered='选定TCP Socket逻辑锁的获取、等待和释放',
         object='原生Socket cookie与netns',participants='已观察逻辑持有者与等待者，不代表TCP全部锁',
         pending=['创建归属仍未观测；SCM_RIGHTS逻辑锁另有专项验证','更多协议/短锁覆盖']),
@@ -52,6 +55,7 @@ VERIFIERS={
     'allocator_placement':('allocator_vm_check','allocator',dict(placement=True)),
     'allocator_failure':('allocator_vm_check','allocator',dict(failure=True)),
     'allocator_rollback':('allocator_vm_check','allocator',dict(rollback=True)),
+    'slub':('slub_vm_check','slub',{}),
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
     'block':('block_vm_check','block',{}), 'routing':('diagnosis_vm_check','routing',{}),
     'control':('x0_check','control',{}), 'rwsem':('rwsem_vm_check','rwsem',{}),
@@ -86,7 +90,7 @@ def replay(index,base,output):
         try:
             if key in ('routing','control'):
                 checked=implementation.check(data.decode())
-            elif key in ('rwsem','joint'):
+            elif key in ('rwsem','joint','slub'):
                 checked=implementation.check(serial,output/row['name'])
             else: checked=implementation.verify(serial,output/row['name'],**options)
             # A logical-lock cohort cannot be relabelled as backlog coverage.

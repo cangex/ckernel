@@ -12,7 +12,7 @@ import prototype_admission as admission
 from session import source_manifest
 from source_switches import observe
 
-CASES = ('shared', 'private', 'switch', 'recreate', 'native')
+CASES = ('shared', 'private', 'switch', 'recreate', 'unseenHolder', 'native')
 
 
 def run():
@@ -28,10 +28,11 @@ def run():
     args = SimpleNamespace(worker='/profile/session-worker', residue='/profile/session-residue', bpf='/profile/cis.bpf.o')
     source = source_manifest(args, env['boot_id']); permit = admission.create(source, env, time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit, indent=2))
-    plan = dict(schema='cis-slub-vm-plan-v1', cases=list(CASES), rounds=3, source=source,
+    plan = dict(schema='cis-slub-vm-plan-v2', cases=list(CASES), rounds=3, source=source,
         window_ms=2000, hold_us=5000, target_indices=[0,1], registered_roots=4,
         eligible_min_overlap_ns=100_000, cpus=[0,1,2,3], nodes=[0,1],
-        order='OFF_ON,ON_OFF,OFF_ON', scope='controlled real node-lock truth; native operation bridge separate')
+        order='OFF_ON,ON_OFF,OFF_ON', recreated_watch='target warmup before non-target holder',
+        scope='controlled real node-lock truth; native operation bridge and unobserved acquire separate')
     (out/'plan.json').write_text(json.dumps(plan, indent=2))
     endpoint = '/run/cis-slub.sock'; log = (out/'controller.log').open('x')
     requests = (out/'requests.jsonl').open('x')
@@ -97,11 +98,15 @@ def run():
                         # Start the waiter first. Its bounded in-kernel rendezvous
                         # observes a real acquisition before attempting the lock.
                         w=start('waiter0',1,node=1 if case=='private' else 0,wait_holders=1)
-                        h=start('holder0',0,hold=5000); finish(h); finish(w)
+                        h=start('holder0',2 if case=='unseenHolder' else 0,hold=5000); finish(h); finish(w)
                         if case in ('switch','recreate'):
                             token+=1
                             finish(start('reset2',0,command='recreate' if case=='recreate' else 'reset'))
-                            w=start('waiter1',1,wait_holders=1)
+                            if case=='recreate':
+                                # New object watches are target-opened. Cover the
+                                # missing-acquire case separately, never infer it.
+                                finish(start('warmup',0))
+                            w=start('waiter1',1,wait_holders=2 if case=='recreate' else 1)
                             h=start('holder1',2,hold=5000); finish(h); finish(w)
                     for p in children[begin:]: finish(p)
                     if enabled:
