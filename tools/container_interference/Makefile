@@ -18,7 +18,8 @@ cisd: cisd.c $(CORE) $(HEADERS)
 	$(CC) $(CFLAGS) $(LDFLAGS) cisd.c $(CORE) -o $@ $(LDLIBS)
 cisctl: cisctl.c include/cis.h
 	$(CC) $(CFLAGS) $(LDFLAGS) cisctl.c -o $@
-bpf/vmlinux.h: $(VMLINUX_BTF)
+bpf/vmlinux.h:
+	test -r "$(VMLINUX_BTF)"
 	$(BPFTOOL) btf dump file $(VMLINUX_BTF) format c > $@.tmp
 	mv $@.tmp $@
 bpf/%.bpf.o: bpf/%.bpf.c bpf/cis.bpf.c bpf/rwsem_collect.h bpf/vmlinux.h include/cis_event.h
