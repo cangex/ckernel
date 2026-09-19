@@ -47,7 +47,8 @@ def run(expiry=False, fault=False, crashes=False):
     (out/'permit.json').write_text(json.dumps(permit, indent=2))
     (out/'plan.json').write_text(json.dumps(dict(schema='cis-x0-plan-v1', expiry=expiry, fault=fault, crashes=crashes,
         interval_s=60, no_fake_clock=True, source=source,
-        collectors=list(collector_manifest.COLLECTORS),source_switches=True), indent=2))
+        collectors=list(collector_manifest.COLLECTORS),source_switches=True,
+        native_rwsem_filter=Path('/sys/kernel/debug/cis_rwsem_filter').exists()), indent=2))
     endpoint = '/run/cis-x0.sock'
     command = ['/usr/bin/python3', '/profile/session.py', '--socket', endpoint,
                '--directory', str(out/'records'), '--worker', args.worker, '--residue', args.residue,
@@ -120,9 +121,15 @@ def run(expiry=False, fault=False, crashes=False):
             for name in collector_manifest.COLLECTORS:
                 sid=request('start',collector=name,targets=targets,nonce='kill'+name,
                             **({'objects':[8]} if name=='rwsem' else {}))['session_id']
-                row=window(sid);inject(row['worker_pid'],signal.SIGKILL,sid,'worker')
+                row=window(sid); active=observe(name)
+                inject(row['worker_pid'],signal.SIGKILL,sid,'worker')
                 full=finish(sid);assert full['result']=='FAILED'
-                note('worker_kill_'+name,session=sid)
+                idle=observe(None); lease_reopen=None
+                if name=='rwsem' and Path('/sys/kernel/debug/cis_rwsem_filter').exists():
+                    lease=os.open('/sys/kernel/debug/cis_rwsem_filter',os.O_RDWR|os.O_CLOEXEC)
+                    os.close(lease); lease_reopen=True
+                note('worker_kill_'+name,session=sid,active_sources=active,
+                     idle_sources=idle,native_filter_reopen=lease_reopen)
             sid=request('start',collector='ip',targets=targets,nonce='stoppedworker')['session_id']
             row=window(sid);inject(row['worker_pid'],signal.SIGSTOP,sid,'worker')
             finish(sid,'FAULTED');recovered=request('recover')

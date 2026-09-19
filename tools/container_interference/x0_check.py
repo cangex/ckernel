@@ -80,6 +80,14 @@ def check(text):
             if row['result']!=expected_result: defects.append('crash_result')
             if not any(str(a['session'])==str(row['session_id']) and a['start_ticks']>0 and
                        a['before_ns']<=a['after_ns'] for a in actions): defects.append('missing_signal_action')
+        if plan.get('native_rwsem_filter'):
+            marker=next((c for c in checks if c['name']=='worker_kill_rwsem'),None)
+            row=next((r for r in records if r['nonce']=='killrwsem'),None)
+            if not marker or not row or marker.get('native_filter_reopen') is not True:
+                defects.append('native_filter_crash_cleanup')
+            else:
+                validate_sources(marker['active_sources'],'rwsem',row['window']['start_ns'],row['window']['end_ns'])
+                validate_sources(marker['idle_sources'],None,marker['active_sources']['after_ns'],2**64-1)
         if len(ops('recover'))!=3 or len(ops('start',False))<2: defects.append('crash_recovery_requests')
     elif plan['expiry']:
         if records or permit['expires_ns']-permit['created_ns'] != 1200*10**9:
