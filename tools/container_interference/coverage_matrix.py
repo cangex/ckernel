@@ -172,7 +172,7 @@ def replay(index,base,output):
             labels=[r.get('label','') for r in checked.get('states',[])]
             if key=='backlog' and not labels or (key=='backlog' and not all(v.startswith('backlog-') for v in labels)):
                 raise ValueError('backlog cohort required')
-            if key=='net' and labels and all(v.startswith(('backlog-','capacity-','txfailure-','txunmarked-','txadmission-','txnormal-')) for v in labels):
+            if key=='net' and labels and all(v.startswith(('backlog-','capacity-','storm-','txfailure-','txunmarked-','txadmission-','txnormal-')) for v in labels):
                 raise ValueError('logical ownership cohort required')
             if key=='net_capacity':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]

@@ -9,6 +9,22 @@ from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown,replay
 
 
 class CoverageTests(unittest.TestCase):
+    def test_cpu_guard_is_not_socket_owner_validation(self):
+        checked=dict(status='PASS',states=[dict(label='storm-net%d'%i,
+            result=dict(reason='COMBINED_PROCESS_CPU_CAPTURING',post_detach_operations=[100,100])) for i in range(3)])
+        module=SimpleNamespace(__file__=__file__,verify=lambda *a,**k:checked)
+        with tempfile.TemporaryDirectory() as tmp,patch('coverage_matrix.importlib.import_module',return_value=module):
+            base=Path(tmp); (base/'serial.log').write_bytes(b'fixture')
+            row=dict(name='storm',serial='serial.log',sha256=hashlib.sha256(b'fixture').hexdigest())
+            def check(kind,name):
+                return replay(dict(schema='cis-coverage-input-v1',cohorts=[dict(row,verifier=kind)]),base,base/name)['evidence'][0]['status']
+            self.assertEqual(check('net_guard','guard'),'PASS_SCOPED')
+            self.assertEqual(check('net','not-owner'),'FAIL')
+            checked['states'][0]['result']['reason']='CANCELLED'
+            self.assertEqual(check('net_guard','not-budget'),'FAIL')
+            checked['states'][0]['result'].update(reason='COMBINED_PROCESS_CPU_CAPTURING',post_detach_operations=[100,0])
+            self.assertEqual(check('net_guard','stopped-business'),'FAIL')
+
     def test_failed_sends_are_not_socket_ownership_or_success_only_evidence(self):
         checked=dict(status='PASS',states=[dict(label='%s-net%d'%(case,i),
             result=dict(participants=[dict(eligible=8,captured=8)]*2))
