@@ -28,16 +28,19 @@ def tcp_pair():
         except BaseException: client.close(); raise
 
 
-def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
+def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,txadmission=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/net_shift').read_text().strip()!='0':
         raise ValueError('full-rate native cookie fixture selection required')
     out=Path('/tmp/net-evidence'); out.mkdir(mode=0o700)
-    fault=None
+    fault=None; admission=None
     if txfailure:
         from net_tx_fault import NativeTxFault
         fault=NativeTxFault(out)
+    if txadmission:
+        from net_tx_admission import NativeTxAdmission
+        admission=NativeTxAdmission(out,tcp_pair)
     root=Path('/sys/fs/cgroup/cis-net'); root.mkdir(); (root/'management').mkdir()
     (root/'management/cgroup.procs').write_text(str(os.getpid()))
     (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
@@ -52,6 +55,9 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
     if txfailure:
         from net_tx_failure_check import CASES as failure_cases
         cases=failure_cases
+    if txadmission:
+        from net_tx_admission_check import CASES as admission_cases
+        cases=admission_cases
     plan=dict(order=case_order(cases),cases=list(cases),rounds=3,operations=4,roots=2,net_shift=0,
         window_ms=2000,cpu=[0,1],management_cpu=7,memory_max_bytes=64<<20,
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
@@ -61,6 +67,11 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
         plan.update(operations=8,send_bytes=128,operation_spacing_ms=100,tx_failure_validation=True,
                     scope='native task/cache-filtered failslab, same-socket unmarked recovery and private normal actor',
                     socket_namespace='inherited distinct VM loopback TCP pairs; no shared socket')
+        (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    if txadmission:
+        plan.update(operations=24,send_bytes=128,pressure_operations=16,recovery_operations=8,
+                    operation_spacing_ms=10,tx_admission_validation=True,seed_bytes=4<<20,
+                    scope='native TCP_REPAIR queue acceptance under VM-only budget; no wire delivery or performance claim')
         (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if capacity:
         plan.update(capacity_per_actor=40,watch_capacity=64,post_detach_operations=40,
@@ -111,6 +122,7 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
 
     try:
         if fault: fault.enable()
+        if admission: admission.prepare()
         deadline=time.monotonic()+10
         while not Path(endpoint).exists():
             if daemon.poll() is not None or time.monotonic()>deadline: raise RuntimeError('daemon readiness')
@@ -121,17 +133,25 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
             client,server=socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET) if rights else tcp_pair()
             sockets.extend((client,server)); selected=[client,server] if rights else [server,server]
             peers=[]
-            if txfailure:
+            if txfailure or txadmission:
                 other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server))
                 selected=[server,other_server]; peers=[client,other_client]
             if case=='backlog': selected=[server,client]
             if case=='private':
                 other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server)); selected[1]=other_server
             channels=[]
+            child_channels=[]
             if capacity:
                 for i in range(2):
                     parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET)
                     parent.settimeout(10); sockets.extend((parent,child)); channels.append(parent); selected[i]=child
+            if txadmission:
+                from net_tx_admission import repair
+                for sock in selected: repair(sock,4<<20)
+                for i in range(2):
+                    parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET)
+                    parent.settimeout(5); sockets.extend((parent,child)); channels.append(parent); child_channels.append(child)
+                limited=admission.limit(case=='txadmission')
             source_before=snapshot()
             if collecting:
                 sid=request('start',collector='net',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
@@ -148,12 +168,20 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
                 extra=[]; passed=(fd,)
                 if txfailure:
                     workload='/net_tx_failure_workload'; extra=[str(peers[i].fileno())]; passed=(fd,peers[i].fileno())
+                if txadmission:
+                    workload='/net_tx_admission_workload'; extra=[str(child_channels[i].fileno())]; passed=(fd,child_channels[i].fileno())
                 child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case]
                     +(['origin'] if origin else [])+extra,stdout=handle,stderr=handle,pass_fds=passed)
                 children.append(child); running.append(child)
             if txfailure:
                 for sock in sockets: sock.close()
                 sockets.clear()
+            if txadmission:
+                for sock in selected+child_channels: sock.close()
+                for channel in channels:
+                    if channel.recv(1)!=b'R': raise ValueError('admission pressure completion barrier')
+                restored=admission.limit(False)
+                for channel in channels: channel.sendall(b'D')
             if capacity:
                 for channel in channels:
                     if channel.recv(1)!=b'R': raise ValueError('capacity fixture readiness')
@@ -172,7 +200,10 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            if txfailure:
+            if txadmission:
+                from net_tx_admission_check import check as check_tx_admission
+                result=check_tx_admission(case,window,logs,limited,restored,report,identities)
+            elif txfailure:
                 from net_tx_failure_check import check as check_tx_failure
                 result=check_tx_failure(case,window,logs,report,identities)
             elif capacity:
@@ -186,6 +217,8 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,source_before=source_before,source_after=snapshot(),exit_codes=codes,result=result)
             evidence['source_delta']=delta(evidence['source_before'],evidence['source_after'])
+            if txadmission:
+                evidence.update(memory_configuration=limited,memory_restored=restored)
             if capacity:
                 evidence['post_detach_source_before']=post_detach_source
                 evidence['post_detach_source_delta']=delta(post_detach_source,evidence['source_after'])
@@ -209,6 +242,7 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
         except subprocess.TimeoutExpired: daemon.kill(); daemon.wait()
         requests.close(); log.close()
         if fault: fault.restore()
+        if admission: admission.restore()
 
 
 if __name__=='__main__':
@@ -218,4 +252,5 @@ if __name__=='__main__':
     group.add_argument('--origin',action='store_true')
     group.add_argument('--capacity',action='store_true')
     group.add_argument('--txfailure',action='store_true')
-    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure)
+    group.add_argument('--txadmission',action='store_true')
+    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure,a.txadmission)

@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0
 import copy
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+from net_tx_fault import NativeTxFault
+from allocator_failure_check import SETTINGS
 from net_tx_failure_check import check, CASES
 
 
@@ -55,6 +60,38 @@ class TxFailure(unittest.TestCase):
                         ('armed=1','armed=0'),('received=0','received=128')):
             window,logs,report,ids=self.fixture(); logs[0]=logs[0].replace(old,new,1)
             self.assertEqual(check('txfailure',window,logs,report,ids)['status'],'FAIL')
+
+    def test_fault_controls_restored_exactly_even_after_partial_enable(self):
+        for broken in (False,True):
+            with tempfile.TemporaryDirectory() as tmp:
+                base=Path(tmp); debug=base/'failslab'; debug.mkdir()
+                cache=base/'cache'; cache.write_text('0')
+                marker=base/'marker'; marker.touch()
+                original=dict(SETTINGS,probability='0',interval='7',times='9',space='19',
+                              verbose='2',**{'task-filter':'N','cache-filter':'N','ignore-gfp-wait':'Y'})
+                for name,value in original.items(): (debug/name).write_text(value)
+                paths={'/cis-disposable-vm':marker,'/sys/kernel/debug/failslab':debug,
+                       '/sys/kernel/slab/skbuff_fclone_cache/failslab':cache}
+                with patch('net_tx_fault.Path',side_effect=lambda p:paths[p]):
+                    fault=NativeTxFault(base)
+                if broken:
+                    # Model failure partway through enable, before injection starts.
+                    (debug/'interval').write_text('1'); cache.write_text('1')
+                else:
+                    fault.enable(); self.assertEqual(fault.snapshot(),dict(settings=SETTINGS,cache='1'))
+                fault.restore()
+                self.assertEqual(fault.snapshot(),dict(settings=original,cache='0'))
+
+    def test_preexisting_fault_state_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp); debug=base/'failslab'; debug.mkdir(); cache=base/'cache'; cache.write_text('0')
+            marker=base/'marker'; marker.touch()
+            for name,value in SETTINGS.items(): (debug/name).write_text(value)
+            paths={'/cis-disposable-vm':marker,'/sys/kernel/debug/failslab':debug,
+                   '/sys/kernel/slab/skbuff_fclone_cache/failslab':cache}
+            with patch('net_tx_fault.Path',side_effect=lambda p:paths[p]),self.assertRaises(ValueError):
+                NativeTxFault(base)
+            self.assertEqual((debug/'probability').read_text(),'100')
 
 
 if __name__=='__main__': unittest.main()
