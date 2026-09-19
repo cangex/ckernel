@@ -21,7 +21,7 @@ def snapshot(text):
         raise ValueError('diagnosis must be enabled and producers quiescent')
     if header['version'] == '3' and header.get('synchronized') != '1':
         raise ValueError('version 3 requires a grace-period barrier')
-    cpus, phases, samples = {}, [], []
+    cpus, phases, samples, slub_irqoff = {}, [], [], {}
     for line in lines[1:]:
         if not line.strip():
             continue
@@ -38,6 +38,12 @@ def snapshot(text):
         elif line.startswith('sample '):
             samples.append({key: int(number, 16 if key in ('object', 'outer', 'caller', 'preempt') else 10)
                             for key, number in value.items()})
+        elif line.startswith('slub_irqoff '):
+            row = {key: int(value[key]) for key in ('cpu', 'calls', 'body_ns', 'max_body_ns')}
+            if (value.get('debug_only') != '1' or min(row.values()) < 0 or row['cpu'] in slub_irqoff
+                    or row['max_body_ns'] > row['body_ns'] or not row['calls'] and row['body_ns']):
+                raise ValueError('invalid SLUB callback debug timing')
+            slub_irqoff[row['cpu']] = row
         else:
             # CIS_FILE wrappers can append final serial status after a file.
             if line.startswith(('CIS_', '[', 'reboot:', 'Power down')):
@@ -45,6 +51,8 @@ def snapshot(text):
             raise ValueError('unrecognized diagnostic line')
     if not cpus:
         raise ValueError('CPU counters missing')
+    if slub_irqoff and slub_irqoff.keys() != cpus.keys():
+        raise ValueError('incomplete SLUB callback debug CPU set')
     for row in phases + samples:
         if row['cpu'] not in cpus:
             raise ValueError('orphan sample')
@@ -61,6 +69,8 @@ def snapshot(text):
                 gate_enabled=header.get('wait_gate')=='1',
                 grace_period_synchronized=header.get('synchronized')=='1',
                 gate_filtered=sum(r.get('filtered',0) for r in cpus.values()),
+                slub_irqoff_debug=slub_irqoff,
+                slub_timing_scope='debug-only callback body; excludes guard entry, timing update and restore; boot high water, not hard IRQ-off bound',
                 bytes_per_possible_cpu=int(header['bytes_per_possible_cpu']))
 
 

@@ -35,3 +35,13 @@ class RecursionReport(unittest.TestCase):
     def test_counter_inconsistency_rejected(self):
         with self.assertRaises(ValueError):
             snapshot(self.raw().replace('count=2\n', 'count=1\n'))
+
+    def test_debug_callback_cost_does_not_clear_loss(self):
+        raw=self.raw()+'slub_irqoff cpu=0 calls=10 body_ns=1000 max_body_ns=500 debug_only=1\n'
+        value=snapshot(raw)
+        self.assertEqual(value['skipped'],2)
+        self.assertEqual(value['slub_irqoff_debug'][0]['calls'],10)
+        self.assertIn('not hard IRQ-off bound',value['slub_timing_scope'])
+        for old,new in [('cpu=0 calls','cpu=1 calls'),('max_body_ns=500','max_body_ns=1001'),
+                        ('debug_only=1','debug_only=0'),('calls=10','calls=0')]:
+            with self.assertRaises(ValueError): snapshot(raw.replace(old,new))
