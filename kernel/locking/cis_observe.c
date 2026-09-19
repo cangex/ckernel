@@ -725,7 +725,7 @@ DEFINE_SHOW_ATTRIBUTE(cis_net_audit);
 void __cis_net_tx_begin(struct cis_net_tx_sample *sample, struct sock *sk,
 		       u32 gfp, u32 requested)
 {
-	u64 cookie;
+	u64 cookie, begin, elapsed;
 
 	preempt_disable();
 	this_cpu_inc(cis_tx_entries);
@@ -747,6 +747,19 @@ void __cis_net_tx_begin(struct cis_net_tx_sample *sample, struct sock *sk,
 	};
 	/* Backend interval includes scheduling/interrupts, not exclusive CPU. */
 	sample->start_ns = ktime_get_ns();
+	sample->time_ns = sample->start_ns;
+	sample->phase = CIS_TX_BEGIN;
+	this_cpu_write(cis_in_trace, true);
+	this_cpu_inc(cis_tx_callbacks);
+	begin = ktime_get_ns();
+	trace_cis_net_tx(sample);
+	elapsed = ktime_get_ns() - begin;
+	this_cpu_add(cis_tx_callback_ns, elapsed);
+	if (elapsed > this_cpu_read(cis_tx_callback_max_ns))
+		this_cpu_write(cis_tx_callback_max_ns, elapsed);
+	this_cpu_write(cis_in_trace, false);
+	/* Do not charge the identity callback to the backend wall interval. */
+	sample->alloc_ns = ktime_get_ns();
 out:
 	preempt_enable();
 }

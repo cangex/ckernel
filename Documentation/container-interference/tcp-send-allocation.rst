@@ -6,6 +6,11 @@ boot-cookie-selected TCP stream sockets. It keeps the existing 2s session,
 two-target admission, CPU guard and bounded output policy. This is not an
 always-on allocator trace and not a new networking algorithm.
 
+Protocol 2 freezes requester identity before allocation, not from the task's
+cgroup after a potentially sleeping backend. Its backend clock starts after
+that initial BPF callback; later migration cannot relabel the request. The
+initial development protocol is not a qualified migration-safe capture.
+
 The native sequence remains ``alloc_skb_fclone`` then socket memory admission.
 A successful backend emits an event before admission; an admitted buffer or
 memory rejection closes that same task-start/allocation bracket. Backend

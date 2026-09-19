@@ -18,7 +18,7 @@ struct cis_net_sample {
 	u32 phase, context, netns, bytes, backlog_bytes, flags;
 };
 struct cis_net_tx_sample {
-	u64 start_ns, backend_ns, time_ns, cookie;
+	u64 start_ns, alloc_ns, backend_ns, time_ns, cookie;
 	struct sock *sk;
 	struct sk_buff *skb;
 	u32 phase, netns, gfp, requested;
@@ -26,6 +26,7 @@ struct cis_net_tx_sample {
 /* BACKEND precedes memory admission and any rejection-triggered free. */
 enum cis_net_tx_phase {
 	CIS_TX_BACKEND = 1, CIS_TX_ADMITTED, CIS_TX_REJECTED, CIS_TX_FAILED,
+	CIS_TX_BEGIN = 6,
 };
 #ifdef CONFIG_CIS_OBSERVE_NET
 #include <linux/tracepoint-defs.h>

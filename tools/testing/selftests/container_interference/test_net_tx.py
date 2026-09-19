@@ -7,7 +7,7 @@ from net_backlog_check import check_tx
 
 class NetTx(unittest.TestCase):
     def row(self,time,phase,begin=10,who=1,skb=77,**changes):
-        d=dict(protocol=1,sample_time_ns=time,phase=phase,begin_ns=begin,backend_ns=begin+5,
+        d=dict(protocol=2,sample_time_ns=time,phase=phase,begin_ns=begin,alloc_ns=begin+1,backend_ns=begin+5,
                tid=100+who,task_start=1,skb=skb,cookie=20+who,socket=30+who,context=0,
                actor_tid=100+who,actor_start=1,actor_id=who,actor_generation=1,
                cpu=0,netns=9,gfp=1,requested=256,stack_id=-1)
@@ -24,7 +24,7 @@ class NetTx(unittest.TestCase):
     def test_backend_and_release_not_blocking_or_payload_owner(self):
         r=self.run_rows(self.good()); self.assertEqual(r['quality']['status'],'PASS',r)
         e=r['tx']['episodes'][0]
-        self.assertEqual(e['backend_wall_ns'],5)
+        self.assertEqual(e['backend_wall_ns'],4)
         self.assertEqual(e['requester'],[1,1,101,1]); self.assertEqual(e['release_entry_ns'],40)
         self.assertEqual(e['packet_payload_owner'],'UNKNOWN')
         self.assertIsNone(e['backend_cpu_ns']); self.assertIsNone(e['blocking_container'])
@@ -87,6 +87,11 @@ class NetTx(unittest.TestCase):
         self.assertLess(source.index('cis_net_tx_step(&cis_sample, skb, skb ?'),
                         source.index('mem_scheduled = sk_wmem_schedule'))
         self.assertIn('CIS_TX_REJECTED',source)
+        begin=bpf.split('if (phase == 6)',1)[1].split('} else if (phase == 1',1)[0]
+        backend=bpf.split('} else if (phase == 1',1)[1].split('} else if (phase == 2',1)[0]
+        self.assertIn('identity(task, &id)',begin)
+        self.assertIn('e = *saved',backend)
+        self.assertNotIn('identity(task, &id)',backend)
 
     def test_independent_send_truth_and_wrong_container_cookie_or_interval(self):
         r=self.run_rows(self.good())

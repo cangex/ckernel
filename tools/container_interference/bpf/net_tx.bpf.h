@@ -22,25 +22,37 @@ int net_tx(struct bpf_raw_tracepoint_args *ctx)
 	if (!synchronous_context()) return 0;
 	key.tid = bpf_get_current_pid_tgid();
 	key.task_start = BPF_CORE_READ(task, start_boottime);
-	if (phase == 1 || phase == 4) {
+	if (phase == 6) {
 		if (!identity(task, &id) || !allowed(&id, CIS_DIAG_NET, start) ||
 		    !allowed(&id, CIS_DIAG_NET, now)) return 0;
 		e.base.id = id.id; e.base.generation = id.generation;
 		e.base.type = CIS_NET_TX_EVENT; e.base.sequence_ns = start;
 		e.base.time_ns = now;
 		e.base.tid = key.tid; e.task_start = key.task_start;
-		e.base.object = skb;
 		e.cookie = BPF_CORE_READ(sample, cookie);
 		e.socket = (u64)BPF_CORE_READ(sample, sk);
-		e.backend_ns = BPF_CORE_READ(sample, backend_ns);
 		e.gfp = BPF_CORE_READ(sample, gfp); e.requested = BPF_CORE_READ(sample, requested);
 		e.netns = BPF_CORE_READ(sample, netns);
-		if (!e.cookie || !start || e.backend_ns != now || now < start ||
+		e.phase = 6;
+		if (!e.cookie || !start || now != start || skb) { COUNT(s, rejected); return 0; }
+		if (bpf_map_lookup_elem(&net_tx_pending, &key)) {
+			bpf_map_delete_elem(&net_tx_pending, &key); COUNT(s, nested); return 0;
+		}
+		if (bpf_map_update_elem(&net_tx_pending, &key, &e, BPF_NOEXIST)) COUNT(s, rejected);
+		return 0;
+	} else if (phase == 1 || phase == 4) {
+		saved = bpf_map_lookup_elem(&net_tx_pending, &key);
+		if (!saved) return 0; /* Begin may belong to a non-target task. */
+		e = *saved;
+		bpf_map_delete_elem(&net_tx_pending, &key);
+		if (e.phase != 6 || e.base.sequence_ns != start || e.cookie != BPF_CORE_READ(sample, cookie) ||
 		    (phase == 1 && !skb) || (phase == 4 && skb)) { COUNT(s, rejected); return 0; }
+		if (!same_window(&e.base, CIS_DIAG_NET, now)) { COUNT(s, expired); return 0; }
+		e.base.object = skb; e.phase = phase;
+		e.backend_ns = BPF_CORE_READ(sample, backend_ns);
+		e.base.duration_ns = BPF_CORE_READ(sample, alloc_ns);
+		if (e.backend_ns != now || e.base.duration_ns < start || now < e.base.duration_ns) { COUNT(s, rejected); return 0; }
 		if (phase == 1) {
-			if (bpf_map_lookup_elem(&net_tx_pending, &key)) {
-				bpf_map_delete_elem(&net_tx_pending, &key); COUNT(s, nested); return 0;
-			}
 			if (bpf_map_update_elem(&net_tx_pending, &key, &e, BPF_NOEXIST)) { COUNT(s, rejected); return 0; }
 			if (bpf_map_update_elem(&net_tx_live, &skb, &e, BPF_NOEXIST)) {
 				/* A stale live address cannot be associated with its new use. */
@@ -50,12 +62,13 @@ int net_tx(struct bpf_raw_tracepoint_args *ctx)
 		}
 	} else if (phase == 2 || phase == 3) {
 		saved = bpf_map_lookup_elem(&net_tx_pending, &key);
-		if (!saved) { COUNT(s, unmatched); return 0; }
+		if (!saved) return 0;
 		e = *saved;
 		bpf_map_delete_elem(&net_tx_pending, &key);
-		if (e.base.sequence_ns != start || e.base.object != skb ||
+		if (e.phase != 1 || e.base.sequence_ns != start || e.base.object != skb ||
 		    e.cookie != BPF_CORE_READ(sample, cookie) ||
-		    e.backend_ns != BPF_CORE_READ(sample, backend_ns)) { COUNT(s, rejected); return 0; }
+		    e.backend_ns != BPF_CORE_READ(sample, backend_ns) ||
+		    e.base.duration_ns != BPF_CORE_READ(sample, alloc_ns)) { COUNT(s, rejected); return 0; }
 		if (!same_window(&e.base, CIS_DIAG_NET, now)) { COUNT(s, expired); return 0; }
 	} else { COUNT(s, rejected); return 0; }
 	e.base.time_ns = now; e.phase = phase;

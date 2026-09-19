@@ -8,7 +8,7 @@ from owner_report import fields
 
 def correlate(record, raw, quality, scope):
     supported='net_tx' in record.get('inventory',{}).get('program_names',[])
-    required={'protocol','sample_time_ns','begin_ns','backend_ns','tid','task_start','skb',
+    required={'protocol','sample_time_ns','begin_ns','alloc_ns','backend_ns','tid','task_start','skb',
               'cookie','socket','phase','context','actor_tid','actor_start','actor_id',
               'actor_generation','cpu','netns','gfp','requested','stack_id'}
     groups=defaultdict(list); excluded=Counter(); unknown=Counter(); episodes=[]
@@ -17,11 +17,11 @@ def correlate(record, raw, quality, scope):
         if item.get('kind')!='NET_TX': continue
         d=fields(item.get('detail',''))
         if (not required<=d.keys() or any(type(d[k]) is not int for k in required)
-                or any(d[k]<0 for k in required-{'stack_id'}) or d['protocol']!=1
+                or any(d[k]<0 for k in required-{'stack_id'}) or d['protocol']!=2
                 or d['phase'] not in (1,2,3,4,5) or d['context'] not in (0,1,2)
                 or not all(d[k] for k in ('begin_ns','backend_ns','tid','task_start','cookie','socket','requested'))
                 or not within_window(record,d['begin_ns'],d['sample_time_ns'])
-                or not d['begin_ns']<=d['backend_ns']<=d['sample_time_ns']):
+                or not d['begin_ns']<=d['alloc_ns']<=d['backend_ns']<=d['sample_time_ns']):
             excluded['schema_or_window']+=1; continue
         d['requester']=[item.get('id'),item.get('generation'),d['tid'],d['task_start']]
         if not all(type(v) is int and v>0 for v in d['requester']):
@@ -38,7 +38,7 @@ def correlate(record, raw, quality, scope):
     for key,rows in groups.items():
         rows.sort(key=lambda r:r['sample_time_ns']); begin=rows[0]
         counts=Counter(r['phase'] for r in rows)
-        immutable=('cookie','socket','skb','backend_ns','netns','gfp','requested')
+        immutable=('cookie','socket','skb','alloc_ns','backend_ns','netns','gfp','requested')
         if (any(v>1 for v in counts.values()) or
                 any(any(r[k]!=begin[k] for k in immutable) for r in rows) or
                 (counts[4] and (len(rows)!=1 or begin['sample_time_ns']!=begin['backend_ns'])) or
@@ -57,7 +57,7 @@ def correlate(record, raw, quality, scope):
         if not release and not counts[4]: unknown['release_unobserved']+=1
         episodes.append(dict(requester=list(key[:4]),begin_ns=key[4],cookie=begin['cookie'],
             socket_address=begin['socket'],netns=begin['netns'],skb_address=begin['skb'],
-            backend_interval_ns=[key[4],begin['backend_ns']],backend_wall_ns=begin['backend_ns']-key[4],
+            backend_interval_ns=[begin['alloc_ns'],begin['backend_ns']],backend_wall_ns=begin['backend_ns']-begin['alloc_ns'],
             requested_header_bytes=begin['requested'],gfp=begin['gfp'],outcome=outcome,
             terminal_ns=terminal['sample_time_ns'] if terminal else None,
             release_entry_ns=release['sample_time_ns'] if release else None,

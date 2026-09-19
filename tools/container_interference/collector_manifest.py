@@ -77,7 +77,7 @@ LEGACY_NET_USE_ONLY = deepcopy(LEGACY_NET)
 LEGACY_NET_USE_ONLY['source_filter'] = 'boot-frozen native cookie selection; target opens 64 socket watches; 256 skb and service records; release entry not completion; packet origin and unobserved holders unknown'
 COLLECTORS['net']['programs'].append('net_tx')
 COLLECTORS['net']['maps'] += ['net_tx_live', 'net_tx_pending']
-COLLECTORS['net']['source_filter'] += '; selected TCP send allocation brackets and 256 original skb-header lifetimes; fclone backend wall interval, memory admission and release executor separate; no packet payload origin, clone lineage or allocator lock holder inference'
+COLLECTORS['net']['source_filter'] += '; protocol 2 entry-frozen TCP send requester and 256 original skb-header lifetimes; fclone backend clock after identity callback, memory admission and release executor separate; no packet payload origin, clone lineage or allocator lock holder inference'
 COLLECTORS['allocator']['programs'].append('maple_context')
 COLLECTORS['allocator']['maps'].append('maple_pending')
 COLLECTORS['allocator']['source_filter'] += '; 256 task-start keyed Maple allocation brackets join sampled backend calls to destination tree addresses; no lifetime across brackets or inferred tree owner'
