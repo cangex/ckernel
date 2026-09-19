@@ -23,6 +23,8 @@ def analyze(record,raw):
     if scope['status']!='PASS':
         quality=dict(quality,status='FAIL' if 'FAIL' in (quality['status'],scope['status']) else 'BLOCKED',
             defects=quality['defects']+['collector_scope_'+scope['status'].lower()])
+    if collector=='allocator' and specialist['lifetimes']['status']=='FAIL':
+        quality=dict(quality,status='FAIL',defects=quality['defects']+['allocation_lifetime_invalid'])
 
     def add(kind,level,actor,resource,participants,interval,chain,unknown,**detail):
         nonlocal omitted
@@ -57,9 +59,13 @@ def analyze(record,raw):
                     outcome=f['outcome'],steps=f['steps'])
         elif collector=='allocator':
             for f in specialist['calls']:
+                unknown=['Maple tree owner and SLUB lock holder not inferred']
+                if f['allocation_stack_status']!='AVAILABLE':
+                    unknown.append('allocation calling path unavailable; typed stages do not replace a stack')
                 add('allocation_stages','E1',f['actor'],dict(kind='selected_cache',address=f['cache_address'],lifetime='UNKNOWN'),
-                    [],f['interval_ns'],f['stack_leaf_to_root'],['Maple tree owner and SLUB lock holder not inferred'],
-                    phases=f['phases'],exclusive_wall_ns=f['exclusive_wall_ns'],outcome=f['returned_count'])
+                    [],f['interval_ns'],f['stack_leaf_to_root'],unknown,
+                    phases=f['phases'],exclusive_wall_ns=f['exclusive_wall_ns'],outcome=f['returned_count'],
+                    allocation_stack_status=f['allocation_stack_status'],allocation_stack_error=f['allocation_stack_error'])
             for f in specialist['lifetimes']['release_entries']:
                 add('allocation_release_entry','E2',f['allocation_requester'],
                     dict(kind='observed_allocation',address=f['object_address'],observation_key=f['observation_key']),[],

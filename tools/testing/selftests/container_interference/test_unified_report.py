@@ -5,6 +5,8 @@ import test_block_report
 import test_counter_report
 import test_net_report
 import test_collector_manifest
+import test_allocator_report
+import test_allocator_lifetime
 from owner_test import event
 from unified_report import analyze,markdown
 
@@ -18,6 +20,27 @@ def encode(rows):
 
 
 class UnifiedReport(unittest.TestCase):
+    def test_allocator_lifetime_failure_blocks_unified_acceptance(self):
+        fixture=test_allocator_report.AllocatorReport()
+        rows=fixture.rows([1,2,3,6,15,16,20])
+        rows.append(test_allocator_lifetime.AllocationLifetime().sample(object_address=501))
+        report=analyze(fixture.record(),encode(rows))
+        self.assertEqual(report['quality']['status'],'FAIL')
+        self.assertIn('allocation_lifetime_invalid',report['quality']['defects'])
+        self.assertFalse(report['relations'])
+
+    def test_allocator_without_stack_keeps_stages_not_call_chain(self):
+        fixture=test_allocator_report.AllocatorReport()
+        rows=fixture.rows()
+        for row in rows: row['detail']=row['detail'].replace('stack_id=-1','stack_id=-17')
+        report=analyze(fixture.record(),encode(rows))
+        self.assertEqual(report['quality']['status'],'PASS',report)
+        relation=report['relations'][0]
+        self.assertEqual(relation['evidence'],'E1')
+        self.assertFalse(relation['chain_leaf_to_root'])
+        self.assertEqual(relation['details']['allocation_stack_error'],-17)
+        self.assertIn('calling path unavailable',' '.join(relation['unknown']))
+
     def test_owner_family_requires_exact_scope_and_inventory(self):
         for collector,resource in (('owner',1),('fd',3),('slub',4)):
             record=test_counter_report.CounterReport().record(); record['collector']=collector

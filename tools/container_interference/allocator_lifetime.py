@@ -8,17 +8,16 @@ from explain import within_window
 
 def correlate(record,raw,report,stacks):
     objects, releases, excluded, stack_errors = {}, [], Counter(), Counter()
+    timeline=[]; allocation_keys=set(); peak_active=0
     known={(v['id'],v['generation']) for v in record.get('root_identities',{}).values()}
     supported='alloc_release' in record.get('inventory',{}).get('program_names',[])
     accepted=report['quality']['status']=='PASS' and report['scope_audit']['status']=='PASS'
     for call in report['calls']:
         for obj in call['object_samples']:
             key=(*call['actor'],call['call_ns'],call['cache_address'],obj['object'],obj['time_ns'],obj['ordinal'])
-            if key in objects: raise ValueError('duplicate observed allocation instance')
-            if len(objects)>=1024:
-                excluded['object_capacity']+=1
-                continue
-            objects[key]=(call,obj)
+            if key in allocation_keys: raise ValueError('duplicate observed allocation instance')
+            allocation_keys.add(key)
+            timeline.append((obj['time_ns'],0,key,(call,obj)))
     required={'protocol','sample_time_ns','call_ns','allocation_time_ns','allocation_ordinal','tid','task_start',
               'cpu','cache','object','context','caller','stack_id','executor_tid','executor_start','executor_id','executor_generation'}
     seen=set()
@@ -27,14 +26,26 @@ def correlate(record,raw,report,stacks):
         if item.get('kind')!='ALLOC_RELEASE': continue
         d=fields(item.get('detail',''))
         if (not required<=d.keys() or any(type(d[k]) is not int or d[k]<0 for k in required-{'stack_id'})
-                or d['stack_id'] < -4095 or d['protocol']!=1 or d['context'] not in (0,1,2)):
+                or type(d['stack_id']) is not int or d['stack_id'] < -4095
+                or d['protocol']!=1 or d['context'] not in (0,1,2)):
             excluded['schema']+=1; continue
         key=(item.get('id'),item.get('generation'),d['tid'],d['task_start'],d['call_ns'],d['cache'],
              d['object'],d['allocation_time_ns'],d['allocation_ordinal'])
-        if not accepted or not supported or key not in objects:
-            excluded['no_complete_allocation']+=1; continue
+        timeline.append((d['sample_time_ns'],1,key,d))
+    # Source maps bound live samples, not all samples accumulated in a window.
+    # Timestamp order also removes cross-CPU perf-buffer delivery ordering.
+    for _,kind,key,value in sorted(timeline,key=lambda v:(v[0],v[1])):
+        if kind==0:
+            if len(objects)>=1024:
+                excluded['object_capacity']+=1; continue
+            objects[key]=value
+            peak_active=max(peak_active,len(objects))
+            continue
+        d=value
         if key in seen:
             excluded['duplicate_release']+=1; continue
+        if not accepted or not supported or key not in objects:
+            excluded['no_complete_allocation']+=1; continue
         call,obj=objects[key]
         if (not within_window(record,d['allocation_time_ns'],d['sample_time_ns'])
                 or d['sample_time_ns']<=d['allocation_time_ns']
@@ -46,6 +57,7 @@ def correlate(record,raw,report,stacks):
                 or executor!=(0,0) and executor not in known):
             excluded['executor_identity']+=1; continue
         seen.add(key)
+        del objects[key]
         if d['stack_id'] < 0:
             stack_errors[str(d['stack_id'])] += 1
         releases.append(dict(object_address=d['object'],cache_address=d['cache'],evidence='E2',
@@ -58,12 +70,13 @@ def correlate(record,raw,report,stacks):
             release_executor=dict(container=list(executor) if executor!=(0,0) else None,
                 tid=d['executor_tid'] or None,task_start=d['executor_start'] or None,
                 context=('task','softirq','hardirq')[d['context']]),
-            release_stack_leaf_to_root=stacks.get(d['stack_id'],[]),release_caller=d['caller'],
+            release_stack_leaf_to_root=stacks.get(d['stack_id'],[]) if d['stack_id']>=0 else [],release_caller=d['caller'],
             release_stack_error=d['stack_id'] if d['stack_id'] < 0 else None,
-            release_stack_status='AVAILABLE' if stacks.get(d['stack_id']) else 'UNAVAILABLE',
+            release_stack_status='AVAILABLE' if d['stack_id']>=0 and stacks.get(d['stack_id']) else 'UNAVAILABLE',
             release_completed='UNOBSERVED',rcu_grace_period='UNOBSERVED',blocking_container=None))
     return dict(status='FAIL' if excluded else 'PASS' if supported and accepted else 'UNOBSERVED',
-        release_entries=releases,excluded=dict(excluded),allocations_without_release=len(objects)-len(seen),
+        release_entries=releases,excluded=dict(excluded),allocations_without_release=len(allocation_keys)-len(seen),
+        peak_active_samples=peak_active,active_sample_limit=1024,
         release_stack_errors=dict(stack_errors),
         status_scope='allocation-instance to release-entry identity; stack availability is reported separately',
         completion='entry before native release/reuse, not completion; no mutation of allocator ownership',

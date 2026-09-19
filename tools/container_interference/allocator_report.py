@@ -79,7 +79,8 @@ def analyze(record, raw):
         if (not required<=d.keys() or d['protocol']!=1 or d['operation'] not in (1,2) or
                 d['stage'] not in STAGES or not 0<=d['sample_shift']<=16 or
                 any(type(d[k]) is not int or d[k]<0 for k in required-{'requested_node','observed_node','stack_id'}) or
-                min(d['requested_node'],d['observed_node'],d['stack_id']) < -1):
+                any(type(d[k]) is not int or d[k] < -1 for k in ('requested_node','observed_node')) or
+                type(d['stack_id']) is not int or d['stack_id'] < -4095):
             excluded['schema']+=1; continue
         who=item.get('id'),item.get('generation'),d['tid'],d['task_start']
         if who[:2] not in known or not all(who) or not d['cache'] or not d['requested']:
@@ -90,7 +91,7 @@ def analyze(record, raw):
         groups[key].append(d)
     if excluded['schema']:
         base['quality']=dict(base['quality'],status='FAIL',defects=base['quality']['defects']+['allocator_schema'])
-    calls=[]
+    calls=[]; stack_errors=Counter()
     for key,rows in groups.items():
         rows.sort(key=lambda r:r['ordinal']); first,last=rows[0],rows[-1]
         stable=('cache','operation','requested','gfp','requested_node','sample_shift','stack_id')
@@ -109,6 +110,10 @@ def analyze(record, raw):
         rollbacks=[r['count'] for r in rows if r['stage']==18]
         if len(rollbacks)>1 or rollbacks and (last['count'] or rollbacks[0]>=first['requested']):
             excluded['rollback']+=1; continue
+        stack_id=first['stack_id']
+        chain=stacks.get(stack_id,[]) if stack_id>=0 else []
+        if stack_id<0:
+            stack_errors[str(stack_id)]+=1
         calls.append(dict(actor=list(key[:4]),call_ns=key[-1],evidence='E1',cache_address=first['cache'],
             operation='single' if first['operation']==1 else 'bulk',requested=first['requested'],
             result=allocation_result(rows),
@@ -117,7 +122,9 @@ def analyze(record, raw):
             observed_nodes=sorted({r['observed_node'] for r in rows if r['observed_node']>=0}),
             interval_ns=[key[-1],last['sample_time_ns']],elapsed_wall_ns=last['sample_time_ns']-key[-1],
             phases=intervals,exclusive_wall_ns=partition,visits=dict(Counter(STAGES[r['stage']] for r in rows)),
-            sample_shift=first['sample_shift'],stack_leaf_to_root=stacks.get(first['stack_id'],[]),
+            sample_shift=first['sample_shift'],stack_id=stack_id,stack_leaf_to_root=chain,
+            allocation_stack_error=stack_id if stack_id<0 else None,
+            allocation_stack_status='AVAILABLE' if chain else 'UNAVAILABLE',
             allocation_owner=list(key[:2]),free_owner='UNOBSERVED',cache_lifetime='UNKNOWN',holder=None,spin_cycles=None,
             object_samples=[dict(object=r['object'],time_ns=r['sample_time_ns'],ordinal=r['ordinal'],cpu=r['cpu'])
                             for r in rows if r['object'] and (r['stage']==17 or r['stage']==20 and first['operation']==1 and last['count']==1)]))
@@ -125,7 +132,9 @@ def analyze(record, raw):
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),
         analysis_source_sha256=dict(base['analysis_source_sha256'],**{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
             for name in ('allocator_report.py','allocator_lifetime.py')}),
-        calls=calls,excluded=dict(excluded),performance_certification='NOT_ACCEPTED',
+        calls=calls,excluded=dict(excluded),allocation_stack_errors=dict(stack_errors),
+        allocation_stack_errors_scope='completed accepted calls, not repeated stage records',
+        performance_certification='NOT_ACCEPTED',
         partition_priority=PRIORITY+['unclassified'],
         limits=['phase wall time includes observer and preemption, not atomic or spin cycles',
                 'exclusive partition avoids adding nested slow/partial/node-lock intervals twice',
@@ -136,6 +145,7 @@ def analyze(record, raw):
                 'failure region identifies an observed control-flow boundary, not another container or a specific ENOMEM cause',
                 'same cache address is not proof of interference or a shared allocation owner',
                 'sampling is per CPU selected-cache entry, not unbiased population cost',
+                'stack helper errors retain typed stages but do not establish a complete calling path',
                 'release entry is not allocator completion or RCU grace-period duration',
                 'allocation identity is the registered requesting container, not proof of memcg billing owner',
                 'no Maple tree identity or hardware cache-line cause is asserted'])

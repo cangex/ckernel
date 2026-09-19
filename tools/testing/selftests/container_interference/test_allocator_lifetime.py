@@ -68,3 +68,34 @@ class AllocationLifetime(unittest.TestCase):
         result=self.run_rows([])
         self.assertEqual(result['allocations_without_release'],1)
         self.assertFalse(result['release_entries'])
+
+    def lifetime_sequence(self,count,concurrent=False):
+        helper=test_allocator_report.AllocatorReport()
+        report=helper.run_rows(helper.rows([1,2,3,6,15,16,20]))
+        template=report['calls'][0]; calls=[]; rows=[]
+        for i in range(count):
+            start=10+i*20; allocated=start+7; freed=10+count*20+i if concurrent else start+10
+            calls.append(dict(template,call_ns=start,interval_ns=[start,allocated],
+                object_samples=[dict(object=500+i,time_ns=allocated,ordinal=6,cpu=0)]))
+            row=self.sample(free_time=freed,object_address=500+i,call_ns=start)
+            row['detail']=row['detail'].replace('allocation_time_ns=17','allocation_time_ns='+str(allocated))
+            rows.append(row)
+        report.update(calls=calls,scope_audit={'status':'PASS'})
+        record=helper.record(); record['window']['end_ns']=1000000
+        # Reverse delivery is legitimate across source CPU buffers.
+        result=correlate(record,'\n'.join(json.dumps(r) for r in reversed(rows)).encode(),report,{})
+        return result
+
+    def test_capacity_bounds_live_not_cumulative_samples(self):
+        result=self.lifetime_sequence(1100)
+        self.assertEqual(result['status'],'PASS',result['excluded'])
+        self.assertEqual(len(result['release_entries']),1100)
+        self.assertEqual(result['peak_active_samples'],1)
+        self.assertEqual(result['allocations_without_release'],0)
+
+    def test_simultaneous_capacity_is_still_enforced(self):
+        result=self.lifetime_sequence(1100,concurrent=True)
+        self.assertEqual(result['status'],'FAIL')
+        self.assertEqual(result['excluded']['object_capacity'],76)
+        self.assertEqual(result['peak_active_samples'],1024)
+        self.assertEqual(result['allocations_without_release'],76)
