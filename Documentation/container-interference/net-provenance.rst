@@ -30,8 +30,7 @@ time brackets and SO_COOKIE inside the isolated actors. The accepted child is
 passed with real SCM_RIGHTS; the recipient may become holder without becoming
 creator. Existing pre-window inherited Socket fixtures remain regressions.
 The source still cannot infer packet origin, skb allocation provenance, all
-TCP locks or GSO/GRO data-buffer ownership from a Socket creator. Runtime
-acceptance of this extension is pending until build and scoped tests complete.
+TCP locks or GSO/GRO data-buffer ownership from a Socket creator.
 
 The first ``x4-net-origin-20260919-213027.log`` cohort is retained as FAIL.
 Its controller publishes a future capture window during preparation; the
@@ -41,3 +40,22 @@ and the observer correctly reported UNOBSERVED, while 4/4 later lock relations
 were captured. The new frozen origin fixture waits before creation, starting
 preparation 300ms before a lock schedule at least 500ms into the window. No
 timestamps, thresholds or observed records from the failed batch are changed.
+
+Scoped origin runtime evidence
+------------------------------
+
+Kernel 172da0a96 Image and full modules built with the unchanged ARM64 config.
+Image SHA256:
+``e19dcc3efb9c9e33e7c40fe38305b19459d4f8671293049148e550eef583e1d4``.
+Tools 7a6592c82 ran ``x4-net-origin-20260919-213550.log`` (SHA256
+``41b58a024ed56e204350c6bb49824ee7d445d883885ed28e56878af588fd26d1``).
+
+All 18 OFF/ON states / 9 captures passed independent checks: 18/18 origin
+facts (15 user creates, 3 accepts) and 24/24 eligible logical-holder overlaps.
+All three private-socket negatives produced no cross-container relationship.
+Accepted children retained UNOBSERVED creation; transferred users did not
+overwrite the creator or acceptor. Stop/source-off and module unload passed.
+The maximum combined process CAPTURING CPU was 9.32107ms; process RSS peak
+34,152,448 bytes. These are not total source callback CPU, kernel memory,
+production tail-latency acceptance or population-wide attribution recall.
+The original 40ms capture gate was retained, without the old 40.60ms exception.

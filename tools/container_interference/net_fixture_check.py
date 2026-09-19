@@ -86,6 +86,9 @@ def check_case(case,window,logs,report=None,identities=None,require_origin=False
     if report is not None:
         if report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS' or report['excluded']:
             errors.append('capture_quality')
+        if case in CASES and any(sock.get('creation_observation') or sock.get('accept_observation')
+                                 for sock in report['sockets']):
+            errors.append('pre_window_origin_fabricated')
         waits=[(sock,wait) for sock in report['sockets'] for wait in sock['waits']]
         for holder,waiter,i,h,w in eligible:
             hid=(identities[holder]['id'],identities[holder]['generation']); wid=(identities[waiter]['id'],identities[waiter]['generation'])

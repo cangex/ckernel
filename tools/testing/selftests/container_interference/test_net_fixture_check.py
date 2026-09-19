@@ -89,3 +89,8 @@ class NetFixture(unittest.TestCase):
         self.assertIn('origin_not_observed',check_case('rightsShared',*args,require_origin=True)['errors'])
         args=self.origin_fixture(); args[1][0]=args[1][0].split('\nCIS_NET_ORIGIN')[0]
         self.assertIn('origin_truth_shape',check_case('rightsShared',*args,require_origin=True)['errors'])
+
+    def test_inherited_pre_window_socket_never_gains_creator(self):
+        args=self.fixture('shared')
+        args[2]['sockets'][0]['creation_observation']=dict(actor=[1,1,100,1],time_ns=5,evidence='E2')
+        self.assertIn('pre_window_origin_fabricated',check_case('shared',*args)['errors'])

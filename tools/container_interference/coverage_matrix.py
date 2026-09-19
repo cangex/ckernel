@@ -30,7 +30,7 @@ CONTRACT={
         pending=['受控节点锁不代表生产发生率','普通分配路径没有独立持有者召回分母','其他SLUB锁与Maple树归属','完整入口及后台成本与联合回归']),
     'net': dict(name='Socket逻辑锁',collector='net',discovered='选定TCP Socket逻辑锁的获取、等待和释放',
         object='原生Socket cookie与netns',participants='已观察逻辑持有者与等待者，不代表TCP全部锁',
-        pending=['创建归属仍未观测；SCM_RIGHTS逻辑锁另有专项验证','更多协议/短锁覆盖']),
+        pending=['窗口内用户Socket创建与accept已区分；窗口前/内核创建者仍未知','SCM_RIGHTS来源与持有者有专项真值，不等于报文来源','更多协议/短锁覆盖']),
     'backlog': dict(name='backlog/skb',collector='net',discovered='入队、服务及skb释放入口',
         object='Socket cookie、skb地址及入队epoch',participants='执行者独立记录，报文原始归属未知',
         pending=['skb分配来源和后端成本','clone/GSO/GRO来源变换']),
