@@ -2,6 +2,7 @@
 import unittest
 from pathlib import Path
 import test_net_report
+from net_backlog_check import check_tx
 
 
 class NetTx(unittest.TestCase):
@@ -86,6 +87,20 @@ class NetTx(unittest.TestCase):
         self.assertLess(source.index('cis_net_tx_step(&cis_sample, skb, skb ?'),
                         source.index('mem_scheduled = sk_wmem_schedule'))
         self.assertIn('CIS_TX_REJECTED',source)
+
+    def test_independent_send_truth_and_wrong_container_cookie_or_interval(self):
+        r=self.run_rows(self.good())
+        sends=[dict(cookie=21,begin_ns=9,end_ns=21)]
+        self.assertEqual(check_tx(sends,101,dict(id=1,generation=1),r)['status'],'PASS')
+        for args in (([dict(cookie=22,begin_ns=9,end_ns=21)],101,dict(id=1,generation=1)),
+                     (sends,102,dict(id=1,generation=1)),(sends,101,dict(id=2,generation=1)),
+                     ([dict(cookie=21,begin_ns=11,end_ns=21)],101,dict(id=1,generation=1))):
+            self.assertEqual(check_tx(*args,r)['status'],'FAIL')
+
+    def test_unclosed_or_released_unobserved_truth_not_pass(self):
+        for rows in (self.good()[:1],self.good()[:2]):
+            r=self.run_rows(rows)
+            self.assertEqual(check_tx([dict(cookie=21,begin_ns=9,end_ns=21)],101,dict(id=1,generation=1),r)['status'],'FAIL')
 
 
 if __name__=='__main__': unittest.main()

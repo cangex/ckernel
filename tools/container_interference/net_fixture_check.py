@@ -12,10 +12,10 @@ def case_order(cases=CASES):
             for mode in (('off','net') if r%2==0 else ('net','off'))]
 
 
-def check_case(case,window,logs,report=None,identities=None,require_origin=False,require_protocol_negative=False):
+def check_case(case,window,logs,report=None,identities=None,require_origin=False,require_protocol_negative=False,require_tx=False):
     if case=='backlog':
         from net_backlog_check import check_backlog
-        return check_backlog(window,logs,report,identities)
+        return check_backlog(window,logs,report,identities,require_tx=require_tx)
     if case not in CASES+ORIGIN_CASES or len(logs)!=2: raise ValueError('fixture case')
     private=case in ('private','rightsPrivate'); switching=case=='switch' or case in ORIGIN_CASES
     errors=[]; truth=[]; pids=[]

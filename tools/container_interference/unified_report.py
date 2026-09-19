@@ -159,6 +159,7 @@ def markdown(report):
     labels={'holder_waiter':'持有与等待','wait_interval_only':'锁等待，持有者未闭合','shared_updates':'共同更新同一计数器',
         'counter_operation':'计数更新/回滚','allocation_stages':'对象分配阶段','allocation_release_entry':'分配与释放入口',
         'socket_holder_waiter':'Socket逻辑锁等待','backlog_service_release':'backlog排队、服务与释放',
+        'tcp_send_allocation':'TCP发送缓冲区申请与释放来源',
         'block_request_episode':'块请求排队与服务','block_tag_wait':'块请求槽位等待','rwsem_holder_waiter':'读写锁已观察持有与等待'}
     lines=['# 容器周期Profile解释报告','','会话 `%s`，专项 `%s`，证据质量 **%s**。'%(report['session_id'],report['collector'],report['quality']['status']),
         '这是受限路径上的观察报告，不是总干扰率或生产性能认证。','','## 已观察关系']
@@ -166,6 +167,11 @@ def markdown(report):
         lines.append('- **%s / %s**：任务 `%s`，资源 `%s`；参与者 `%s`。'%(labels.get(r['relation'],r['relation']),r['evidence'],
             r['affected_actor'],json.dumps(r['resource'],ensure_ascii=False),r['participants']))
         if r['chain_leaf_to_root']: lines.append('  调用栈（叶到根）：`%s`。'%' → '.join(r['chain_leaf_to_root']))
+        if r['relation']=='tcp_send_allocation':
+            tx=r['details']['allocation']
+            lines.append('  原生fclone头部及初始数据申请合计经过 %dns；准入结果 %s；释放执行上下文 %s。'%(
+                tx['backend_wall_ns'],tx['outcome'],tx['release_context'] or '未观察到'))
+            lines.append('  这是带调度和中断的经过时间，不是纯分配器CPU开销；不据此推断报文内容归属、克隆来源或阻塞容器。')
         if r['relation'] in ('allocation_stages','allocation_release_entry'):
             context=r['details'].get('maple_allocation_context') or r['details'].get('allocation_tree_context')
             if context:

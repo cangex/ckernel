@@ -44,6 +44,11 @@ CONTRACT={
     'backlog': dict(name='backlog/skb',collector='net',discovered='入队、服务及skb释放入口',
         object='Socket cookie、skb地址及入队epoch',participants='执行者独立记录，报文原始归属未知',
         pending=['skb分配来源和后端成本','clone/GSO/GRO来源变换']),
+    'net_tx': dict(name='TCP发送缓冲区申请与释放',collector='net',
+        discovered='原生fclone申请、内存准入与原始skb头部释放入口',
+        object='Socket cookie、请求任务代次与分配边界；原始头部地址不代表共享数据页',
+        participants='申请容器与释放执行者分开；不是分配器锁持有关系或报文内容所有权',
+        pending=['接收与clone/GSO/GRO来源变换不在此闭环','后端经过时间不是独占CPU','完整释放后端和原生失败路径运行验证']),
     'block': dict(name='块I/O',collector='block',discovered='直接I/O请求形成、排队、下发与完成',
         object='请求episode、设备/队列、head-bio blkcg',participants='初始提交者与bio归属；不推断唯一阻塞方',
         pending=['tag等待由独立专项核验','重排队/部分完成及bio/request合并由独立专项核验，不代表任意设备','buffered writeback多源归属']),
@@ -86,6 +91,7 @@ VERIFIERS={
     'allocator_rollback':('allocator_vm_check','allocator',dict(rollback=True)),
     'slub':('slub_vm_check','slub',{}),
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
+    'net_tx':('net_vm_check','net_tx',{}),
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
     'block_merge':('block_vm_check','block_merge',{}),
     'writeback':('writeback_vm_check','writeback',{}),
@@ -133,6 +139,11 @@ def replay(index,base,output):
                 raise ValueError('backlog cohort required')
             if key=='net' and labels and all(v.startswith('backlog-') for v in labels):
                 raise ValueError('logical ownership cohort required')
+            if key=='net_tx':
+                selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
+                if len(selected)!=3 or any(not v.get('result',{}).get('tx') or
+                        v['result']['tx'].get('status')!='PASS' or not v['result']['tx'].get('matches') for v in selected):
+                    raise ValueError('send requester, cookie, bracket and release truth required')
             if key=='block_merge' and checked.get('fixture') not in ('merge','merge-scheduler'):
                 raise ValueError('native merge truth cohort required')
             if key=='writeback_inode':

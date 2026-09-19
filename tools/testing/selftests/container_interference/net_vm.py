@@ -51,7 +51,8 @@ def run(backlog=False,rights=False,origin=False):
         scope='logical lock fixture with deliberate bounded sleep while held, not ordinary application cost acceptance')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if backlog:
-        plan.update(unheld_drain_transfers=1,drain_offset_ms=450,skb_release_not_bounded_by_recv_return=True)
+        plan.update(unheld_drain_transfers=1,drain_offset_ms=450,skb_release_not_bounded_by_recv_return=True,
+                    tx_allocation_validation=True)
         (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if rights:
         plan.update(socket_namespace='TCP socket created inside actor0 network namespace; passed with SCM_RIGHTS',
@@ -132,7 +133,8 @@ def run(backlog=False,rights=False,origin=False):
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            result=check_case(case,window,logs,report,identities,require_origin=origin,require_protocol_negative=origin)
+            result=check_case(case,window,logs,report,identities,require_origin=origin,require_protocol_negative=origin,
+                              require_tx=backlog)
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,source_before=source_before,source_after=snapshot(),exit_codes=codes,result=result)
             evidence['source_delta']=delta(evidence['source_before'],evidence['source_after'])

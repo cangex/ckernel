@@ -24,6 +24,20 @@ class NetSource(unittest.TestCase):
         with self.assertRaises(ValueError): delta(a,b)
         with self.assertRaises(ValueError): delta(self.snapshot(1),self.snapshot())
 
+    def test_tx_callback_high_water_is_not_off_window_work(self):
+        def snapshot(n):
+            r=self.snapshot(0); r['time_ns']=n
+            r['source_audit']=r['source_audit'].replace('version=1','version=2 tx_active=0').replace(
+                'source_counter_bytes_per_cpu=40','source_counter_bytes_per_cpu=80').rstrip()+(
+                    ' tx_entries=5 tx_selected=5 tx_callbacks=10 tx_callback_ns=100 tx_callback_max_ns=20\n')
+            return r
+        r=delta(snapshot(1),snapshot(2))
+        self.assertFalse(any(r['totals'].values()))
+        self.assertEqual(r['tx_callback_boot_max_ns'],20)
+        self.assertEqual(r['counter_bytes'],80)
+        self.assertEqual(expected_fields('14','net')['net_tx'],'1')
+        self.assertEqual(expected_fields('14','allocator')['net_tx'],'0')
+
     def test_native_fast_and_callback_release_coverage(self):
         root=Path(__file__).resolve().parents[4]
         header=(root/'include/net/sock.h').read_text(); source=(root/'net/core/sock.c').read_text()

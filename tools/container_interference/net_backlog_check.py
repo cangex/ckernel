@@ -2,7 +2,7 @@
 from owner_report import fields
 
 
-def check_backlog(window, logs, report=None, identities=None):
+def check_backlog(window, logs, report=None, identities=None, require_tx=False):
     if len(logs)!=2: raise ValueError('two container logs required')
     errors=[]; packets=[]; pids=[]; drains=[]
     holds=[fields(s) for s in logs[0].splitlines() if s.startswith('CIS_NET_TRUTH ')]
@@ -51,6 +51,30 @@ def check_backlog(window, logs, report=None, identities=None):
                         release_after_receive_return_ns=max(0,q['release_entry_ns']-recv['end_ns'])))
                 if not observed: errors.append('missing_queue_slot_'+str(h['index']))
                 else: matches.append(dict(index=h['index'],episodes=observed))
-    return dict(status='FAIL' if errors else 'PASS',errors=errors,eligible=4,captured=len(matches),
+    tx_result=None
+    if require_tx and report is not None:
+        tx_result=check_tx(packets[1]+[drains[1]],pids[1],identities[1],report)
+        errors.extend('tx_'+e for e in tx_result['errors'])
+    return dict(status='FAIL' if errors else 'PASS',errors=errors,eligible=4,captured=len(matches),tx=tx_result,
                 holds=holds,packets=packets,drains=drains,matches=matches,
                 scope='TCP payload verified; per-hold queue/service/release coverage, not one-packet/one-skb recall')
+
+
+def check_tx(sends,pid,identity,report):
+    errors=[]; matches=[]
+    tx=report.get('tx',{})
+    if tx.get('status')!='PASS' or not tx.get('episodes'): errors.append('allocation_evidence_missing')
+    for e in tx.get('episodes',[]):
+        times=[s for s in sends if e['terminal_ns'] is not None and s['cookie']==e['cookie'] and
+               s['begin_ns']<=e['begin_ns']<=e['backend_interval_ns'][1]<=e['terminal_ns']<=s['end_ns']]
+        if (len(times)!=1 or e['outcome']!='ADMITTED' or
+                e['requester'][:2]!=[identity['id'],identity['generation']] or
+                e['requester'][2]&0xffffffff!=pid or e['packet_payload_owner']!='UNKNOWN' or
+                e['allocator_lock_holder'] is not None or e['blocking_container'] is not None):
+            errors.append('allocation_truth_mismatch'); continue
+        matches.append(dict(skb=e['skb_address'],begin_ns=e['begin_ns'],cookie=e['cookie'],
+            backend_wall_ns=e['backend_wall_ns'],release_entry_ns=e['release_entry_ns'],
+            release_context=e['release_context']))
+    if matches and not any(m['release_entry_ns'] for m in matches): errors.append('no_observed_release')
+    return dict(status='FAIL' if errors else 'PASS',errors=errors,matches=matches,
+        recall=None,scope='send API truth bounds requester and cookie, not total skb allocation population')
