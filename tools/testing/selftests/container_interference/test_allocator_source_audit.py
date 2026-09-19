@@ -46,3 +46,22 @@ class AllocatorAudit(unittest.TestCase):
         self.assertEqual(result['totals']['free_irq'],2)
         self.assertEqual(result['declared_guard_bytes'],3)
         self.assertEqual(result['declared_counter_bytes'],96)
+
+    def timed(self,n=0):
+        row=self.snapshot(n)
+        row['source_audit']=row['source_audit'].replace('version=1 active=0','version=4 active=0 release_active=0').replace('bytes_per_cpu=48','bytes_per_cpu=120 guard_bytes_per_cpu=3')
+        row['source_audit']=row['source_audit'].rstrip()+(' free_entries=%d free_items=%d free_capped=0 free_nested=0 free_nmi=0 free_irq=%d free_callback_calls=%d free_callback_ns=%d free_callback_max_ns=9999\n'%(100*n,5*n,2*n,5*n,10000*n))
+        return row
+
+    def test_callback_timer_preserves_boot_max_not_delta(self):
+        r=delta(self.timed(),self.timed(1))
+        self.assertEqual(r['totals']['free_callback_calls'],5)
+        self.assertEqual(r['totals']['free_callback_ns'],10000)
+        self.assertNotIn('free_callback_max_ns',r['totals'])
+        self.assertEqual(r['callback_body_boot_high_water_ns'],9999)
+        self.assertEqual(r['declared_counter_bytes'],120)
+
+    def test_callback_count_and_maximum_reset_rejected(self):
+        for old,new in [('free_callback_calls=5','free_callback_calls=4'),('free_callback_max_ns=9999','free_callback_max_ns=9000')]:
+            b=self.timed(1); b['source_audit']=b['source_audit'].replace(old,new)
+            with self.assertRaises(ValueError): delta(self.timed(),b)
