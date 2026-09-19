@@ -50,5 +50,10 @@ class NativeOracle(unittest.TestCase):
         args=list(self.evidence()); args[-1]=dict(start_ns=3_500_000,end_ns=20_000_000)
         self.assertIn('truth_before_window',check(*args)['errors'])
 
+    def test_empty_negative_capture_cannot_pass(self):
+        for case in ('private','preWindow','overflow','nonOwner','tryFailure'):
+            args=list(self.evidence()); args[4]=case; args[0]['objects']=[]
+            self.assertIn('no_observed_fixture_operations',check(*args)['errors'])
+
 
 if __name__=='__main__': unittest.main()

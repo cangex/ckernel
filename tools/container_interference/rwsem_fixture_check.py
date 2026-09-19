@@ -50,6 +50,16 @@ def check(report, jobs, logs, identities, case, window):
             if positive and overlap>=1_000_000: eligible.append(pair)
     captured=set(); e2=[]
     objects={r['object'] for r in operations}
+    observed=[obj for obj in report['objects'] if obj['address'] in objects]
+    if not observed or not any(obj.get('waits') for obj in observed): errors.append('no_observed_fixture_operations')
+    if case=='overflow' and not any(obj.get('unknown',{}).get('reader_capacity',0)>0 for obj in observed):
+        errors.append('reader_overflow_not_observed')
+    if case=='nonOwner' and not any(obj.get('unknown',{}).get('non_owner_api',0)>0 for obj in observed):
+        errors.append('non_owner_api_not_observed')
+    if case=='preWindow' and not any(obj.get('init_ns')==0 and obj.get('waits') for obj in observed):
+        errors.append('pre_window_unknown_not_observed')
+    if case=='tryFailure' and not any(w.get('outcome')=='try_failed' for obj in observed for w in obj.get('waits',[])):
+        errors.append('try_failure_not_observed')
     for obj in report['objects']:
         if obj['address'] not in objects: continue
         generations=[r for r in resets if r['object']==obj['address'] and r['enter_ns']<=obj['init_ns']<=r['end_ns']]
