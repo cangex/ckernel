@@ -112,5 +112,13 @@ class RwsemReport(unittest.TestCase):
         self.assertEqual(expected_fields('7','rwsem')['rwsem'],'1')
         with self.assertRaises(ValueError): expected_fields('6','rwsem')
 
+    def test_incomplete_observed_lifecycle_does_not_promote(self):
+        rows=self.writer(); rows=[r for r in rows if r['phase']!=3]
+        self.assertFalse(self.run_rows(rows)[0]['attribution_eligible'])
+        rows=[self.row(1,1),self.row(2,13),self.row(3,3,2),self.row(8,6),self.row(10,5,2),self.row(12,7,2)]
+        obj=self.run_rows(rows)[0]
+        self.assertFalse(obj['attribution_eligible'])
+        self.assertEqual(obj['unknown']['downgrade_begin_not_observed'],1)
+
 
 if __name__=='__main__': unittest.main()

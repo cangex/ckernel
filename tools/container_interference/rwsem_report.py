@@ -34,7 +34,7 @@ def reconstruct(rows, known, stacks):
         if epoch and (len(init)!=1 or init[0]['sample_time_ns']!=epoch or events[0]!=init[0]):
             raise ValueError('unproven initialization identity')
         if not epoch and init: raise ValueError('zero initialization')
-        active, pending, holds, attempts = {}, {}, [], []
+        active, pending, holds, attempts, downgrading = {}, {}, [], [], set()
         unknown = Counter(); tainted = False
 
         def close(task, r, mode):
@@ -65,7 +65,9 @@ def reconstruct(rows, known, stacks):
                     if phase==16 and not p['trylock']: raise ValueError('try failure without try')
                     p.update(end_ns=now,outcome='acquired' if phase in (4,5) else 'try_failed' if phase==16 else 'aborted')
                     attempts.append(p)
-                else: unknown['begin_not_observed'] += 1
+                else:
+                    unknown['begin_not_observed'] += 1
+                    if epoch: tainted=True
                 if phase in (4,5):
                     mode = 'read' if phase==4 else 'write'
                     if task in active: raise ValueError('duplicate holder')
@@ -74,13 +76,21 @@ def reconstruct(rows, known, stacks):
                     if len(active)>=MAX_READERS:
                         tainted=True; unknown['reader_capacity']+=1
                     else: active[task]=dict(actor=actor,mode=mode,start_ns=now)
-            elif phase in (6,7,12): close(task,r,'read' if phase==6 else 'write')
+            elif phase in (6,7,12):
+                if phase==12:
+                    if task not in active: tainted=True
+                    downgrading.add(task)
+                close(task,r,'read' if phase==6 else 'write')
             elif phase==13:
+                if task not in downgrading:
+                    tainted=True; unknown['downgrade_begin_not_observed']+=1
+                downgrading.discard(task)
                 if task in active: raise ValueError('duplicate downgraded reader')
                 if len(active)>=MAX_READERS: tainted=True; unknown['reader_capacity']+=1
                 else: active[task]=dict(actor=actor,mode='read',start_ns=now)
         unknown['unclosed_holds'] += len(active)
         unknown['unfinished_attempts'] += len(pending)
+        unknown['unfinished_downgrade'] += len(downgrading)
         waits=[]
         for p in attempts:
             pairs=[]
