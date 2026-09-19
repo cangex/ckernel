@@ -7,16 +7,19 @@ does not acquire a parent-bio lifetime from that truth, nor infer a device owner
 import re
 
 CASES = {'plain': 0, 'split': 1, 'cancel': 2, 'error': 3}
+INFLIGHT_CASES = {'abort': 4, 'drain': 5}
 
 
-def case_order():
-    return [f'{case}-{mode}-r{r}' for r in range(1, 4) for case in CASES
+def case_order(inflight=False):
+    return [f'{case}-{mode}-r{r}' for r in range(1, 4) for case in (INFLIGHT_CASES if inflight else CASES)
             for mode in (('off', 'block') if r % 2 else ('block', 'off'))]
 
 
 def check_case(case, window, logs, report=None, identities=None):
-    scenario = CASES[case]; defects = []; used = set(); total = 0
-    count = 0 if scenario == 2 else 1 if scenario == 0 else 2
+    scenario = (INFLIGHT_CASES if case in INFLIGHT_CASES else CASES)[case]
+    defects = []; used = set(); total = 0
+    inflight = scenario >= 4; failed = scenario in (3, 4); canceled_expected = scenario in (2, 4)
+    count = 0 if scenario == 2 else 1 if scenario == 0 or inflight else 2
     for role, text in enumerate(logs):
         pids = re.findall(r'CIS_SESSION_CONTAINER host_pid=(\d+)', text)
         jobs = re.findall(r'CIS_LIFECYCLE_JOB role=(\d+) scenario=(\d+) begin_ns=(\d+) end_ns=(\d+) rc=(-?\d+) original_bio=(\d+) bytes=(\d+) requests=(\d+) completed=(\d+) io_errors=(\d+) canceled=(\d+) verified=(\d+)', text)
@@ -24,11 +27,22 @@ def check_case(case, window, logs, report=None, identities=None):
         if len(pids) != 1 or len(jobs) != 1:
             defects.append('job_protocol'); continue
         who, scen, lo, hi, rc, parent, size, requests, completed, errors, canceled, verified = map(int, jobs[0])
-        if (who != role or scen != scenario or rc or not parent or size != (4096 if scenario == 0 else 8192)
+        if (who != role or scen != scenario or rc or not parent or size != (4096 if scenario == 0 or inflight else 8192)
                 or requests != count or len(truth) != count or completed != (scenario != 2)
-                or errors != (scenario == 3) or canceled != (scenario == 2) or verified != 1
+                or errors != failed or canceled != canceled_expected or verified != 1
                 or not window['start_ns'] <= lo < hi <= window['end_ns']):
             defects.append('job_truth'); continue
+        intervals = re.findall(r'CIS_LIFECYCLE_INFLIGHT submit_return_ns=(\d+) finish_begin_ns=(\d+) finish_end_ns=(\d+) pending_seen=(\d+) started_seen=(\d+)', text)
+        pending_interval = None
+        if inflight:
+            if len(intervals) != 1:
+                defects.append('inflight_truth_missing'); continue
+            returned, finish_begin, finish_end, pending_seen, started_seen = map(int, intervals[0])
+            if (not lo <= returned <= finish_begin < finish_end <= hi or pending_seen != 1 or started_seen != 1):
+                defects.append('not_observed_inflight'); continue
+            pending_interval = (finish_begin, finish_end)
+        elif intervals:
+            defects.append('unexpected_inflight_truth')
         if (sum(t[5] for t in truth) != count * 4096 or
                 sorted(t[4] for t in truth) != [(1 + role * 32) * 8 + n * 8 for n in range(count)]):
             defects.append('byte_or_sector_conservation')
@@ -36,8 +50,10 @@ def check_case(case, window, logs, report=None, identities=None):
             defects.append('independent_split_truth')
         total += count
         for address, bio, begin, end, sector, nbytes, status in truth:
-            if not address or not bio or not lo <= begin < end <= hi or nbytes != 4096 or bool(status) != (scenario == 3):
+            if not address or not bio or not lo <= begin < end <= hi or nbytes != 4096 or bool(status) != failed:
                 defects.append('driver_truth')
+            if inflight and (bio != parent or not begin < finish_begin <= end <= finish_end):
+                defects.append('inflight_driver_lifetime')
             if report is None: continue
             owner = [identities[role]['id'], identities[role]['generation']]
             tid = (int(pids[0]) << 32) | int(pids[0])
@@ -47,6 +63,10 @@ def check_case(case, window, logs, report=None, identities=None):
             if len(matches) != 1:
                 defects.append('request_truth_missing'); continue
             row = matches[0]; key = (row['request'], row['episode_ns']); used.add(key)
+            if pending_interval and (len(row['service_intervals']) != 1 or
+                    not row['service_intervals'][0]['interval_ns'][0] <= pending_interval[0] <
+                    row['episode_interval_ns'][1] <= pending_interval[1]):
+                defects.append('inflight_completion_boundary')
             if (row['terminal'] != 'data_completion' or row['initial_bio'] != bio or row['initial_bytes'] != nbytes
                     or row['operation'] & 255 != 1 or row['queue_intervals_ns'] and any(a > b for a,b in row['queue_intervals_ns'])
                     or sum(c['bytes'] for c in row['completions']) != nbytes or
@@ -63,12 +83,14 @@ def check_case(case, window, logs, report=None, identities=None):
         if any(r['blocking_container'] is not None for r in report['requests']): defects.append('false_blocker')
     return dict(status='FAIL' if defects else 'PASS', errors=sorted(set(defects)), driver_requests=total,
                 request_bytes=total*4096, canceled_before_submit=scenario == 2,
+                driver_aborted_inflight=scenario == 4, deferred_normal_completion=scenario == 5,
                 parent_bio_relation='FIXTURE_TRUTH_ONLY_NOT_PRODUCTION_ATTRIBUTION',
-                scope='native split child requests and error completion; pre-submit cancellation is not in-flight cancellation')
+                scope=('driver-owned started request abort/drain; production report only proves completion status, not cancellation intent'
+                       if inflight else 'native split child requests and error completion; pre-submit cancellation is not in-flight cancellation'))
 
 
 def check_counters(case, before, after, result):
     delta = {k:after[k]-before[k] for k in before}
     expected = dict(requests=result['driver_requests'], completions=result['driver_requests'], requeues=0, partials=0,
-                    errors=result['driver_requests'] if case == 'error' else 0)
+                    errors=result['driver_requests'] if case in ('error', 'abort') else 0)
     return dict(status='PASS' if delta == expected else 'FAIL', delta=delta, expected=expected)

@@ -30,6 +30,10 @@ int main(int argc, char **argv)
 	       job.role, job.scenario, begin, end, rc, (unsigned long long)job.original_bio,
 	       job.bytes, job.requests, job.completed, job.io_errors, job.canceled, job.verified);
 	if (rc || job.requests > CIS_LIFECYCLE_MAX || !job.verified) return 4;
+	if (job.scenario >= 4)
+		printf("CIS_LIFECYCLE_INFLIGHT submit_return_ns=%llu finish_begin_ns=%llu finish_end_ns=%llu pending_seen=%u started_seen=%u\n",
+		       (unsigned long long)job.submit_return_ns, (unsigned long long)job.finish_begin_ns,
+		       (unsigned long long)job.finish_end_ns, job.pending_seen, job.started_seen);
 	for (unsigned int i = 0; i < job.requests; i++) {
 		struct cis_lifecycle_truth *t = &job.truth[i];
 		printf("CIS_LIFECYCLE_RQ request=%llu bio=%llu begin_ns=%llu end_ns=%llu sector=%llu bytes=%u status=%u\n",

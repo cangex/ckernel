@@ -2,7 +2,7 @@
 import re
 
 CASES=('shared','private')
-FIXTURES=('requeue','partial','merge','merge-scheduler','lifecycle')
+FIXTURES=('requeue','partial','merge','merge-scheduler','lifecycle','inflight')
 COUNTERS=('requests','requeues','partials','completions','errors')
 
 

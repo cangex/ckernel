@@ -85,6 +85,11 @@ CONTRACT={
         object='请求episode；原始bio关系仅由独立fixture核验，不冒充生产采集能力',
         participants='提交任务与bio计费身份；取消未提交时不得出现请求或阻塞关系',
         pending=['尚未覆盖在途请求取消与任意叠加设备拆分','完整生产bio父子生命周期未知','固定设备错误不等于真实硬件故障覆盖']),
+    'block_inflight': dict(name='驱动已接收请求的终止与正常完成',collector='block',
+        discovered='实际started请求、提交返回、终止前未完成与最终错误或成功完成',
+        object='请求episode与独立驱动真值，不是通用取消意图采集',
+        participants='提交任务及bio计费身份；终止意图仅由fixture证明，不推断设备阻塞方',
+        pending=['设备驱动终止不代表任意io_uring/AIO取消','完整生产bio父子生命周期未知','不推断真实设备内部服务或故障原因']),
     'writeback': dict(name='缓冲写回计费与执行分离',collector='block',
         discovered='原生ext4后台提交的请求、bio计费容器与实际执行线程',
         object='请求episode和bio计费身份，不是完整inode生命周期',
@@ -129,6 +134,7 @@ VERIFIERS={
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
     'block_merge':('block_vm_check','block_merge',{}),
     'block_lifecycle':('block_vm_check','block_lifecycle',{}),
+    'block_inflight':('block_vm_check','block_inflight',{}),
     'writeback':('writeback_vm_check','writeback',{}),
     'writeback_inode':('writeback_vm_check','writeback_inode',{}),
     'routing':('diagnosis_vm_check','routing',{}),
@@ -211,6 +217,15 @@ def replay(index,base,output):
                 raise ValueError('native merge truth cohort required')
             if key=='block_lifecycle' and checked.get('fixture')!='lifecycle':
                 raise ValueError('native split/error/presubmit cancellation truth required')
+            if key=='block_inflight':
+                selected=[v for v in checked.get('states',[]) if '-block-' in v.get('label','')]
+                if (checked.get('fixture')!='inflight' or len(selected)!=6 or
+                        any(v.get('result',{}).get('driver_requests')!=2 or
+                            v['result'].get('canceled_before_submit') is not False or
+                            v['result'].get('driver_aborted_inflight') != v['label'].startswith('abort-') or
+                            v['result'].get('deferred_normal_completion') != v['label'].startswith('drain-')
+                            for v in selected)):
+                    raise ValueError('started pending request termination and normal drain required')
             if key=='writeback_inode':
                 states=checked.get('states',[])
                 selected=[v for v in states if '-block-' in v.get('label','')]

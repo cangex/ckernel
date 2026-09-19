@@ -12,6 +12,8 @@ struct cis_lifecycle_test {
 	__u32 role, scenario, reserved[2];
 	__u64 original_bio;
 	__u32 bytes, requests, completed, io_errors, canceled, verified;
+	__u64 submit_return_ns, finish_begin_ns, finish_end_ns;
+	__u32 pending_seen, started_seen;
 	struct cis_lifecycle_truth truth[CIS_LIFECYCLE_MAX];
 };
 #define CIS_LIFECYCLE_RUN _IOWR(0xda, 2, struct cis_lifecycle_test)

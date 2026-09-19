@@ -15,7 +15,7 @@
 
 static unsigned int test_mode;
 module_param(test_mode, uint, 0444);
-MODULE_PARM_DESC(test_mode, "1=requeue, 2=partial, 3=plug bio merges, 4=scheduler request merges, 5=split/error/presubmit cancel");
+MODULE_PARM_DESC(test_mode, "1=requeue, 2=partial, 3=plug bio merges, 4=scheduler request merges, 5=split/error/presubmit cancel, 6=inflight abort/drain");
 static bool disposable_vm;
 module_param(disposable_vm, bool, 0444);
 
@@ -34,6 +34,8 @@ module_param_cb(errors, &counter_ops, &errors, 0444);
 struct cis_lifecycle_job {
 	struct cis_lifecycle_test output;
 	struct completion done;
+	struct completion dispatched;
+	struct request *pending;
 };
 struct cis_disk {
 	struct blk_mq_tag_set tags;
@@ -76,7 +78,7 @@ static blk_status_t cis_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct cis_lifecycle_job *job = READ_ONCE(disk->active_job);
 	struct cis_lifecycle_truth *life = NULL;
 
-	if (test_mode == 5 && job) {
+	if (test_mode >= 5 && job) {
 		unsigned int index = job->output.requests++;
 
 		if (index < CIS_LIFECYCLE_MAX) {
@@ -126,6 +128,13 @@ static blk_status_t cis_queue_rq(struct blk_mq_hw_ctx *hctx,
 		result = BLK_STS_IOERR;
 		goto complete;
 	}
+	if (test_mode == 6 && job && life) {
+		/* The driver owns this started request until the ioctl explicitly
+		 * terminates it. No observation hook supplies the independent truth. */
+		job->pending = rq;
+		complete(&job->dispatched);
+		return BLK_STS_OK;
+	}
 	/* Actors use disjoint sectors. This fixture asserts no device blocker. */
 	rq_for_each_segment(bvec, rq, iter) {
 		void *address = kmap_local_page(bvec.bv_page);
@@ -150,6 +159,7 @@ complete:
 	cmd->requeued = false;
 	atomic64_inc(&completions);
 	blk_mq_end_request(rq, result);
+	if (test_mode == 6 && job) complete(&job->dispatched);
 	return BLK_STS_OK;
 }
 
@@ -199,14 +209,16 @@ static int cis_lifecycle_ioctl(struct block_device *bdev, blk_mode_t mode,
 		error = -EFAULT; goto out;
 	}
 	scenario = job->output.scenario; role = job->output.role;
-	if (role > 1 || scenario > 3 || job->output.reserved[0] || job->output.reserved[1]) {
+	if (role > 1 || (test_mode == 5 ? scenario > 3 : scenario < 4 || scenario > 5) ||
+	    job->output.reserved[0] || job->output.reserved[1]) {
 		error = -EINVAL; goto out;
 	}
 	memset(&job->output, 0, sizeof(job->output));
 	job->output.role = role; job->output.scenario = scenario;
-	n = scenario ? 2 : 1;
+	n = scenario > 0 && scenario < 4 ? 2 : 1;
 	job->output.bytes = n * 4096;
 	init_completion(&job->done);
+	init_completion(&job->dispatched);
 	bio = bio_alloc(bdev, n, REQ_OP_WRITE, GFP_KERNEL);
 	if (!bio) goto out;
 	for (i = 0; i < n; i++) {
@@ -227,12 +239,38 @@ static int cis_lifecycle_ioctl(struct block_device *bdev, blk_mode_t mode,
 	} else {
 		WRITE_ONCE(disk->active_job, job);
 		submit_bio(bio);
+		if (test_mode == 6) {
+			struct request *rq;
+			blk_status_t status = scenario == 4 ? BLK_STS_IOERR : BLK_STS_OK;
+
+			job->output.submit_return_ns = ktime_get_ns();
+			wait_for_completion(&job->dispatched);
+			rq = job->pending;
+			job->output.pending_seen = rq && !completion_done(&job->done);
+			if (rq) {
+				job->output.started_seen = blk_mq_request_started(rq);
+				job->output.finish_begin_ns = ktime_get_ns();
+				if (scenario == 5)
+					memcpy(disk->data + (1 + role * 32) * 4096,
+					       page_address(pages[0]), 4096);
+				else {
+					job->output.canceled = 1;
+					atomic64_inc(&errors);
+				}
+				job->output.truth[0].end_ns = ktime_get_ns();
+				job->output.truth[0].status = status;
+				job->pending = NULL;
+				atomic64_inc(&completions);
+				blk_mq_end_request(rq, status);
+				job->output.finish_end_ns = ktime_get_ns();
+			}
+		}
 		wait_for_completion(&job->done);
 		WRITE_ONCE(disk->active_job, NULL);
 	}
 	job->output.verified = 1;
 	for (i = 0; i < n * 4096; i++) {
-		unsigned char expected = scenario >= 2 ? 0 : 0x53 + role;
+		unsigned char expected = scenario >= 2 && scenario <= 4 ? 0 : 0x53 + role;
 
 		if (((unsigned char *)disk->data)[(1 + role * 32) * 4096 + i] != expected)
 			job->output.verified = 0;
@@ -257,7 +295,7 @@ static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 	unsigned int i, n, block;
 	int error = -ENOMEM;
 
-	if (test_mode == 5 && command == CIS_LIFECYCLE_RUN)
+	if (test_mode >= 5 && command == CIS_LIFECYCLE_RUN)
 		return cis_lifecycle_ioctl(bdev, mode, arg);
 	if ((test_mode != 3 && test_mode != 4) || command != CIS_MERGE_RUN) return -ENOTTY;
 	if (!(mode & BLK_OPEN_WRITE)) return -EPERM;
@@ -345,7 +383,7 @@ static int cis_add_disk(struct cis_disk *d, unsigned int index)
 	blk_queue_logical_block_size(d->disk->queue, 512);
 	blk_queue_max_hw_sectors(d->disk->queue, (test_mode == 3 || test_mode == 4) ? 128 : 8);
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, d->disk->queue);
-	if (test_mode < 3 || test_mode == 5) blk_queue_flag_set(QUEUE_FLAG_NOMERGES, d->disk->queue);
+	if (test_mode < 3 || test_mode >= 5) blk_queue_flag_set(QUEUE_FLAG_NOMERGES, d->disk->queue);
 	set_capacity(d->disk, CIS_BYTES >> SECTOR_SHIFT);
 	error = add_disk(d->disk);
 	if (!error)
@@ -372,7 +410,7 @@ static int __init cis_init(void)
 {
 	int error;
 
-	if (!disposable_vm || (test_mode < 1 || test_mode > 5))
+	if (!disposable_vm || (test_mode < 1 || test_mode > 6))
 		return -EINVAL;
 	major = register_blkdev(0, "cisblock");
 	if (major < 0)

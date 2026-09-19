@@ -12,7 +12,7 @@ echo '+cpu +memory +pids +cpuset +io' > /sys/fs/cgroup/cgroup.subtree_control
 echo 1 > /proc/sys/kernel/sched_schedstats
 touch /cis-disposable-vm
 mode=$(cat /profile/block-fixture-mode)
-case "$mode" in requeue) number=1;; partial) number=2;; merge) number=3;; merge-scheduler) number=4;; lifecycle) number=5;; *) poweroff -f; exit 90;; esac
+case "$mode" in requeue) number=1;; partial) number=2;; merge) number=3;; merge-scheduler) number=4;; lifecycle) number=5;; inflight) number=6;; *) poweroff -f; exit 90;; esac
 if ! insmod /cis_block_fixture.ko disposable_vm=1 test_mode="$number"; then
     echo CIS_PROFILE_VM_EXIT=91
     poweroff -f

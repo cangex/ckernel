@@ -20,12 +20,12 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     fixture=plan.get('fixture')
     merging=fixture in ('merge','merge-scheduler'); scheduler=fixture=='merge-scheduler'
-    lifecycle=fixture=='lifecycle'
+    lifecycle=fixture in ('lifecycle','inflight'); inflight=fixture=='inflight'
     if fixture is not None and fixture not in FIXTURES: raise ValueError('fixture mode')
     output.mkdir(mode=0o700); errors=[]; states=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_BLOCK_DEVICE_UNLOAD=0' not in text.splitlines(): errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
-    order=block_lifecycle_check.case_order() if lifecycle else block_merge_check.case_order(scheduler) if merging else case_order()
+    order=block_lifecycle_check.case_order(inflight) if lifecycle else block_merge_check.case_order(scheduler) if merging else case_order()
     if (plan.get('order')!=order or plan.get('rounds')!=3 or
             plan.get('operations_per_actor')!=(None if merging or lifecycle else 8) or
             plan.get('device_bytes')!=16<<20 or plan.get('direct') is not (not (merging or lifecycle)) or plan.get('bytes_per_io')!=4096 or
@@ -34,7 +34,8 @@ def verify(serial,output):
     if merging and plan.get('cases')!={k:list(v) for k,v in cases.items()}:
         errors.append('merge_cases')
     if scheduler and plan.get('scheduler')!='mq-deadline': errors.append('scheduler_plan')
-    if lifecycle and (plan.get('cases')!=block_lifecycle_check.CASES or plan.get('queue_max_bytes')!=4096):
+    life_cases=block_lifecycle_check.INFLIGHT_CASES if inflight else block_lifecycle_check.CASES
+    if lifecycle and (plan.get('cases')!=life_cases or plan.get('queue_max_bytes')!=4096):
         errors.append('lifecycle_plan')
     if plan.get('devices')!=(['/dev/cisblock0','/dev/cisblock1'] if fixture else ['/dev/vda','/dev/vdb']):
         errors.append('device_plan')

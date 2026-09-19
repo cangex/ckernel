@@ -21,7 +21,7 @@ import block_lifecycle_check
 def run(fixture=None):
     if fixture is not None and fixture not in FIXTURES: raise ValueError('fixture mode')
     merging=fixture in ('merge','merge-scheduler'); scheduler=fixture=='merge-scheduler'
-    lifecycle=fixture=='lifecycle'
+    lifecycle=fixture in ('lifecycle','inflight'); inflight=fixture=='inflight'
     merge_cases=block_merge_check.SCHEDULER_CASES if scheduler else block_merge_check.CASES
     os.umask(0o077); os.sched_setaffinity(0,{7})
     if not Path('/cis-disposable-vm').exists(): raise PermissionError('disposable VM only')
@@ -48,9 +48,10 @@ def run(fixture=None):
         plan.update(order=block_merge_check.case_order(scheduler),direct=False,operations_per_actor=None,
                     mechanism='native submit_bio with plug; independent driver request truth',cases=merge_cases)
     if lifecycle:
-        plan.update(order=block_lifecycle_check.case_order(),direct=False,operations_per_actor=None,
-                    cases=block_lifecycle_check.CASES,queue_max_bytes=4096,
-                    mechanism='native 8KiB bio split at 4KiB device limit; independent driver truth; presubmit cancellation')
+        plan.update(order=block_lifecycle_check.case_order(inflight),direct=False,operations_per_actor=None,
+                    cases=block_lifecycle_check.INFLIGHT_CASES if inflight else block_lifecycle_check.CASES,queue_max_bytes=4096,
+                    mechanism=('driver-owned started request abort/drain after submission; independent truth'
+                               if inflight else 'native 8KiB bio split at 4KiB device limit; independent driver truth; presubmit cancellation'))
     if scheduler:
         for name in ('cisblock0','cisblock1'):
             path=Path('/sys/block')/name/'queue/scheduler'; path.write_text('mq-deadline')
@@ -116,7 +117,7 @@ def run(fixture=None):
                     command += [str(v) for v in merge_cases[case]]
                 if lifecycle:
                     command[3]='/block_lifecycle_workload'
-                    command += [str(block_lifecycle_check.CASES[case])]
+                    command += [str(plan['cases'][case])]
                 child=subprocess.Popen(command,
                     stdout=handle,stderr=handle,pass_fds=(fd,))
                 children.append(child); running.append(child)

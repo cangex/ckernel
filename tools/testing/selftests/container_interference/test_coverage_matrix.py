@@ -9,6 +9,21 @@ from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown,replay
 
 
 class CoverageTests(unittest.TestCase):
+    def test_presubmit_cancellation_cannot_certify_inflight_abort(self):
+        checked=dict(status='PASS',fixture='inflight',states=[dict(label='%s-block-r%d'%(case,i),
+            result=dict(driver_requests=2,canceled_before_submit=False,driver_aborted_inflight=case=='abort',
+                        deferred_normal_completion=case=='drain')) for case in ('abort','drain') for i in range(1,4)])
+        module=SimpleNamespace(__file__=__file__,verify=lambda *a,**k:checked)
+        with tempfile.TemporaryDirectory() as tmp,patch('coverage_matrix.importlib.import_module',return_value=module):
+            base=Path(tmp); (base/'serial.log').write_bytes(b'fixture')
+            row=dict(name='inflight',serial='serial.log',sha256=hashlib.sha256(b'fixture').hexdigest())
+            def check(kind,name):
+                return replay(dict(schema='cis-coverage-input-v1',cohorts=[dict(row,verifier=kind)]),base,base/name)['evidence'][0]['status']
+            self.assertEqual(check('block_inflight','inflight'),'PASS_SCOPED')
+            self.assertEqual(check('block_lifecycle','not-presubmit'),'FAIL')
+            checked['fixture']='lifecycle'
+            self.assertEqual(check('block_inflight','not-inflight'),'FAIL')
+
     def test_cpu_guard_is_not_socket_owner_validation(self):
         checked=dict(status='PASS',states=[dict(label='storm-net%d'%i,
             result=dict(reason='COMBINED_PROCESS_CPU_CAPTURING',post_detach_operations=[100,100])) for i in range(3)])
