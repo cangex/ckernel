@@ -4,6 +4,7 @@ from owner_report import fields
 
 CASES=('shared','private','switch')
 RIGHTS_CASES=('rightsShared','rightsPrivate')
+ORIGIN_CASES=RIGHTS_CASES+('rightsAccept',)
 
 
 def case_order(cases=CASES):
@@ -11,12 +12,12 @@ def case_order(cases=CASES):
             for mode in (('off','net') if r%2==0 else ('net','off'))]
 
 
-def check_case(case,window,logs,report=None,identities=None):
+def check_case(case,window,logs,report=None,identities=None,require_origin=False):
     if case=='backlog':
         from net_backlog_check import check_backlog
         return check_backlog(window,logs,report,identities)
-    if case not in CASES+RIGHTS_CASES or len(logs)!=2: raise ValueError('fixture case')
-    private=case in ('private','rightsPrivate'); switching=case=='switch' or case in RIGHTS_CASES
+    if case not in CASES+ORIGIN_CASES or len(logs)!=2: raise ValueError('fixture case')
+    private=case in ('private','rightsPrivate'); switching=case=='switch' or case in ORIGIN_CASES
     errors=[]; truth=[]; pids=[]
     for actor,log in enumerate(logs):
         pid=[fields(line)['host_pid'] for line in log.splitlines() if line.startswith('CIS_SESSION_CONTAINER ')]
@@ -42,7 +43,7 @@ def check_case(case,window,logs,report=None,identities=None):
             if h['cookie']==w['cookie'] and h['acquired_ns']<w['enter_ns']<h['release_begin_ns']:
                 eligible.append((holder,waiter,i,h,w))
         if len(eligible)!=(0 if private else 4): errors.append('truth_overlap_incomplete')
-    if case in RIGHTS_CASES:
+    if case in ORIGIN_CASES:
         transfers=[[fields(v) for v in log.splitlines() if v.startswith('CIS_NET_RIGHTS ')] for log in logs]
         if any(len(v)!=1 for v in transfers): errors.append('missing_rights_transfer')
         else:
@@ -53,6 +54,35 @@ def check_case(case,window,logs,report=None,identities=None):
                 (b.get('used_cookie')==a['sent_cookie'])==private): errors.append('wrong_rights_transfer')
             if any(not group or any(r['cookie']!=x.get('used_cookie') for r in group) for group,x in zip(truth,(a,b))):
                 errors.append('used_socket_not_transferred_selection')
+    origin_matches=[]; origin_expected=0
+    if require_origin:
+        origins=[[fields(line) for line in log.splitlines() if line.startswith('CIS_NET_ORIGIN ')] for log in logs]
+        expected=[[1,1,2],[]] if case=='rightsAccept' else [[1],[1] if private else []]
+        if [[v.get('operation') for v in group] for group in origins]!=expected:
+            errors.append('origin_truth_shape')
+        for index,group in enumerate(origins):
+            for row in group:
+                origin_expected+=1
+                if not row.get('cookie') or not window['start_ns']<=row.get('begin_ns',-1)<=row.get('end_ns',-1)<=window['end_ns']:
+                    errors.append('origin_truth_window'); continue
+                if report is None: continue
+                matching=[s for s in report['sockets'] if s['cookie']==row['cookie']]
+                field='creation_observation' if row['operation']==1 else 'accept_observation'
+                if len(matching)!=1 or not matching[0].get(field):
+                    errors.append('origin_not_observed'); continue
+                fact=matching[0][field]; ident=identities[index]; who=fact['actor']
+                if (fact['evidence']!='E2' or not who or who[:2]!=[ident['id'],ident['generation']]
+                    or who[2]&0xffffffff!=pids[index] or not row['begin_ns']<=fact['time_ns']<=row['end_ns']):
+                    errors.append('wrong_origin_actor_or_time'); continue
+                if row['operation']==2 and matching[0]['creation_owner']!='UNOBSERVED':
+                    errors.append('accept_falsely_claimed_creation'); continue
+                origin_matches.append(dict(cookie=row['cookie'],operation=row['operation'],actor=index))
+        if report is not None:
+            expected_facts={(row['cookie'],row['operation']) for group in origins for row in group}
+            for sock in report['sockets']:
+                for operation,field in ((1,'creation_observation'),(2,'accept_observation')):
+                    if sock.get(field) and (sock['cookie'],operation) not in expected_facts:
+                        errors.append('unexpected_origin')
     if report is not None:
         if report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS' or report['excluded']:
             errors.append('capture_quality')
@@ -77,5 +107,6 @@ def check_case(case,window,logs,report=None,identities=None):
                            w['enter_ns']<=wait['interval_ns'][0]<=wait['interval_ns'][1]<=w['acquired_ns']
                            for holder,waiter,_,h,w in eligible): errors.append('false_cross_container_relation')
     return dict(status='FAIL' if errors else 'PASS',errors=errors,eligible=len(eligible),captured=len(matches),
+                origin_expected=origin_expected,origin_captured=len(origin_matches),origin_matches=origin_matches,
                 recall=len(matches)/len(eligible) if eligible and report is not None else None,
                 truth=truth,matches=matches,scope='bounded native TCP logical lock fixture, not production coverage')

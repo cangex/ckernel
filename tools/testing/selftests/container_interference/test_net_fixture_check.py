@@ -67,3 +67,25 @@ class NetFixture(unittest.TestCase):
             self.assertEqual(result['captured'],4 if case=='rightsShared' else 0)
             args[1][1]=args[1][1].replace('received_cookie=10','received_cookie=99')
             self.assertIn('wrong_rights_transfer',check_case(case,*args)['errors'])
+
+    def origin_fixture(self):
+        window,logs,report,ids=self.fixture('rightsShared')
+        logs[0]+='\nCIS_NET_ORIGIN operation=1 cookie=10 begin_ns=1 end_ns=9'
+        waits=[wait for sock in report['sockets'] for wait in sock['waits']]
+        report['sockets']=[dict(cookie=10,socket_address=20,waits=waits,creation_owner=[1,1,100,1],
+            creation_observation=dict(actor=[1,1,100,1],evidence='E2',time_ns=5),accept_observation=None)]
+        return window,logs,report,ids
+
+    def test_origin_truth_is_required_and_transferred_user_not_creator(self):
+        args=self.origin_fixture()
+        result=check_case('rightsShared',*args,require_origin=True)
+        self.assertEqual(result['status'],'PASS',result)
+        self.assertEqual(result['origin_captured'],1)
+        args[2]['sockets'][0]['creation_observation']['actor']=[2,1,101,1]
+        self.assertIn('wrong_origin_actor_or_time',check_case('rightsShared',*args,require_origin=True)['errors'])
+
+    def test_missing_origin_or_truth_not_accepted_as_unknown_success(self):
+        args=self.origin_fixture(); args[2]['sockets'][0]['creation_observation']=None
+        self.assertIn('origin_not_observed',check_case('rightsShared',*args,require_origin=True)['errors'])
+        args=self.origin_fixture(); args[1][0]=args[1][0].split('\nCIS_NET_ORIGIN')[0]
+        self.assertIn('origin_truth_shape',check_case('rightsShared',*args,require_origin=True)['errors'])

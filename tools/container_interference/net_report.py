@@ -64,7 +64,7 @@ def ownership(rows):
 def queues(rows):
     groups=defaultdict(list); unknown=Counter(); results=[]; bad=False
     for row in rows:
-        if row['phase']<=5: continue
+        if not 6<=row['phase']<=9: continue
         if not row['skb'] or not row['queue_ns']:
             bad=True; unknown['missing_queue_instance']+=1; continue
         groups[(row['skb'],row['queue_ns'])].append(row)
@@ -100,6 +100,28 @@ def queues(rows):
     return results,dict(unknown),bad
 
 
+def provenance(rows):
+    result=dict(creation_owner='UNOBSERVED',creation_observation=None,accept_observation=None)
+    for phase,field in ((10,'creation_observation'),(11,'accept_observation')):
+        found=[r for r in rows if r['phase']==phase]
+        if len(found)>1:
+            return result,True
+        if not found: continue
+        row=found[0]; who=actor(row)
+        if row['context'] or any(row[k] for k in ('skb','queue_ns','bytes','packet_flags')):
+            return result,True
+        identity=list(who) if all(who) else None
+        result[field]=dict(actor=identity,time_ns=row['sample_time_ns'],
+            evidence='E2' if identity else 'E1',
+            boundary='protocol_and_LSM_create_succeeded' if phase==10 else 'user_accept_operation_succeeded',
+            scope='observed task, not memcg billing owner or permanent exclusive user')
+        if phase==10 and identity: result['creation_owner']=identity
+    # A passive TCP child is not the userspace-created listening socket.
+    if result['creation_observation'] and result['accept_observation']:
+        return result,True
+    return result,False
+
+
 def analyze(record,raw):
     if record.get('collector')!='net' or len(raw)>16<<20: raise ValueError('bounded net capture required')
     base=explain(record,raw); scope=audit(record,raw); excluded=Counter(); groups=defaultdict(list); stacks={}; stack_errors=Counter()
@@ -114,7 +136,8 @@ def analyze(record,raw):
         count+=1
         if count>16384: excluded['report_capacity']+=1; continue
         if (not REQUIRED<=d.keys() or any(type(d[k]) is not int or d[k]<0 for k in REQUIRED-{'stack_id'})
-                or d['stack_id'] < -4095 or d['protocol']!=1 or not 1<=d['phase']<=9 or d['context'] not in (0,1,2)
+                or type(d['stack_id']) is not int or d['stack_id'] < -4095
+                or d['protocol']!=1 or not 1<=d['phase']<=11 or d['context'] not in (0,1,2)
                 or not d['cookie'] or not d['socket'] or not d['netns'] or d['packet_flags'] & ~7):
             excluded['schema']+=1; continue
         who=actor(d)
@@ -136,7 +159,8 @@ def analyze(record,raw):
                 excluded['cookie_identity_changed']+=1; continue
             waits,owner_unknown,owner_bad=ownership(rows)
             backlog,queue_unknown,queue_bad=queues(rows)
-            if owner_bad or queue_bad:
+            origins,origin_bad=provenance(rows)
+            if owner_bad or queue_bad or origin_bad:
                 excluded['socket_stream_invalid']+=1
             for wait in waits:
                 stack_id=wait.pop('stack_id')
@@ -144,7 +168,7 @@ def analyze(record,raw):
                 wait['stack_capture_error']=stack_id if stack_id<0 else None
                 wait['stack_status']='AVAILABLE' if wait['stack_leaf_to_root'] else 'UNAVAILABLE'
             sockets.append(dict(cookie=cookie,socket_address=rows[0]['socket'],netns=rows[0]['netns'],
-                creation_owner='UNOBSERVED',
+                **origins,
                 lifetime='native_socket_cookie',waits=waits if not owner_bad else [],
                 backlog=backlog if not queue_bad else [],owner_unknown=owner_unknown,queue_unknown=queue_unknown,
                 observed_actors=[list(a) for a in sorted({actor(r) for r in rows if all(actor(r))})]))

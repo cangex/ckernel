@@ -159,10 +159,10 @@ int net_state(struct bpf_raw_tracepoint_args *ctx)
 	u64 now = BPF_CORE_READ(sample, time_ns), cookie = BPF_CORE_READ(sample, cookie);
 	u32 phase = BPF_CORE_READ(sample, phase), context = BPF_CORE_READ(sample, context);
 	COUNT(s, received);
-	if (!cookie || context > 2 || phase < 1 || phase > 8) { COUNT(s, rejected); return 0; }
+	if (!cookie || context > 2 || phase < 1 || phase > 11 || phase == 9) { COUNT(s, rejected); return 0; }
 	net_actor(&e, context);
 	watch = bpf_map_lookup_elem(&net_watched, &cookie);
-	if (!watch && phase <= 5 && e.actor_id) {
+	if (!watch && (phase <= 5 || phase == 10 || phase == 11) && e.actor_id) {
 		struct cis_identity actor = { .id = e.actor_id, .generation = e.actor_generation };
 		struct cis_target *target;
 		if (!allowed(&actor, CIS_DIAG_NET, now)) return 0;

@@ -1596,6 +1596,8 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	if (err)
 		goto out_sock_release;
 	*res = sock;
+	if (!kern && sock->sk)
+		cis_net_event(sock->sk, NULL, CIS_CN_CREATED);
 
 	return 0;
 
@@ -1956,6 +1958,8 @@ struct file *do_accept(struct file *file, unsigned file_flags,
 	}
 
 	/* File flags are not inherited via accept() unlike another OSes. */
+	if (newsock->sk)
+		cis_net_event(newsock->sk, NULL, CIS_CN_ACCEPTED);
 	return newfile;
 out_fd:
 	fput(newfile);

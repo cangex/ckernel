@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from net_fixture_check import CASES,RIGHTS_CASES,case_order,check_case
+from net_fixture_check import CASES,RIGHTS_CASES,ORIGIN_CASES,case_order,check_case
 from net_report import analyze
 from net_source_audit import delta
 from prototype_admission import SOURCE_KEYS
@@ -19,9 +19,10 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     cases=tuple(plan.get('cases',[]))
-    if cases not in (CASES,RIGHTS_CASES,('backlog',)): raise ValueError('unsupported frozen case set')
-    if cases==RIGHTS_CASES and plan.get('fd_transfer')!='real SCM_RIGHTS; rightsPrivate recipient creates a different TCP socket':
+    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,('backlog',)): raise ValueError('unsupported frozen case set')
+    if cases in (RIGHTS_CASES,ORIGIN_CASES) and plan.get('fd_transfer')!='real SCM_RIGHTS; rightsPrivate recipient creates a different TCP socket':
         errors.append('rights_plan')
+    if (cases==ORIGIN_CASES)!=(plan.get('origin_validation') is True): errors.append('origin_plan')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_NET_FIXTURE_UNLOAD=0' not in text.splitlines():
         errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
@@ -47,7 +48,7 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        result=check_case(label.split('-')[0],ev['window'],logs,report,identities)
+        result=check_case(label.split('-')[0],ev['window'],logs,report,identities,require_origin=cases==ORIGIN_CASES)
         source=delta(ev['source_before'],ev['source_after'])
         if '-off' in label and any(source['totals'].values()): errors.append('off_not_quiet_'+label)
         if '-net' in label and (not source['totals']['selected'] or source['totals']['skipped']): errors.append('source_gap_'+label)

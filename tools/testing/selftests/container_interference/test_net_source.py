@@ -43,3 +43,14 @@ class NetSource(unittest.TestCase):
         free=text.split('int net_release(',1)[1].split('#endif',1)[0]
         self.assertIn('bpf_map_delete_elem(&net_skb, &skb)',free)
         self.assertNotIn('BPF_CORE_READ(sample, sk)',free)
+
+    def test_create_after_security_and_accept_after_success(self):
+        root=Path(__file__).resolve().parents[4]
+        source=(root/'net/socket.c').read_text()
+        create=source.split('int __sock_create(',1)[1].split('EXPORT_SYMBOL(__sock_create)',1)[0]
+        self.assertLess(create.index('security_socket_post_create('),create.index('CIS_CN_CREATED'))
+        self.assertIn('if (!kern && sock->sk)',create)
+        accept=source.split('struct file *do_accept(',1)[1].split('static int __sys_accept4_file(',1)[0]
+        self.assertLess(accept.index('move_addr_to_user('),accept.index('CIS_CN_ACCEPTED'))
+        self.assertLess(accept.index('CIS_CN_ACCEPTED'),accept.index('return newfile;'))
+        self.assertNotIn('CIS_CN_CREATED',accept)

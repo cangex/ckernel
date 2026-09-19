@@ -74,6 +74,13 @@ def analyze(record,raw):
         elif collector=='net':
             for sock in specialist['sockets']:
                 resource=dict(kind='tcp_socket',cookie=sock['cookie'],netns=sock['netns'])
+                for name in ('creation_observation','accept_observation'):
+                    fact=sock[name]
+                    if fact:
+                        add('socket_'+name,fact['evidence'],fact['actor'],resource,[],
+                            [fact['time_ns'],fact['time_ns']],[],
+                            ['creator/acceptor is not a permanent owner, current holder or unique blocker'],
+                            boundary=fact['boundary'])
                 for f in sock['waits']:
                     known=[h['holder'] for h in f['observed_holders'] if h['evidence']=='E2' and h['holder']]
                     unknown=['logical ownership wait; not slock spin cycles']

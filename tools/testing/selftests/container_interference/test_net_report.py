@@ -40,6 +40,38 @@ class NetReport(unittest.TestCase):
         self.assertEqual(wait['unexplained_wait_ns'],10)
         self.assertIsNone(wait['spin_cycles'])
 
+    def test_creator_is_not_transferred_user_or_changing_holder(self):
+        r=self.run_rows([self.row(10,10),self.row(20,2,who=2),self.row(30,3,who=2)])
+        self.assertEqual(r['quality']['status'],'PASS',r)
+        sock=r['sockets'][0]
+        self.assertEqual(sock['creation_owner'],[1,1,101,1])
+        self.assertEqual(sock['creation_observation']['time_ns'],10)
+        self.assertIsNone(sock['accept_observation'])
+        self.assertFalse(sock['backlog'])
+        self.assertEqual(sock['observed_actors'],[[1,1,101,1],[2,1,102,1]])
+
+    def test_passive_child_accept_is_not_creation(self):
+        r=self.run_rows([self.row(10,11),self.row(20,2,who=2),self.row(30,3,who=2)])
+        sock=r['sockets'][0]
+        self.assertEqual(sock['creation_owner'],'UNOBSERVED')
+        self.assertIsNone(sock['creation_observation'])
+        self.assertEqual(sock['accept_observation']['actor'],[1,1,101,1])
+
+    def test_pre_window_and_address_reuse_never_supply_creator(self):
+        r=self.run_rows([self.row(10,10),self.row(20,2,who=2,cookie=200),self.row(30,3,who=2,cookie=200)])
+        self.assertEqual(r['sockets'][0]['creation_owner'],[1,1,101,1])
+        self.assertEqual(r['sockets'][1]['creation_owner'],'UNOBSERVED')
+
+    def test_invalid_duplicate_or_irq_provenance_fails_closed(self):
+        for rows in ([self.row(10,10),self.row(20,10)],
+                     [self.row(10,10),self.row(20,11)],
+                     [self.row(10,11,context=1)],
+                     [self.row(10,10,skb=9)],
+                     [self.row(10,11,queue=1)]):
+            r=self.run_rows(rows)
+            self.assertEqual(r['quality']['status'],'FAIL',r)
+            self.assertFalse(r['sockets'])
+
     def test_private_and_reused_address_do_not_join(self):
         rows=[self.row(10,2),self.row(30,3),self.row(20,1,who=2,cookie=200),self.row(40,2,who=2,cookie=200),self.row(50,3,who=2,cookie=200)]
         r=self.run_rows(rows)

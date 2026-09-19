@@ -9,6 +9,7 @@ enum cis_net_phase {
 	CIS_CN_FAST_ACQUIRED, CIS_CN_FAST_RELEASED,
 	CIS_CN_QUEUED, CIS_CN_SERVICE_BEGIN, CIS_CN_SERVICE_END,
 	CIS_CN_SKB_RELEASE,
+	CIS_CN_CREATED, CIS_CN_ACCEPTED,
 };
 struct cis_net_sample {
 	u64 time_ns, cookie;
