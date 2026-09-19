@@ -12,6 +12,7 @@ from collector_manifest import validate_inventory
 from collector_audit import audit
 from explain import explain
 from fd_check import check
+from fd_population_check import check_population
 from owner_report import fields
 from source_switches import validate as validate_sources
 
@@ -100,6 +101,7 @@ def verify(serial, output):
         names=([label+'g%d-%d.log'%(g,i) for g in range(4) for i in range(2)] if kind=='reuse'
                else [label+'-%d.log'%i for i in range(2)])
         truth=check(report,[files[prefix+name] for name in names],kind)
+        population=check_population([files[prefix+name] for name in names],capture,row['window'],kind,plan.get('population'))
         retirement=None
         if collector=='fd':
             bounds=value(label+'-boundaries.json')
@@ -117,8 +119,10 @@ def verify(serial, output):
                     errors.append('reuse_retirement_'+label)
         if truth['status']!='PASS': errors.append('truth_'+label)
         if scope['status']!='PASS': errors.append('scope_'+label)
-        cases.append(dict(label=label,session_id=sid,truth=truth,scope=scope['status'],retirement=retirement))
-        for suffix,data in (('record',row),('report',report),('truth',truth),('scope',scope)):
+        if population['status']!='PASS_SCOPED': errors.append('population_'+label)
+        cases.append(dict(label=label,session_id=sid,truth=truth,scope=scope['status'],retirement=retirement,
+                          population={k:v for k,v in population.items() if k!='calls'}))
+        for suffix,data in (('record',row),('report',report),('truth',truth),('scope',scope),('population',population)):
             (output/(sid+'.'+suffix+'.json')).write_text(json.dumps(data,indent=2))
         (output/(sid+'.jsonl')).write_bytes(capture)
     for native in (0,1):
@@ -134,7 +138,7 @@ def verify(serial, output):
     result=dict(schema='cis-fd-vm-check-v1',status='FAIL' if errors else 'PASS',errors=sorted(set(errors)),cases=cases,
                 source=declared['source'],serial_sha256=hashlib.sha256(raw).hexdigest(),
                 analyzer_sha256={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                                 for name in ('fd_vm_check.py','fd_check.py','explain.py','owner_report.py')},
+                                 for name in ('fd_vm_check.py','fd_check.py','fd_population_check.py','explain.py','owner_report.py')},
                 scope='FD selected-source bridge only; incomplete X1 stage',
                 pending=(['rwsem reader set','selected spinlock owner','full quality/recall and cost acceptance'] if lifecycle else
                          ['explicit cross-container CLONE_FILES','FD destruction/address-reuse runtime','rwsem reader set']),
