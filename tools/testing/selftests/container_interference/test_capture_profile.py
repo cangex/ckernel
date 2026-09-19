@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -7,6 +8,24 @@ import unittest
 
 
 class CaptureProfileTests(unittest.TestCase):
+    def test_c_loader_matches_every_python_contract(self):
+        from collector_manifest import COLLECTORS,contract
+        include=Path(__file__).resolve().parents[3]/'container_interference/include'
+        code=['#include <assert.h>','#include "cis_capture_profile.h"','int main(void) {']
+        for kind,helper in (('maps','map'),('programs','program')):
+            universe={n for name in COLLECTORS for n in contract(name)[kind]}|{'unrelated_unknown'}
+            for name in COLLECTORS:
+                c=contract(name)
+                for item in sorted(universe):
+                    code.append('assert(cis_profile_%s(%d, %s) == %d);'%(
+                        helper,c['profile'],json.dumps(item),int(item in c[kind])))
+        code.append('return 0; }')
+        with tempfile.TemporaryDirectory() as directory:
+            binary=str(Path(directory)/'contract-test')
+            subprocess.run([os.environ.get('CC','cc'),'-Wall','-Wextra','-Werror','-I'+str(include),
+                '-x','c','-','-o',binary],input='\n'.join(code),text=True,check=True)
+            subprocess.run([binary],check=True)
+
     def test_native_c_profile_selection(self):
         include = Path(__file__).resolve().parents[3]/'container_interference/include'
         code = r'''
