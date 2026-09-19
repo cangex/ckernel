@@ -33,7 +33,7 @@ def run():
     plan=dict(order=case_order(),rounds=3,buffered=True,bytes_per_actor=131072,window_ms=2000,
         cpu=[0,1],management_cpu=7,filesystem='ext4',sync_trigger='unregistered management syncfs',
         private='different files and devices',shared='two containers dirty disjoint pages of one inode',
-        dirtying_actor_link='UNOBSERVED',inode_request_link='UNOBSERVED')
+        dirtying_actor_link='OBSERVED_TRANSITIONS_NOT_EXCLUSIVE_OWNER',inode_request_link='REQUIRED_CLOSED_CONTEXT')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     fds=[os.open('/wb%d'%i,os.O_RDONLY|os.O_DIRECTORY) for i in range(2)]
     libc=ctypes.CDLL(None,use_errno=True); libc.syncfs.argtypes=[ctypes.c_int]; libc.syncfs.restype=ctypes.c_int

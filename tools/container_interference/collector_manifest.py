@@ -81,6 +81,10 @@ COLLECTORS['block']['programs'].append('block_link')
 COLLECTORS['block']['source_filter'] += '; successful native merge links before transfer; issue-time snapshot of at most eight bios with blkcg byte weights, remainder unknown, never inferred blockers'
 LEGACY_MERGE_BLOCK = deepcopy(COLLECTORS['block'])
 COLLECTORS['block']['source_filter'] += '; protocol 3 also admits selected bio billing roots, independently retaining real submitter and unknown dirtier/inode owner'
+LEGACY_BILLING_BLOCK = deepcopy(COLLECTORS['block'])
+COLLECTORS['block']['programs'] += ['wb_dirty','wb_begin','wb_end']
+COLLECTORS['block']['maps'].append('wb_pending')
+COLLECTORS['block']['source_filter'] += '; native folio dirty observations and 256 task-start keyed inode writeback contexts; closed synchronous contexts link request submission, not exclusive dirtying ownership or a causal blocker'
 
 
 def contract(name, legacy_block=False, legacy_rwsem=False):
@@ -132,9 +136,12 @@ def validate_record_inventory(record):
         if record.get('collector_contract_sha256')!=digest(expected):
             raise ValueError('unproven historical tag block contract')
     elif name=='block' and record.get('collector_contract_sha256')!=digest(expected):
-        for key,value in LEGACY_MERGE_BLOCK.items(): expected[key]=deepcopy(value)
-        if record.get('collector_contract_sha256')!=digest(expected):
-            raise ValueError('unproven historical merge block contract')
+        for historical in (LEGACY_MERGE_BLOCK,LEGACY_BILLING_BLOCK):
+            candidate=contract(name)
+            for key,value in historical.items(): candidate[key]=deepcopy(value)
+            if record.get('collector_contract_sha256')==digest(candidate):
+                expected=candidate; break
+        else: raise ValueError('unproven historical merge/billing block contract')
     legacy=COMMON_MAPS+['targets','stacks','pending']
     if (name=='counter' and isinstance(inventory,dict) and set(inventory.get('map_names',[]))==set(legacy)):
         expected['maps']=legacy

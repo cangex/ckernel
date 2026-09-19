@@ -25,6 +25,7 @@
 #define CIS_BLOCK_TAG_EVENT 19
 #define CIS_BLOCK_LINK_EVENT 20
 #define CIS_BLOCK_BIO_EVENT 21
+#define CIS_WRITEBACK_EVENT 22
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -114,6 +115,13 @@ struct cis_block_bio_event {
 	struct cis_event base;
 	__u64 bio, cgroup, owner_id, owner_generation;
 	__u32 index, bytes, remaining, more, overdepth, reserved;
+};
+struct cis_writeback_event {
+	/* object=inode, ip=i_ino, flags=i_generation, nesting=s_dev,
+	 * reserved=phase, weight=folio index (dirty observations only). */
+	struct cis_event base;
+	__u64 task_start, actor_id, actor_generation, wbc, memcg;
+	__u64 wb_owner_id, wb_owner_generation, request, request_episode;
 };
 struct cis_object_key { __u64 object; __u32 kind, reserved; };
 struct cis_rwsem_event {

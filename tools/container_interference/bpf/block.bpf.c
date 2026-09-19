@@ -17,6 +17,8 @@ struct {
 	__type(value, struct cis_block_tag_event);
 } tag_pending SEC(".maps");
 
+#include "writeback.bpf.h"
+
 SEC("raw_tp/block_tag_wait")
 int block_tag(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -221,6 +223,7 @@ static __always_inline int block_event(void *ctx, struct request *rq,
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);
 	if (phase == 3) block_bios(ctx, rq, &e.base);
+	if (phase == 1) wb_request(ctx, &e);
 	return 0;
 }
 

@@ -12,7 +12,10 @@ class BlockReport(unittest.TestCase):
     def record(self):
         r=test_counter_report.CounterReport().record(); r['collector']='block'
         r['inventory']=test_collector_manifest.CollectorContract().inventory('block')
-        r['inventory']['program_names'].remove('block_link'); r['inventory']['programs'].pop()
+        for kind,items in (('program',['block_link','wb_dirty','wb_begin','wb_end']),('map',['wb_pending'])):
+            for name in items:
+                index=r['inventory'][kind+'_names'].index(name)
+                r['inventory'][kind+'_names'].pop(index); r['inventory'][kind+'s'].pop(index)
         old=contract('block'); old.update(LEGACY_TAG_BLOCK)
         r['collector_contract_sha256']=digest(old)
         return r

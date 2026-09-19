@@ -54,6 +54,9 @@ DECLARE_TRACEPOINT(block_rq_merge);
 DECLARE_TRACEPOINT(block_rq_remap);
 DECLARE_TRACEPOINT(block_tag_wait);
 DECLARE_TRACEPOINT(block_merge_link);
+DECLARE_TRACEPOINT(writeback_dirty_folio);
+DECLARE_TRACEPOINT(writeback_single_inode_start);
+DECLARE_TRACEPOINT(writeback_single_inode);
 #define CIS_BLOCK_ON(name) tracepoint_enabled(name)
 #else
 #define CIS_BLOCK_ON(name) 0
@@ -65,7 +68,8 @@ static bool cis_block_active(void)
 	       CIS_BLOCK_ON(block_rq_issue) || CIS_BLOCK_ON(block_rq_requeue) ||
 	       CIS_BLOCK_ON(block_rq_complete) || CIS_BLOCK_ON(block_rq_merge) ||
 	       CIS_BLOCK_ON(block_rq_remap) || CIS_BLOCK_ON(block_tag_wait) ||
-	       CIS_BLOCK_ON(block_merge_link);
+	       CIS_BLOCK_ON(block_merge_link) || CIS_BLOCK_ON(writeback_dirty_folio) ||
+	       CIS_BLOCK_ON(writeback_single_inode_start) || CIS_BLOCK_ON(writeback_single_inode);
 }
 
 /* Monotone one-bit membership: collisions only admit extra events. No deletes
@@ -220,7 +224,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=11 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u\n",
+	seq_printf(m, "version=12 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -230,7 +234,8 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_rq_merge), CIS_BLOCK_ON(block_rq_remap),
 		   trace_cis_rwsem_state_enabled(), trace_cis_slublock_state_enabled(),
 		   CIS_BLOCK_ON(block_tag_wait), cis_rwsem_filter_active(),
-		   CIS_BLOCK_ON(block_merge_link));
+		   CIS_BLOCK_ON(block_merge_link), CIS_BLOCK_ON(writeback_dirty_folio),
+		   CIS_BLOCK_ON(writeback_single_inode_start), CIS_BLOCK_ON(writeback_single_inode));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);

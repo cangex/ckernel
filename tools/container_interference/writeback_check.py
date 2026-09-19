@@ -26,7 +26,7 @@ def check_case(case, window, logs, sync_interval, verified, report=None, identit
         a,b=writers
         same=(a['major'],a['minor'],a['inode'])==(b['major'],b['minor'],b['inode'])
         if same!=(case=='shared'): errors.append('inode_truth')
-    background=[]; selected=set(); all_requests=[]; billed_bytes={}
+    background=[]; selected=set(); all_requests=[]; billed_bytes={}; inode_links=0; dirty_actors=set()
     if report is not None:
         if report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS': errors.append('capture_quality')
         expected={(v['id'],v['generation']) for v in identities}
@@ -52,10 +52,34 @@ def check_case(case, window, logs, sync_interval, verified, report=None, identit
         if case=='private' and selected!=expected: errors.append('private_billing_coverage')
         if sum(billed_bytes.values())!=262144 or case=='private' and any(billed_bytes.get(k)!=131072 for k in expected):
             errors.append('buffered_data_byte_coverage')
+        wb=report.get('writeback',{})
+        if wb.get('coverage')=='AVAILABLE':
+            links={tuple(v['request']):v['context'] for v in wb['request_links']}
+            for req in background:
+                ctx=links.get((req['request'],req['episode_ns']))
+                if not ctx or ctx['exclusive_dirtier'] is not None or ctx['blocking_container'] is not None:
+                    errors.append('missing_or_invented_inode_context'); continue
+                matching=[(i,w) for i,w in enumerate(writers) if
+                    (w['major'],w['minor'],w['inode'])==(*ctx['device'],ctx['ino'])]
+                if not matching or ctx['executor']!=req['submitter']:
+                    errors.append('wrong_inode_context'); continue
+                if case=='private' and tuple(req['selected_container'])!=tuple(identities[matching[0][0]][k] for k in ('id','generation')):
+                    errors.append('private_inode_billing_mismatch')
+                inode_links+=1
+            for i,w in enumerate(writers):
+                who=tuple(identities[i][k] for k in ('id','generation'))
+                found=[d for d in wb['dirty_observations'] if tuple(d['actor'][:2])==who and
+                       (d['device'][0],d['device'][1],d['ino'])==(w['major'],w['minor'],w['inode']) and
+                       w['begin_ns']<=d['time_ns']<=w['end_ns']]
+                if not found: errors.append('dirty_transition_missing_'+str(i))
+                else: dirty_actors.add(who)
+            if inode_links!=len(background): errors.append('inode_request_coverage')
         # Two writers of the shared inode need not appear as two blkcg owners.
         # That native writeback choice is exactly why we never infer dirtier.
     return dict(status='FAIL' if errors else 'PASS',errors=errors,writers=writers,
         background_requests=len(background),requests=len(all_requests),selected_billing_roots=[list(v) for v in sorted(selected)],
         billed_completed_bytes=[dict(container=list(k),bytes=v) for k,v in sorted(billed_bytes.items())],
-        dirtying_actor_link='UNOBSERVED',inode_request_link='UNOBSERVED',blocking_container=None,
+        dirty_transition_actors=[list(k) for k in sorted(dirty_actors)],inode_request_links=inode_links,
+        dirtying_actor_link='OBSERVED_TRANSITIONS_NOT_EXCLUSIVE_OWNER' if dirty_actors else 'UNOBSERVED',
+        inode_request_link='CLOSED_NATIVE_CONTEXT' if inode_links else 'UNOBSERVED',blocking_container=None,
         scope='buffered writes and native background bio billing, not per-inode or causal attribution')

@@ -35,6 +35,8 @@ def verify(serial,output):
             if any(record.get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('session_source_'+label)
             capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode()
             report=analyze(record,capture); identities=[record['root_identities'][key] for key in ev['targets']]
+            if plan.get('inode_request_link')=='REQUIRED_CLOSED_CONTEXT' and report['writeback']['coverage']!='AVAILABLE':
+                errors.append('missing_writeback_collector_'+label)
             if record['nonce']!=label.replace('-','') or record['window']!=ev['window'] or not record['objects_absent']:
                 errors.append('session_boundary_'+label)
             validate(ev['active_sources'],'block',record['receipt']['prepared_ns'],record['window']['end_ns'])
@@ -50,7 +52,7 @@ def verify(serial,output):
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
-        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='buffered ext4 writeback bio billing; original writer/inode link unknown',
+        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='buffered ext4 billing and versioned native inode contexts; exclusive dirtier/blocker unknown',
         performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result
 

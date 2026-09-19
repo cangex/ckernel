@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 29
+#define CIS_DIAGNOSTIC_LINKS 32
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -132,6 +132,20 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	char detail[768];
 	const char *symbol;
 	(void)cpu;
+	if(size>=sizeof(struct cis_writeback_event) && size<=sizeof(struct cis_writeback_event)+7 && e->type==CIS_WRITEBACK_EVENT) {
+		struct cis_writeback_event *v=data;
+		char d[1100];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 sample_time_ns=%llu episode_ns=%llu phase=%u inode=0x%llx ino=%llu inode_generation=%u dev_major=%u dev_minor=%u folio_index=%llu tid=%llu task_start=%llu actor_id=%llu actor_generation=%llu wbc=0x%llx memcg=%llu wb_owner_id=%llu wb_owner_generation=%llu request=0x%llx request_episode=%llu",
+			(unsigned long long)e->time_ns,(unsigned long long)e->sequence_ns,e->reserved,
+			(unsigned long long)e->object,(unsigned long long)e->ip,e->flags,e->nesting>>20,e->nesting&((1U<<20)-1),
+			(unsigned long long)e->weight,(unsigned long long)e->tid,(unsigned long long)v->task_start,
+			(unsigned long long)v->actor_id,(unsigned long long)v->actor_generation,(unsigned long long)v->wbc,
+			(unsigned long long)v->memcg,(unsigned long long)v->wb_owner_id,(unsigned long long)v->wb_owner_generation,
+			(unsigned long long)v->request,(unsigned long long)v->request_episode);
+		cis_report(ctx,"WRITEBACK",r,d);return;
+	}
 	if(size>=sizeof(struct cis_block_link_event) && size<=sizeof(struct cis_block_link_event)+7 && e->type==CIS_BLOCK_LINK_EVENT) {
 		struct cis_block_link_event *v=data;
 		r=cis_registry_lookup(ctx,e->id,e->generation);
@@ -340,6 +354,7 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"block_start",256},{"block_insert",256},{"block_issue",256},
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
 		{"block_tag",256},{"block_link",256},
+		{"wb_dirty",256},{"wb_begin",256},{"wb_end",256},
 		{"rwsem_state",512}};
 	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;
