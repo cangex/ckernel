@@ -36,7 +36,7 @@ CONTRACT={
         pending=['skb分配来源和后端成本','clone/GSO/GRO来源变换']),
     'block': dict(name='块I/O',collector='block',discovered='直接I/O请求形成、排队、下发与完成',
         object='请求episode、设备/队列、head-bio blkcg',participants='初始提交者与bio归属；不推断唯一阻塞方',
-        pending=['tag等待运行正例','合并/部分完成/重排队运行正例','buffered writeback多源归属']),
+        pending=['tag等待运行正例','真实重排队和部分完成已有专用设备正例；请求合并仍待验证','buffered writeback多源归属']),
     'routing': dict(name='有界专项调度',collector='controller',discovered='真实巡检候选到单槽专项',
         object='配置epoch、目标代次及候选来源会话',participants='按目标轮转，候选不是因果认定',
         pending=['四容器混合来源联合验收']),

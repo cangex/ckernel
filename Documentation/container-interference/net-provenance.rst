@@ -72,3 +72,22 @@ and UDP creations per actor inside the window, obtains independent cookies,
 and rejects any corresponding TCP observation. No packet is sent by these
 negative sockets. This new boundary requires its own rebuilt-kernel run;
 the preceding origin cohort did not exercise these protocol negatives.
+
+The follow-up kernel 6864117ae, tools ca43258a7 cohort
+``x4-net-origin-20260919-220904.log`` passed 18 states / 9 captures, 18/18
+origin facts and 24/24 eligible holder overlaps. All 36 independently named
+raw TCP/UDP cookies were excluded; private TCP sockets still produced no
+cross-container relationship. Serial SHA256:
+``af198216e03156fceeb15fdd2d8a751fba6e1b5dc77f743aca60b1fa5f9f4851``.
+CAPTURING combined process CPU peaked at 9.10725ms, RSS at 34,615,296 bytes.
+The 40ms process capture gate was unchanged. Source callbacks, background CPU
+and asynchronous kernel memory remain outside those process-only figures.
+
+Kernel Image SHA256 is
+``fbe205ea89fa9b80ed96f424fdf87f2edafb503f217d88b95c21196318ee0501``.
+The earlier ``net-stream-origin-runtime-20260920`` attempt was refused before
+QEMU launch because its immutable Image was in the dedicated memory-backed
+build tree. The runner now accepts only its original evidence base or the two
+already-authorized scratch roots after resolving symlinks and ``..``. Exact
+image hashing, VM exclusion/lock, 4GiB root reserve and host protections remain.
+That refused attempt is retained, not relabelled as a runtime success.
