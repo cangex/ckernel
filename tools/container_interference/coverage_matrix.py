@@ -24,7 +24,7 @@ CONTRACT={
         pending=['选定祖先汇总已做采样事件级验证；高事件率待测','全量更新计数不由采样推算','硬件cacheline证据（条件项）']),
     'allocator': dict(name='SLUB/Maple',collector='allocator',discovered='指定cache的分配阶段和释放入口',
         object='cache/节点/已观测分配代次',participants='分配请求方与释放执行方；后端锁持有者未知',
-        pending=['允许节点的NUMA/cpuset放置已有专项；并发策略变化、压力和失败仍待验证','后端共享锁关系','Maple树归属']),
+        pending=['允许节点放置和原生failslab拒绝已有专项；并发策略变化、真实压力和批量部分回滚待验证','后端共享锁关系','Maple树归属']),
     'net': dict(name='Socket逻辑锁',collector='net',discovered='选定TCP Socket逻辑锁的获取、等待和释放',
         object='原生Socket cookie与netns',participants='已观察逻辑持有者与等待者，不代表TCP全部锁',
         pending=['创建归属仍未观测；SCM_RIGHTS逻辑锁另有专项验证','更多协议/短锁覆盖']),

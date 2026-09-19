@@ -41,3 +41,43 @@ These are real native injected pre-hook failures, not natural memory pressure,
 memcg reclaim, physical exhaustion or partial-bulk rollback coverage.  Native
 pre-hook failure is not by itself evidence of a competing container or lock.
 The scope does not certify production performance or complete X3/X7.
+
+Runtime evidence, 20260919
+-------------------------
+
+The new fault-enabled Image and all configured modules built successfully
+from kernel 394341472bc161e537d8f103f1042a4b1cf80d88, without host deployment.
+Only FAULT_INJECTION, FAILSLAB and FAULT_INJECTION_DEBUG_FS were enabled;
+other injection facilities remain disabled.  The original non-fault Image,
+configuration and BTF ELF were hash-verified unchanged.
+
+Image SHA256:
+``f4e2190966f395f2cad016d70a655126bc9c21923f3a0fa18886222ab4a3f92a``.
+BTF ELF SHA256:
+``e3e087a77c0512a8cb6900499400c7c371db9cba9de836dc6a711861423c98a2``.
+Configuration SHA256:
+``ea1a71e9c6fc6c185d1e04ef17a9e858dee75e02043d8b092a45bbe33678ad90``.
+Guest tools/fixture are 5e4b11d90.  The raw serial is
+``/root/cis-20260916-232524/evidence/allocator-failure-20260919/x3-failure-20260919-175839.log``;
+SHA256 ``0d25097c93bd6fd48ec8066ee5de89667d55bedece5d02e651c4028e66f119e1``.
+
+``allocator_vm_check.py --failure SERIAL NEW_OUTPUT`` independently passed
+30 states / 15 captures: all 216 eligible selected calls, including 168
+failed requests and 48 returned allocations, matched the native ioctl truth.
+All 48 successful allocations had matching release entries.  Private-cache
+controls were not counted as selected events.  The bystander remained able
+to allocate and the alternating task-flag recovery control succeeded.
+No failed request was given an object, release or fabricated blocker.
+Configuration readback/restore and module unload passed.
+
+Maximum combined-process CAPTURING CPU was 10.38844 ms against the unchanged
+40 ms protective limit.  Maximum combined RSS was 36,401,152 bytes; complete
+kernel memory and asynchronous CPU overhead remain unmeasured.  These costs
+are specific to this fault-enabled VM, not inherited production acceptance.
+Reader 2c05c9f14 additionally classified the 168 failures as pre-hook failures
+with cause UNKNOWN and the other 48 as RETURNED.  Failslab cause is established
+by the separate controlled configuration, not inferred from the event alone.
+
+Local regression: 398 tests, 397 passed and one platform-specific skip.
+No partial-bulk rollback, natural pressure or shared-backend lock-owner
+acceptance is claimed by this cohort.  X3/X7 remain incomplete.
