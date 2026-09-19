@@ -14,6 +14,7 @@ TEST_GEN_PROGS += block_merge_workload
 TEST_GEN_PROGS += block_lifecycle_workload
 TEST_GEN_PROGS += writeback_workload
 TEST_GEN_PROGS += maple_workload
+TEST_GEN_PROGS += net_capacity_workload
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
@@ -26,7 +27,7 @@ allocator_fixture_workload: ../../../../include/uapi/linux/cis_alloc_test.h
 allocator_placement_workload: allocator_fixture/placement_uapi.h
 allocator_failure_workload: ../../../../include/uapi/linux/cis_alloc_test.h
 allocator_rollback_workload: allocator_fixture/rollback_uapi.h
-net_workload net_backlog_workload: net_fixture/uapi.h
+net_workload net_backlog_workload net_capacity_workload: net_fixture/uapi.h
 rwsem_workload: rwsem_fixture/uapi.h
 slub_workload: slub_fixture/uapi.h
 tag_workload: tag_fixture/abi.h

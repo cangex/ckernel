@@ -28,7 +28,7 @@ def tcp_pair():
         except BaseException: client.close(); raise
 
 
-def run(backlog=False,rights=False,origin=False):
+def run(backlog=False,rights=False,origin=False,capacity=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/net_shift').read_text().strip()!='0':
@@ -44,12 +44,16 @@ def run(backlog=False,rights=False,origin=False):
     source=source_manifest(args,env['boot_id']); permit=prototype_admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
     rights=rights or origin
-    cases=ORIGIN_CASES if origin else ('backlog',) if backlog else RIGHTS_CASES if rights else CASES
+    cases=('capacity',) if capacity else ORIGIN_CASES if origin else ('backlog',) if backlog else RIGHTS_CASES if rights else CASES
     plan=dict(order=case_order(cases),cases=list(cases),rounds=3,operations=4,roots=2,net_shift=0,
         window_ms=2000,cpu=[0,1],management_cpu=7,memory_max_bytes=64<<20,
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
         scope='logical lock fixture with deliberate bounded sleep while held, not ordinary application cost acceptance')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    if capacity:
+        plan.update(capacity_per_actor=40,watch_capacity=64,post_detach_operations=40,
+                    scope='native Socket watch overflow must reject attribution, then resume same actors')
+        (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if backlog:
         plan.update(unheld_drain_transfers=1,drain_offset_ms=450,skb_release_not_bounded_by_recv_return=True,
                     tx_allocation_validation=True)
@@ -106,6 +110,11 @@ def run(backlog=False,rights=False,origin=False):
             if case=='backlog': selected=[server,client]
             if case=='private':
                 other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server)); selected[1]=other_server
+            channels=[]
+            if capacity:
+                for i in range(2):
+                    parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET)
+                    parent.settimeout(10); sockets.extend((parent,child)); channels.append(parent); selected[i]=child
             source_before=snapshot()
             if collecting:
                 sid=request('start',collector='net',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
@@ -118,12 +127,19 @@ def run(backlog=False,rights=False,origin=False):
             for i,p in enumerate(roots):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle)
                 fd=selected[i].fileno()
-                workload='/net_backlog_workload' if case=='backlog' else '/net_workload'
+                workload='/net_capacity_workload' if capacity else '/net_backlog_workload' if case=='backlog' else '/net_workload'
                 child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case]+(['origin'] if origin else []),
                     stdout=handle,stderr=handle,pass_fds=(fd,))
                 children.append(child); running.append(child)
+            if capacity:
+                for channel in channels:
+                    if channel.recv(1)!=b'R': raise ValueError('capacity fixture readiness')
+                if sid: wait(sid,'finalized')
+                capacity_idle=observe(None)
+                post_detach_source=snapshot()
+                for channel in channels: channel.sendall(b'D')
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()
-            if codes!=[0,0] or after['time_ns']>=window['end_ns']: raise ValueError(('workload completion/window',codes))
+            if codes!=[0,0] or not capacity and after['time_ns']>=window['end_ns']: raise ValueError(('workload completion/window',codes))
             logs=[(out/(label+'-%d.log'%i)).read_text() for i in range(2)]; report=None; identities=None
             if sid:
                 row=wait(sid,'finalized'); idle=observe(None)
@@ -133,11 +149,22 @@ def run(backlog=False,rights=False,origin=False):
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            result=check_case(case,window,logs,report,identities,require_origin=origin,require_protocol_negative=origin,
-                              require_tx=backlog)
+            if capacity:
+                from net_capacity_check import check as check_capacity
+                idle=capacity_idle
+                result=check_capacity(window,logs,record if sid else None,
+                    (out/'records'/(sid+'.jsonl')).read_bytes() if sid else None,idle)
+            else:
+                result=check_case(case,window,logs,report,identities,require_origin=origin,require_protocol_negative=origin,
+                                  require_tx=backlog)
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,source_before=source_before,source_after=snapshot(),exit_codes=codes,result=result)
             evidence['source_delta']=delta(evidence['source_before'],evidence['source_after'])
+            if capacity:
+                evidence['post_detach_source_before']=post_detach_source
+                evidence['post_detach_source_delta']=delta(post_detach_source,evidence['source_after'])
+                if any(evidence['post_detach_source_delta']['totals'].values()):
+                    raise ValueError('network callbacks continued after detach')
             (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2)); results.append(evidence)
             for sock in sockets: sock.close()
             sockets.clear()
@@ -162,4 +189,5 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(); group=parser.add_mutually_exclusive_group()
     group.add_argument('--backlog',action='store_true'); group.add_argument('--rights',action='store_true')
     group.add_argument('--origin',action='store_true')
-    a=parser.parse_args(); run(a.backlog,a.rights,a.origin)
+    group.add_argument('--capacity',action='store_true')
+    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity)

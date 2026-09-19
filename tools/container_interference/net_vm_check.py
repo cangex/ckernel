@@ -19,7 +19,9 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     cases=tuple(plan.get('cases',[]))
-    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,('backlog',)): raise ValueError('unsupported frozen case set')
+    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,('backlog',),('capacity',)): raise ValueError('unsupported frozen case set')
+    if cases==('capacity',) and any(plan.get(k)!=v for k,v in dict(capacity_per_actor=40,watch_capacity=64,post_detach_operations=40).items()):
+        errors.append('capacity_plan')
     if cases in (RIGHTS_CASES,ORIGIN_CASES) and plan.get('fd_transfer')!='real SCM_RIGHTS; rightsPrivate recipient creates a different TCP socket':
         errors.append('rights_plan')
     if (cases==ORIGIN_CASES)!=(plan.get('origin_validation') is True): errors.append('origin_plan')
@@ -52,10 +54,17 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        result=check_case(label.split('-')[0],ev['window'],logs,report,identities,require_origin=cases==ORIGIN_CASES,
-                          require_protocol_negative='excluded_protocols' in plan,
-                          require_tx=plan.get('tx_allocation_validation') is True)
+        if cases==('capacity',):
+            from net_capacity_check import check as check_capacity
+            result=check_capacity(ev['window'],logs,record if '-net' in label else None,
+                capture if '-net' in label else None,ev['idle_sources'])
+        else:
+            result=check_case(label.split('-')[0],ev['window'],logs,report,identities,require_origin=cases==ORIGIN_CASES,
+                              require_protocol_negative='excluded_protocols' in plan,
+                              require_tx=plan.get('tx_allocation_validation') is True)
         source=delta(ev['source_before'],ev['source_after'])
+        if cases==('capacity',) and any(delta(ev['post_detach_source_before'],ev['source_after'])['totals'].values()):
+            errors.append('callbacks_after_detach_'+label)
         if '-off' in label and any(source['totals'].values()): errors.append('off_not_quiet_'+label)
         if '-net' in label and (not source['totals']['selected'] or source['totals']['skipped']): errors.append('source_gap_'+label)
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)

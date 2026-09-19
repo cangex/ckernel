@@ -44,6 +44,11 @@ CONTRACT={
     'backlog': dict(name='backlog/skb',collector='net',discovered='入队、服务及skb释放入口',
         object='Socket cookie、skb地址及入队epoch',participants='执行者独立记录，报文原始归属未知',
         pending=['TCP发送原始头部分配另列net_tx；收包分配与完整释放后端仍缺失','clone/GSO/GRO来源变换']),
+    'net_capacity': dict(name='网络对象表容量保护',collector='net',
+        discovered='80个原生Socket触发64项watch上限，拒收不完整归因并核对卸载后业务继续',
+        object='独立Socket cookie集合及窗口内watch容量',
+        participants='保护通过不表示截断窗口可用于持有者归因',
+        pending=['该测试不是高事件率或ring满验收','未证明所有网络元数据容量路径']),
     'net_tx': dict(name='TCP发送缓冲区申请与释放',collector='net',
         discovered='原生fclone申请、内存准入与原始skb头部释放入口',
         object='Socket cookie、请求任务代次与分配边界；原始头部地址不代表共享数据页',
@@ -102,6 +107,7 @@ VERIFIERS={
     'slub':('slub_vm_check','slub',{}),
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
     'net_tx':('net_vm_check','net_tx',{}),
+    'net_capacity':('net_vm_check','net_capacity',{}),
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
     'block_merge':('block_vm_check','block_merge',{}),
     'block_lifecycle':('block_vm_check','block_lifecycle',{}),
@@ -148,8 +154,14 @@ def replay(index,base,output):
             labels=[r.get('label','') for r in checked.get('states',[])]
             if key=='backlog' and not labels or (key=='backlog' and not all(v.startswith('backlog-') for v in labels)):
                 raise ValueError('backlog cohort required')
-            if key=='net' and labels and all(v.startswith('backlog-') for v in labels):
+            if key=='net' and labels and all(v.startswith(('backlog-','capacity-')) for v in labels):
                 raise ValueError('logical ownership cohort required')
+            if key=='net_capacity':
+                selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
+                if (len(selected)!=3 or any(not v['label'].startswith('capacity-') or
+                        v.get('result',{}).get('native_cookies')!=80 or
+                        v.get('result',{}).get('quality',{}).get('status')!='FAIL' for v in selected)):
+                    raise ValueError('native watch overflow and rejected observation required')
             if key=='net_tx':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
                 if len(selected)!=3 or any(not v.get('result',{}).get('tx') or
