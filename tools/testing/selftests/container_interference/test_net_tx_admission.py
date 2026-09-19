@@ -56,6 +56,8 @@ class TxAdmission(unittest.TestCase):
         self.assertEqual(check('txadmission',*args)['status'],'FAIL')
         args=self.fixture(); args[3]['limited']=True
         self.assertEqual(check('txadmission',*args)['status'],'FAIL')
+        args=self.fixture(); args[3]['tcp_mem']='0 0 0'
+        self.assertEqual(check('txadmission',*args)['status'],'FAIL')
 
 
 if __name__=='__main__': unittest.main()

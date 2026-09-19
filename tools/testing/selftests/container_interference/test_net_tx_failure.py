@@ -93,5 +93,24 @@ class TxFailure(unittest.TestCase):
                 NativeTxFault(base)
             self.assertEqual((debug/'probability').read_text(),'100')
 
+    def test_boot_selected_cache_requires_explicit_unmerged_configuration(self):
+        for aliases in ('0','1'):
+            with tempfile.TemporaryDirectory() as tmp:
+                base=Path(tmp); debug=base/'failslab'; debug.mkdir(); cache=base/'cache'; cache.write_text('1')
+                marker=base/'marker'; marker.touch(); command=base/'cmdline'
+                command.write_text('console=ttyAMA0 slub_debug=A,skbuff_fclone_cache')
+                alias=base/'aliases'; alias.write_text(aliases)
+                for name,value in dict(SETTINGS,probability='0').items(): (debug/name).write_text(value)
+                paths={'/cis-disposable-vm':marker,'/sys/kernel/debug/failslab':debug,
+                       '/sys/kernel/slab/skbuff_fclone_cache/failslab':cache,'/proc/cmdline':command,
+                       '/sys/kernel/slab/skbuff_fclone_cache/aliases':alias}
+                with patch('net_tx_fault.Path',side_effect=lambda p:paths[p]):
+                    if aliases=='1':
+                        with self.assertRaises(ValueError): NativeTxFault(base)
+                    else:
+                        fault=NativeTxFault(base); fault.enable(); fault.restore()
+                        self.assertEqual(cache.read_text(),'1')
+                        self.assertEqual((debug/'probability').read_text(),'0')
+
 
 if __name__=='__main__': unittest.main()

@@ -12,6 +12,10 @@ def check(case,window,logs,configuration,restored,report=None,identities=None):
             configuration['time_ns']<window['start_ns']<restored['time_ns']<window['end_ns']):
         errors.append('configuration_order')
     if case=='txadmission' and configuration['tcp_mem'].split()!=['0']*3: errors.append('pressure_not_enabled')
+    if len(restored['tcp_mem'].split())!=3 or any(int(v)<=0 for v in restored['tcp_mem'].split()):
+        errors.append('invalid_restored_budget')
+    if case=='txnormal' and configuration['tcp_mem'].split()!=restored['tcp_mem'].split():
+        errors.append('normal_budget_changed')
     for actor,log in enumerate(logs):
         pids=[fields(v).get('host_pid') for v in log.splitlines() if v.startswith('CIS_SESSION_CONTAINER ')]
         truth=[fields(v) for v in log.splitlines() if v.startswith('CIS_NET_TX_ADMISSION ')]

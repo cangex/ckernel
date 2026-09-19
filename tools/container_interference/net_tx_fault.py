@@ -12,8 +12,14 @@ class NativeTxFault:
         self.root = Path('/sys/kernel/debug/failslab')
         self.cache = Path('/sys/kernel/slab/skbuff_fclone_cache/failslab')
         self.original = self.snapshot()
-        if self.original['settings']['probability'] != '0' or self.original['cache'] != '0':
+        if self.original['settings']['probability'] != '0' or self.original['cache'] not in ('0','1'):
             raise ValueError('preexisting fault configuration')
+        if self.original['cache']=='1':
+            command=Path('/proc/cmdline').read_text().split()
+            aliases=Path('/sys/kernel/slab/skbuff_fclone_cache/aliases').read_text().strip()
+            self.save('cache-config',dict(command=command,aliases=aliases))
+            if 'slub_debug=A,skbuff_fclone_cache' not in command or aliases!='0':
+                raise ValueError('preselected cache requires explicit unmerged VM boot configuration')
         self.save('original', self.original)
 
     def snapshot(self):
@@ -26,14 +32,15 @@ class NativeTxFault:
     def enable(self):
         for k, v in SETTINGS.items():
             if k != 'probability': (self.root / k).write_text(v)
-        self.cache.write_text('1')
+        if self.cache.read_text().strip()!='1': self.cache.write_text('1')
         (self.root / 'probability').write_text(SETTINGS['probability'])
         actual = self.snapshot(); self.save('active', actual)
         if actual != dict(settings=SETTINGS, cache='1'): raise ValueError('fault configuration readback')
 
     def restore(self):
         (self.root / 'probability').write_text('0')
-        self.cache.write_text(self.original['cache'])
+        if self.cache.read_text().strip()!=self.original['cache']:
+            self.cache.write_text(self.original['cache'])
         for k, v in self.original['settings'].items():
             if k != 'probability': (self.root / k).write_text(v)
         (self.root / 'probability').write_text(self.original['settings']['probability'])

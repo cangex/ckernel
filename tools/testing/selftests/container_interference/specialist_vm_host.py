@@ -85,7 +85,7 @@ def run(args):
     if args.label == 'x4-net-rights': command[-1] += ' cis_net_test=rights'
     if args.label == 'x4-net-origin': command[-1] += ' cis_net_test=origin'
     if args.label == 'x4-net-capacity': command[-1] += ' cis_net_test=capacity'
-    if args.label == 'x4-net-txfailure': command[-1] += ' cis_net_test=txfailure'
+    if args.label == 'x4-net-txfailure': command[-1] += ' cis_net_test=txfailure slub_debug=A,skbuff_fclone_cache'
     if args.label == 'x4-net-txadmission': command[-1] += ' cis_net_test=txadmission'
     if args.label == 'x1-rwsem-overflow': command[-1] += ' cis_rwsem_test=overflow'
     if args.label == 'x7-rwsem-joint': command[-1] += ' cis_rwsem_test=joint'

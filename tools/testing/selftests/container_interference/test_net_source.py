@@ -38,6 +38,23 @@ class NetSource(unittest.TestCase):
         self.assertEqual(expected_fields('14','net')['net_tx'],'1')
         self.assertEqual(expected_fields('14','allocator')['net_tx'],'0')
 
+    def test_tx_unsupported_context_and_true_recursion_are_counted_separately(self):
+        rows=[]
+        for n in (0,1):
+            r=self.snapshot(n)
+            r['source_audit']=r['source_audit'].replace('version=1','version=3 tx_active=0').replace(
+                'source_counter_bytes_per_cpu=40','source_counter_bytes_per_cpu=96').replace(
+                'skipped=0','skipped=%d'%(2*n)).rstrip()+(
+                    ' tx_entries=%d tx_selected=%d tx_callbacks=%d tx_callback_ns=%d tx_callback_max_ns=20'
+                    ' tx_irq_skipped=%d tx_nested_skipped=%d\n'%(3*n,n,3*n,10*n,n,n))
+            rows.append(r)
+        result=delta(*rows)
+        self.assertEqual(result['totals']['tx_irq_skipped'],1)
+        self.assertEqual(result['totals']['tx_nested_skipped'],1)
+        self.assertEqual(result['totals']['skipped'],2)
+        rows[1]['source_audit']=rows[1]['source_audit'].replace('skipped=2','skipped=0')
+        with self.assertRaises(ValueError): delta(*rows)
+
     def test_native_fast_and_callback_release_coverage(self):
         root=Path(__file__).resolve().parents[4]
         header=(root/'include/net/sock.h').read_text(); source=(root/'net/core/sock.c').read_text()

@@ -59,6 +59,11 @@ CONTRACT={
         object='私有Socket cookie、请求任务代次与实际send调用边界',
         participants='失败请求归属与正常旁观容器分开，不推断分配器持有者',
         pending=['受控故障不是生产失败发生率','内存准入失败与真实内存压力另行验证','原始头部释放入口不是全部数据后端释放']),
+    'net_tx_admission': dict(name='TCP内存准入拒绝与恢复',collector='net',
+        discovered='原生修复模式队列、TCP预算耗尽与恢复后的同Socket发送准入',
+        object='Socket cookie、申请调用边界及释放先于拒绝的原始头部',
+        participants='申请容器与管理面压力条件分开，不推断设备阻塞方或分配器持有者',
+        pending=['修复模式仅验证队列接收，不代表数据已上网','真实业务压力发生率与其他失败来源','全部释放后端和转换后的skb来源']),
     'block': dict(name='块I/O',collector='block',discovered='直接I/O请求形成、排队、下发与完成',
         object='请求episode、设备/队列、head-bio blkcg',participants='初始提交者与bio归属；不推断唯一阻塞方',
         pending=['tag等待由独立专项核验','重排队/部分完成及bio/request合并由独立专项核验，不代表任意设备','buffered writeback多源归属']),
@@ -113,6 +118,7 @@ VERIFIERS={
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
     'net_tx':('net_vm_check','net_tx',{}),
     'net_tx_failure':('net_vm_check','net_tx_failure',{}),
+    'net_tx_admission':('net_vm_check','net_tx_admission',{}),
     'net_capacity':('net_vm_check','net_capacity',{}),
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
     'block_merge':('block_vm_check','block_merge',{}),
@@ -160,7 +166,7 @@ def replay(index,base,output):
             labels=[r.get('label','') for r in checked.get('states',[])]
             if key=='backlog' and not labels or (key=='backlog' and not all(v.startswith('backlog-') for v in labels)):
                 raise ValueError('backlog cohort required')
-            if key=='net' and labels and all(v.startswith(('backlog-','capacity-','txfailure-','txunmarked-')) for v in labels):
+            if key=='net' and labels and all(v.startswith(('backlog-','capacity-','txfailure-','txunmarked-','txadmission-','txnormal-')) for v in labels):
                 raise ValueError('logical ownership cohort required')
             if key=='net_capacity':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
@@ -180,6 +186,14 @@ def replay(index,base,output):
                             any(p.get('eligible')!=8 or p.get('captured')!=8 for p in v['result']['participants'])
                             for v in selected)):
                     raise ValueError('native allocation failure, recovery and unmarked task control required')
+            if key=='net_tx_admission':
+                selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
+                if (len(selected)!=6 or {v['label'].split('-')[0] for v in selected}!={'txadmission','txnormal'} or
+                        any(len(v.get('result',{}).get('participants',[]))!=2 or
+                            any(p.get('eligible')!=24 or p.get('captured')!=24 or p.get('recovery_sends')!=8 or
+                                (v['label'].startswith('txadmission-') and p.get('admission_rejected',0)<=0)
+                                for p in v['result']['participants']) for v in selected)):
+                    raise ValueError('native memory admission rejection and restored-budget recovery required')
             if key=='block_merge' and checked.get('fixture') not in ('merge','merge-scheduler'):
                 raise ValueError('native merge truth cohort required')
             if key=='block_lifecycle' and checked.get('fixture')!='lifecycle':

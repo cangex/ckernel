@@ -5,6 +5,13 @@ This cohort tests native ``alloc_skb_fclone`` failure, not injected trace
 records, and does not alter TCP algorithms.  It requires a disposable VM
 kernel built with FAULT_INJECTION, FAILSLAB and FAULT_INJECTION_DEBUG_FS.
 Absence of the native controls is a capability failure, never a pass.
+This OLK normally merges the fclone cache and refuses changing its failslab
+flag when aliases exist.  The VM therefore boots with the native
+``slub_debug=A,skbuff_fclone_cache`` parameter to select only that cache before
+merging.  Its zero alias count, boot command and initial flag are recorded;
+global injection probability must still be zero.  Restoring the original
+flag to one in this case does not leave injection enabled.  OFF and NET use
+the same narrowly unmerged test layout, not the production cache geometry.
 
 Frozen cases are ``txfailure`` and ``txunmarked``, OFF/NET, three alternating
 rounds: twelve states and six captures, each bounded to two seconds.  Both

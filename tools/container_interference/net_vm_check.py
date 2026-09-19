@@ -35,9 +35,13 @@ def verify(serial,output):
         if (value('tx-failslab-original.json')!=value('tx-failslab-restored.json') or
                 value('tx-failslab-active.json')!=dict(settings=SETTINGS,cache='1') or
                 value('tx-failslab-original.json')['settings']['probability']!='0' or
-                value('tx-failslab-original.json')['cache']!='0' or
+                value('tx-failslab-original.json')['cache'] not in ('0','1') or
                 plan.get('send_bytes')!=128 or plan.get('operation_spacing_ms')!=100 or
                 plan.get('tx_failure_validation') is not True): errors.append('fault_plan_or_restoration')
+        if value('tx-failslab-original.json')['cache']=='1':
+            setting=value('tx-failslab-cache-config.json')
+            if setting.get('aliases')!='0' or 'slub_debug=A,skbuff_fclone_cache' not in setting.get('command',[]):
+                errors.append('unmerged_fault_cache_boot_configuration')
     if cases==('capacity',) and any(plan.get(k)!=v for k,v in dict(capacity_per_actor=40,watch_capacity=64,post_detach_operations=40).items()):
         errors.append('capacity_plan')
     if cases in (RIGHTS_CASES,ORIGIN_CASES) and plan.get('fd_transfer')!='real SCM_RIGHTS; rightsPrivate recipient creates a different TCP socket':
@@ -74,6 +78,8 @@ def verify(serial,output):
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
         if txadmission:
             from net_tx_admission_check import check as check_tx_admission
+            if ev['memory_restored']['tcp_mem'].split()!=value('tx-memory-original.json')['tcp_mem'].split():
+                errors.append('memory_restore_'+label)
             result=check_tx_admission(label.split('-')[0],ev['window'],logs,ev['memory_configuration'],
                                      ev['memory_restored'],report,identities)
         elif txfailure:
