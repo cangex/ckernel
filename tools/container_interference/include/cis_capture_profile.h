@@ -38,7 +38,7 @@ static inline int cis_profile_program(unsigned int profile, const char *name)
 	if (profile == 10)
 		return !strcmp(name,"block_start") || !strcmp(name,"block_insert") ||
 		       !strcmp(name,"block_issue") || !strcmp(name,"block_requeue") ||
-		       !strcmp(name,"block_complete") || !strcmp(name,"block_merge") || !strcmp(name,"block_remap");
+		       !strcmp(name,"block_complete") || !strcmp(name,"block_merge") || !strcmp(name,"block_remap") || !strcmp(name,"block_tag");
 	if (profile == 11)
 		return !strcmp(name, "rwsem_state");
 	return (profile == 2 || profile == 6 || profile == 12) && (!strcmp(name, "owner_state") || !strcmp(name, "owner_switch"));
@@ -61,7 +61,7 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 		return !strcmp(name, "targets") || !strcmp(name, "stacks") ||
 		       !strcmp(name, "net_watched") || !strcmp(name, "net_skb") || !strcmp(name, "net_service");
 	if (profile == 10)
-		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"block_watched");
+		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"block_watched") || !strcmp(name,"tag_pending");
 	if (profile == 11)
 		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"rwsem_watched") || !strcmp(name,"rwsem_selected");
 	if (profile == 7 && (!strcmp(name,"counter_selected") || !strcmp(name,"counter_actors") || !strcmp(name,"counter_sums")))

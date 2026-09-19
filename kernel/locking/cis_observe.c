@@ -36,6 +36,7 @@ DECLARE_TRACEPOINT(block_rq_requeue);
 DECLARE_TRACEPOINT(block_rq_complete);
 DECLARE_TRACEPOINT(block_rq_merge);
 DECLARE_TRACEPOINT(block_rq_remap);
+DECLARE_TRACEPOINT(block_tag_wait);
 #define CIS_BLOCK_ON(name) tracepoint_enabled(name)
 #else
 #define CIS_BLOCK_ON(name) 0
@@ -46,7 +47,7 @@ static bool cis_block_active(void)
 	return CIS_BLOCK_ON(block_io_start) || CIS_BLOCK_ON(block_rq_insert) ||
 	       CIS_BLOCK_ON(block_rq_issue) || CIS_BLOCK_ON(block_rq_requeue) ||
 	       CIS_BLOCK_ON(block_rq_complete) || CIS_BLOCK_ON(block_rq_merge) ||
-	       CIS_BLOCK_ON(block_rq_remap);
+	       CIS_BLOCK_ON(block_rq_remap) || CIS_BLOCK_ON(block_tag_wait);
 }
 
 /* Monotone one-bit membership: collisions only admit extra events. No deletes
@@ -201,7 +202,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=8 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u\n",
+	seq_printf(m, "version=9 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -209,7 +210,8 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_rq_insert), CIS_BLOCK_ON(block_rq_issue),
 		   CIS_BLOCK_ON(block_rq_requeue), CIS_BLOCK_ON(block_rq_complete),
 		   CIS_BLOCK_ON(block_rq_merge), CIS_BLOCK_ON(block_rq_remap),
-		   trace_cis_rwsem_state_enabled(), trace_cis_slublock_state_enabled());
+		   trace_cis_rwsem_state_enabled(), trace_cis_slublock_state_enabled(),
+		   CIS_BLOCK_ON(block_tag_wait));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);

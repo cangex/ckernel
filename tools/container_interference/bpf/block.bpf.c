@@ -9,6 +9,61 @@ struct {
 	__type(value, struct cis_block_event);
 } block_watched SEC(".maps");
 
+struct tag_key { __u64 tid, start; };
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 256);
+	__type(key, struct tag_key);
+	__type(value, struct cis_block_tag_event);
+} tag_pending SEC(".maps");
+
+SEC("raw_tp/block_tag_wait")
+int block_tag(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct cis_bpf_stats *s = statistics();
+	struct cis_block_tag_event e = {}, *saved;
+	struct cis_identity id = {};
+	struct task_struct *task = (void *)bpf_get_current_task();
+	struct request_queue *q = (void *)ctx->args[0];
+	struct tag_key key = { bpf_get_current_pid_tgid(), BPF_CORE_READ(task, start_boottime) };
+	__u64 now = bpf_ktime_get_ns();
+	__u32 phase = ctx->args[2], pc = BPF_CORE_READ(task, thread_info.preempt_count);
+
+	COUNT(s, received);
+	if (!q || !ctx->args[1] || phase < 1 || phase > 5 || (pc & 0x00ff0100U)) {
+		COUNT(s, rejected); return 0;
+	}
+	if (phase == 1 || phase == 5) {
+		if (!identity(task, &id) || !allowed(&id, CIS_DIAG_BLOCK, now)) return 0;
+		e.base.id = id.id; e.base.generation = id.generation;
+		e.base.tid = key.tid; e.task_start = key.start;
+		e.base.sequence_ns = now; e.queue = (__u64)q;
+		e.base.stack_id = bpf_get_stackid(ctx, &stacks, 0);
+	} else {
+		saved = bpf_map_lookup_elem(&tag_pending, &key);
+		if (!saved) { COUNT(s, unmatched); return 0; }
+		e = *saved;
+		if (!same_window(&e.base, CIS_DIAG_BLOCK, now)) {
+			if (phase == 4) bpf_map_delete_elem(&tag_pending, &key);
+			COUNT(s, expired); return 0;
+		}
+		if (e.queue != (__u64)q) { COUNT(s, rejected); return 0; }
+		identity(task, &id);
+	}
+	e.base.time_ns = now; e.base.cpu = bpf_get_smp_processor_id();
+	e.base.type = CIS_BLOCK_TAG_EVENT; e.base.object = ctx->args[1];
+	e.phase = phase; e.alloc_flags = ctx->args[3]; e.tag = (int)ctx->args[4];
+	e.dev_major = BPF_CORE_READ(q, disk, major); e.dev_minor = BPF_CORE_READ(q, disk, first_minor);
+	e.actor_id = id.id; e.actor_generation = id.generation;
+	if (phase == 1 && bpf_map_update_elem(&tag_pending, &key, &e, BPF_NOEXIST)) {
+		COUNT(s, rejected); return 0;
+	}
+	if (phase == 4) bpf_map_delete_elem(&tag_pending, &key);
+	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
+	else COUNT(s, emitted);
+	return 0;
+}
+
 static __always_inline int block_event(void *ctx, struct request *rq,
 		__u32 phase, __u32 completed, __u32 status)
 {

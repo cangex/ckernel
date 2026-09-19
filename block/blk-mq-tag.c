@@ -15,6 +15,14 @@
 #include "blk-mq-sched.h"
 #include "blk-io-hierarchy/stats.h"
 
+#ifdef CONFIG_CIS_OBSERVE
+#include <trace/events/block.h>
+#define cis_tag_event(data, bt, phase, tag) \
+	trace_block_tag_wait((data)->q, bt, phase, (data)->flags, tag)
+#else
+#define cis_tag_event(data, bt, phase, tag) do { } while (0)
+#endif
+
 /*
  * Recalculate wakeup batch when tag is shared by hctx.
  */
@@ -157,9 +165,12 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 	if (tag != BLK_MQ_NO_TAG)
 		goto found_tag;
 
-	if (data->flags & BLK_MQ_REQ_NOWAIT)
+	if (data->flags & BLK_MQ_REQ_NOWAIT) {
+		cis_tag_event(data, bt, 5, tag);
 		return BLK_MQ_NO_TAG;
+	}
 
+	cis_tag_event(data, bt, 1, tag);
 	if (data->bio)
 		bio_hierarchy_start_io_acct(data->bio, STAGE_GETTAG);
 	ws = bt_wait_ptr(bt, data->hctx);
@@ -188,7 +199,9 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 			break;
 
 		bt_prev = bt;
+		cis_tag_event(data, bt, 2, tag);
 		io_schedule();
+		cis_tag_event(data, bt, 3, tag);
 
 		sbitmap_finish_wait(bt, ws, &wait);
 
@@ -215,6 +228,8 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 	sbitmap_finish_wait(bt, ws, &wait);
 	if (data->bio)
 		bio_hierarchy_end_io_acct(data->bio, STAGE_GETTAG);
+	/* The caller may still reject an inactive hctx below. Not an I/O success. */
+	cis_tag_event(data, bt, 4, tag + tag_offset);
 
 found_tag:
 	/*

@@ -70,10 +70,16 @@ COLLECTORS = {
 }
 
 
-def contract(name):
+LEGACY_BLOCK = deepcopy(COLLECTORS['block'])
+COLLECTORS['block']['programs'].append('block_tag')
+COLLECTORS['block']['maps'].append('tag_pending')
+COLLECTORS['block']['source_filter'] += '; 256 task-start keyed tag-wait episodes before request creation; no inferred tag holder'
+
+
+def contract(name, legacy_block=False):
     if name not in COLLECTORS:
         raise ValueError('unsupported collector')
-    value = deepcopy(COLLECTORS[name])
+    value = deepcopy(LEGACY_BLOCK if legacy_block and name=='block' else COLLECTORS[name])
     value.update(schema=SCHEMA, name=name, event_abi=1, bundle=name+'.bpf.o',
                  configuration='fixed OLK ARM64 non-RT; runtime capability check required',
                  limits=dict(window_ms=2000, targets=2, registered_roots=4,
@@ -106,6 +112,10 @@ def validate_inventory(name, inventory):
 def validate_record_inventory(record):
     """Historical reads only; live admission always requires the current maps."""
     name=record['collector']; expected=contract(name); inventory=record.get('inventory')
+    if name=='block' and isinstance(inventory,dict) and 'tag_pending' not in inventory.get('map_names',[]):
+        expected=contract(name,legacy_block=True)
+        if record.get('collector_contract_sha256')!=digest(expected):
+            raise ValueError('unproven historical block contract')
     legacy=COMMON_MAPS+['targets','stacks','pending']
     if (name=='counter' and isinstance(inventory,dict) and set(inventory.get('map_names',[]))==set(legacy)):
         expected['maps']=legacy

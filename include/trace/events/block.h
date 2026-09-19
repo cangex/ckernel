@@ -12,6 +12,32 @@
 
 #define RWBS_LEN	8
 
+#ifdef CONFIG_CIS_OBSERVE
+/* Slow allocation episode only. A bitmap address is not an owner identity. */
+TRACE_EVENT(block_tag_wait,
+	TP_PROTO(struct request_queue *q, void *pool, unsigned int phase,
+		 unsigned int flags, int tag),
+	TP_ARGS(q, pool, phase, flags, tag),
+	TP_STRUCT__entry(
+		__field(void *, queue)
+		__field(void *, pool)
+		__field(unsigned int, phase)
+		__field(unsigned int, flags)
+		__field(int, tag)
+	),
+	TP_fast_assign(
+		__entry->queue = q;
+		__entry->pool = pool;
+		__entry->phase = phase;
+		__entry->flags = flags;
+		__entry->tag = tag;
+	),
+	TP_printk("queue=%p pool=%p phase=%u flags=%u tag=%d",
+		__entry->queue, __entry->pool, __entry->phase,
+		__entry->flags, __entry->tag)
+);
+#endif
+
 #ifdef CONFIG_BUFFER_HEAD
 DECLARE_EVENT_CLASS(block_buffer,
 
@@ -584,4 +610,3 @@ TRACE_EVENT(block_rq_remap,
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>
-

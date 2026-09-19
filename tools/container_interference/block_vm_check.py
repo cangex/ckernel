@@ -43,7 +43,7 @@ def verify(serial,output):
             validate(ev['idle_sources'],None,record['window']['end_ns'],2**64-1)
             programs=record['receipt'].get('program_audit',{})
             if (programs.get('required') is not True or programs.get('valid') is not True or
-                    programs.get('programs')!=7 or programs.get('recursion_misses')!=0): errors.append('program_audit_'+label)
+                    programs.get('programs')!=len(record['inventory']['program_names']) or programs.get('recursion_misses')!=0): errors.append('program_audit_'+label)
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
