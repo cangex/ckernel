@@ -7,6 +7,7 @@ import test_net_report
 import test_collector_manifest
 import test_allocator_report
 import test_allocator_lifetime
+import test_block_tag_report
 from owner_test import event
 from unified_report import analyze,markdown
 
@@ -20,6 +21,18 @@ def encode(rows):
 
 
 class UnifiedReport(unittest.TestCase):
+    def test_tag_wait_stays_e1_with_no_invented_holder(self):
+        f=test_block_tag_report.TagReport()
+        raw=encode([f.row(t,p) for t,p in ((10,1),(20,2),(30,3),(40,4))])
+        result=analyze(test_block_report.BlockReport().record(),raw)
+        self.assertEqual(result['quality']['status'],'PASS',result)
+        relation=result['relations'][0]
+        self.assertEqual(relation['relation'],'block_tag_wait')
+        self.assertEqual(relation['evidence'],'E1')
+        self.assertEqual(relation['participants'],[])
+        self.assertEqual(relation['details']['sleep_intervals'][0]['interval_ns'],[20,30])
+        self.assertIsNone(result['total_interference_ns'])
+
     def test_allocator_lifetime_failure_blocks_unified_acceptance(self):
         fixture=test_allocator_report.AllocatorReport()
         rows=fixture.rows([1,2,3,6,15,16,20])

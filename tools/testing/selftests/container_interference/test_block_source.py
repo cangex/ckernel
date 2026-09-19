@@ -7,6 +7,18 @@ ROOT=Path(__file__).resolve().parents[4]
 
 
 class BlockSources(unittest.TestCase):
+    def test_tag_event_brackets_native_sleep_not_every_tag_success(self):
+        text=(ROOT/'block/blk-mq-tag.c').read_text()
+        start=text.index('unsigned int blk_mq_get_tag(')
+        end=text.index('void blk_mq_put_tag(',start)
+        function=text[start:end]
+        self.assertLess(function.index('goto found_tag'),function.index('cis_tag_event(data, bt, 1'))
+        self.assertIn('cis_tag_event(data, bt, 2, tag);\n\t\tio_schedule();\n\t\tcis_tag_event(data, bt, 3, tag);',function)
+        self.assertIn('if (data->flags & BLK_MQ_REQ_NOWAIT) {\n\t\tcis_tag_event(data, bt, 5, tag);',function)
+        self.assertLess(function.index('cis_tag_event(data, bt, 4'),function.index('found_tag:'))
+        self.assertNotIn('ktime_get',function)
+        self.assertEqual(expected_fields('9','block')['block_tag'],'1')
+
     def test_existing_native_request_tracepoints_and_partial_completion(self):
         trace=(ROOT/'include/trace/events/block.h').read_text()
         mq=(ROOT/'block/blk-mq.c').read_text()

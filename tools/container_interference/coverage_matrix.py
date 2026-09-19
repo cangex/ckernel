@@ -36,7 +36,10 @@ CONTRACT={
         pending=['skb分配来源和后端成本','clone/GSO/GRO来源变换']),
     'block': dict(name='块I/O',collector='block',discovered='直接I/O请求形成、排队、下发与完成',
         object='请求episode、设备/队列、head-bio blkcg',participants='初始提交者与bio归属；不推断唯一阻塞方',
-        pending=['tag等待运行正例','真实重排队和部分完成已有专用设备正例；请求合并仍待验证','buffered writeback多源归属']),
+        pending=['tag等待由独立专项核验','真实重排队和部分完成已有专用设备正例；请求合并仍待验证','buffered writeback多源归属']),
+    'block_tag': dict(name='块请求槽位等待',collector='block',discovered='原生tag慢分配、io_schedule及NOWAIT拒绝',
+        object='调用episode、队列与本次bitmap地址',participants='等待任务；未推断占用槽位的请求或唯一阻塞容器',
+        pending=['API fixture不代表真实设备负载覆盖','多硬件队列迁移与reserved池运行验证','槽位持有请求的完整生命周期']),
     'routing': dict(name='有界专项调度',collector='controller',discovered='真实巡检候选到单槽专项',
         object='配置epoch、目标代次及候选来源会话',participants='按目标轮转，候选不是因果认定',
         pending=['四容器混合来源联合验收']),
@@ -57,7 +60,8 @@ VERIFIERS={
     'allocator_rollback':('allocator_vm_check','allocator',dict(rollback=True)),
     'slub':('slub_vm_check','slub',{}),
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
-    'block':('block_vm_check','block',{}), 'routing':('diagnosis_vm_check','routing',{}),
+    'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
+    'routing':('diagnosis_vm_check','routing',{}),
     'control':('x0_check','control',{}), 'rwsem':('rwsem_vm_check','rwsem',{}),
     'joint':('joint_vm_check','joint',{})}
 
