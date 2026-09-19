@@ -12,11 +12,12 @@ from owner_report import fields
 STAGES = {1:'begin',2:'pre_begin',3:'pre_end',4:'slow_begin',5:'slow_end',6:'cpu_fast',
           7:'cpu_partial',8:'partial_begin',9:'partial_end',10:'node_wait',11:'node_held',
           12:'node_done',13:'new_begin',14:'new_end',15:'post_begin',16:'post_end',
-          17:'bulk_item',18:'bulk_rollback',19:'kfence',20:'end'}
+          17:'bulk_item',18:'bulk_rollback',19:'kfence',20:'end',21:'node_release'}
 PAIRS = {2:(3,'pre_hook'),4:(5,'slow_helper'),8:(9,'node_partial'),
          10:(11,'node_lock_acquire'),11:(12,'node_lock_section'),
          13:(14,'new_slab'),15:(16,'post_hook')}
-PRIORITY = ['node_lock_acquire','node_lock_section','pre_hook','post_hook','new_slab','node_partial','slow_helper']
+PRIORITY = ['node_lock_acquire','node_lock_held_observed','node_lock_unlock',
+            'node_lock_section','pre_hook','post_hook','new_slab','node_partial','slow_helper']
 MAX_CALLS = 1024
 
 
@@ -35,17 +36,21 @@ def allocation_result(rows):
 
 def stages(rows, begin, end):
     opened, intervals = {}, []
+    pairs=dict(PAIRS)
+    if any(row['stage']==21 for row in rows):
+        pairs[11]=(21,'node_lock_held_observed')
+        pairs[21]=(12,'node_lock_unlock')
     for row in rows:
         stage = row['stage']
-        ending = [first for first,(last,_) in PAIRS.items() if last==stage]
+        ending = [first for first,(last,_) in pairs.items() if last==stage]
         for first in ending:
             if first not in opened: raise ValueError('unpaired stage end')
             start = opened.pop(first)
-            if first in (10,11) and (not row['resource'] or start['resource']!=row['resource']):
+            if first in (10,11,21) and (not row['resource'] or start['resource']!=row['resource']):
                 raise ValueError('node lock address changed')
-            intervals.append(dict(kind=PAIRS[first][1],begin_ns=start['sample_time_ns'],
+            intervals.append(dict(kind=pairs[first][1],begin_ns=start['sample_time_ns'],
                 end_ns=row['sample_time_ns'],resource=start['resource'],evidence='E1',holder=None))
-        if stage in PAIRS:
+        if stage in pairs:
             if stage in opened: raise ValueError('duplicate stage begin')
             opened[stage]=row
     if opened: raise ValueError('unclosed stage')
@@ -126,6 +131,8 @@ def analyze(record, raw):
                 'exclusive partition avoids adding nested slow/partial/node-lock intervals twice',
                 'node_lock_acquire includes uncontended calls; no full lock owner/lifetime coverage',
                 'node_lock_section ends after unlock and is not a pure held interval or holder attribution',
+                'node_lock_held_observed is an inner held bracket, not full lock hold time or population holder coverage',
+                'node_lock_unlock includes the release observer and native unlock, potentially post-unlock scheduling',
                 'failure region identifies an observed control-flow boundary, not another container or a specific ENOMEM cause',
                 'same cache address is not proof of interference or a shared allocation owner',
                 'sampling is per CPU selected-cache entry, not unbiased population cost',

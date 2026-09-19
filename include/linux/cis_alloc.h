@@ -10,6 +10,8 @@ enum cis_alloc_stage {
 	CIS_CA_NODE_WAIT, CIS_CA_NODE_HELD, CIS_CA_NODE_DONE,
 	CIS_CA_NEW_BEGIN, CIS_CA_NEW_END, CIS_CA_POST_BEGIN, CIS_CA_POST_END,
 	CIS_CA_BULK_ITEM, CIS_CA_BULK_ROLLBACK, CIS_CA_KFENCE, CIS_CA_END,
+	/* Append only: existing captures retain their original stage values. */
+	CIS_CA_NODE_RELEASE,
 };
 #define CIS_CA_STEPS 64
 struct cis_alloc_ctx {

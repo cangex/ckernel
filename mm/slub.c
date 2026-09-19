@@ -2328,6 +2328,8 @@ static struct slab *get_partial_node(struct kmem_cache *s,
 #endif
 
 	}
+	cis_alloc_step(pc->cis, CIS_CA_NODE_RELEASE, partial, &n->list_lock,
+		partial ? slab_nid(partial) : NUMA_NO_NODE, !!partial);
 	spin_unlock_irqrestore(&n->list_lock, flags);
 	cis_alloc_step(pc->cis, CIS_CA_NODE_DONE, partial, &n->list_lock,
 		partial ? slab_nid(partial) : NUMA_NO_NODE, !!partial);

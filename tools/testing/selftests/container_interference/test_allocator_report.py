@@ -17,7 +17,7 @@ class AllocatorReport(unittest.TestCase):
         rows=[]
         for i,stage in enumerate(seq):
             d=dict(protocol=1,sample_time_ns=11+i,call_ns=10,tid=102,task_start=1,cpu=0,
-                cache=100,object=0 if fail else 500,resource=200 if stage in (10,11,12) else 0,
+                cache=100,object=0 if fail else 500,resource=200 if stage in (10,11,12,21) else 0,
                 operation=2 if bulk else 1,stage=stage,ordinal=i,gfp=64,requested=4 if bulk else 1,
                 count=2 if stage==18 else 0 if fail else 4 if bulk else 1,
                 requested_node=-1,observed_node=-1,sample_shift=6,stack_id=-1)
@@ -47,6 +47,22 @@ class AllocatorReport(unittest.TestCase):
         self.assertEqual(c['result'],dict(status='FAILED',failure_region='backend_or_post_hook',cause='UNKNOWN'))
         c=self.run_rows(self.rows())['calls'][0]
         self.assertEqual(c['result'],dict(status='RETURNED',failure_region=None,cause=None))
+
+    def test_inner_held_boundary_does_not_include_unlock(self):
+        c=self.run_rows(self.rows([1,2,3,4,8,10,11,21,12,9,5,15,16,20]))['calls'][0]
+        phases={v['kind']:v for v in c['phases']}
+        self.assertNotIn('node_lock_section',phases)
+        self.assertEqual(phases['node_lock_held_observed']['end_ns'],phases['node_lock_unlock']['begin_ns'])
+        self.assertEqual(sum(c['exclusive_wall_ns'].values()),c['elapsed_wall_ns'])
+        self.assertTrue(all(v['holder'] is None for v in c['phases']))
+        self.assertIn('node_lock_section',{v['kind'] for v in self.run_rows(self.rows())['calls'][0]['phases']})
+
+    def test_bad_release_boundary_cannot_create_held_interval(self):
+        for seq in ([1,2,3,10,21,12,20],[1,2,3,10,11,21,20],[1,2,3,10,11,21,21,12,20]):
+            self.assertFalse(self.run_rows(self.rows(seq))['calls'])
+        rows=self.rows([1,2,3,10,11,21,12,20])
+        rows[5]['detail']=rows[5]['detail'].replace('resource=200','resource=201')
+        self.assertFalse(self.run_rows(rows)['calls'])
 
     def test_missing_ends_and_changed_resource_rejected(self):
         for sequence in ([1,2,20],[1,2,3,4,20],[1,2,3,12,20]):
