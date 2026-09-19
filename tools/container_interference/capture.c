@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 32
+#define CIS_DIAGNOSTIC_LINKS 33
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -221,6 +221,18 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 			(unsigned long long)v->executor_id,(unsigned long long)v->executor_generation);
 		cis_report(ctx,"ALLOC_RELEASE",r,d);return;
 	}
+	if(size>=sizeof(struct cis_maple_event) && size<=sizeof(struct cis_maple_event)+7 && e->type==CIS_MAPLE_EVENT) {
+		struct cis_maple_event *v=data;
+		char d[700];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 sample_time_ns=%llu begin_ns=%llu call_ns=%llu tid=%llu task_start=%llu cpu=%u tree=0x%llx cache=0x%llx operation=%u gfp=%llu requested=%llu count=%llu",
+			(unsigned long long)e->time_ns,(unsigned long long)e->sequence_ns,(unsigned long long)e->weight,
+			(unsigned long long)e->tid,(unsigned long long)v->task_start,e->cpu,
+			(unsigned long long)e->object,(unsigned long long)v->cache,v->operation,
+			(unsigned long long)v->gfp,(unsigned long long)v->requested,(unsigned long long)v->count);
+		cis_report(ctx,"MAPLE_ALLOC",r,d);return;
+	}
 	if(size>=sizeof(struct cis_alloc_event) && size<=sizeof(struct cis_alloc_event)+7 && e->type==CIS_ALLOC_EVENT) {
 		struct cis_alloc_event *v=data;
 		char d[1100];
@@ -350,7 +362,7 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"work_cancel_begin",8},{"work_cancel_end",8},
 		{"memcg_begin",4},{"memcg_end",4},
 		{"owner_state",16},{"owner_switch",16},{"counter_step",32},
-		{"alloc_step",64},{"alloc_release",64},{"net_state",128},{"net_release",128},
+		{"alloc_step",64},{"alloc_release",64},{"maple_context",64},{"net_state",128},{"net_release",128},
 		{"block_start",256},{"block_insert",256},{"block_issue",256},
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
 		{"block_tag",256},{"block_link",256},

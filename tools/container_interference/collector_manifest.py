@@ -71,6 +71,10 @@ COLLECTORS = {
 
 
 LEGACY_BLOCK = deepcopy(COLLECTORS['block'])
+LEGACY_ALLOCATOR = deepcopy(COLLECTORS['allocator'])
+COLLECTORS['allocator']['programs'].append('maple_context')
+COLLECTORS['allocator']['maps'].append('maple_pending')
+COLLECTORS['allocator']['source_filter'] += '; 256 task-start keyed Maple allocation brackets join sampled backend calls to destination tree addresses; no lifetime across brackets or inferred tree owner'
 LEGACY_RWSEM = deepcopy(COLLECTORS['rwsem'])
 COLLECTORS['rwsem']['source_filter'] = 'manual 1..8 administrator-selected addresses; exclusive immutable kernel filter lease before BPF; all actors on selected objects remain visible; target init/attempt opens watches, 1024 events/object; observed init required for E2; eight-reader analysis; pre-window and non-owner use unknown'
 COLLECTORS['block']['programs'].append('block_tag')
@@ -124,6 +128,10 @@ def validate_inventory(name, inventory):
 def validate_record_inventory(record):
     """Historical reads only; live admission always requires the current maps."""
     name=record['collector']; expected=contract(name); inventory=record.get('inventory')
+    if name=='allocator' and isinstance(inventory,dict) and 'maple_context' not in inventory.get('program_names',[]):
+        for key,value in LEGACY_ALLOCATOR.items(): expected[key]=deepcopy(value)
+        if record.get('collector_contract_sha256')!=digest(expected):
+            raise ValueError('unproven historical allocator contract')
     if name=='rwsem' and record.get('collector_contract_sha256')==digest(contract(name,legacy_rwsem=True)):
         expected=contract(name,legacy_rwsem=True)
     if name=='block' and isinstance(inventory,dict) and 'tag_pending' not in inventory.get('map_names',[]):

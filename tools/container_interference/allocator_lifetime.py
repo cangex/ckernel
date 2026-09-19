@@ -64,6 +64,7 @@ def correlate(record,raw,report,stacks):
             observation_key=dict(boot_id=record.get('boot_id'),session_id=record.get('session_id'),
                                  call_ns=d['call_ns'],ordinal=d['allocation_ordinal']),
             allocation_requester=call['actor'],allocation_time_ns=d['allocation_time_ns'],
+            allocation_tree_context=call.get('maple_context'),
             allocation_cpu=obj['cpu'],release_entry_ns=d['sample_time_ns'],release_cpu=d['cpu'],
             observed_age_ns=d['sample_time_ns']-d['allocation_time_ns'],
             allocation_state='returned' if call['returned_count'] else 'rolled_back',
@@ -80,4 +81,4 @@ def correlate(record,raw,report,stacks):
         release_stack_errors=dict(stack_errors),
         status_scope='allocation-instance to release-entry identity; stack availability is reported separately',
         completion='entry before native release/reuse, not completion; no mutation of allocator ownership',
-        unknown_semantics=['memcg billing','Maple tree owner','RCU grace-period start/end','allocator free backend cost'])
+        unknown_semantics=['memcg billing','Maple tree lifetime after allocation bracket','RCU grace-period start/end','allocator free backend cost'])

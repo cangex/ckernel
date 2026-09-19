@@ -26,6 +26,7 @@
 #define CIS_BLOCK_LINK_EVENT 20
 #define CIS_BLOCK_BIO_EVENT 21
 #define CIS_WRITEBACK_EVENT 22
+#define CIS_MAPLE_EVENT 23
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -79,6 +80,12 @@ struct cis_alloc_event {
 };
 struct cis_alloc_live_key { __u64 cache, object; };
 struct cis_alloc_live { struct cis_event allocation; __u64 task_start; };
+struct cis_maple_key { __u64 tid, task_start; };
+struct cis_maple_event {
+	struct cis_event base; /* object=tree, sequence_ns=wrapper begin, weight=backend call */
+	__u64 task_start, cache, gfp, requested, count;
+	__u32 operation, reserved;
+};
 struct cis_alloc_release_event {
 	struct cis_event base;
 	__u64 cache, allocation_task_start, executor_start, executor_id, executor_generation;

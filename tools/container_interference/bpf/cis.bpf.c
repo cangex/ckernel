@@ -224,6 +224,7 @@ int net_release(struct bpf_raw_tracepoint_args *ctx)
 #endif
 
 #if CIS_PROFILE == 8
+#include "maple.bpf.h"
 SEC("raw_tp/cis_alloc_step")
 int alloc_step(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -268,6 +269,7 @@ int alloc_step(struct bpf_raw_tracepoint_args *ctx)
 	e.ordinal = BPF_CORE_READ(sample, ordinal); e.sample_shift = BPF_CORE_READ(sample, sample_shift);
 	e.requested_node = BPF_CORE_READ(sample, requested_node);
 	e.observed_node = BPF_CORE_READ(sample, observed_node);
+	if (e.stage == 1) maple_backend(&e);
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);
 	if (e.base.object && (e.stage == 17 || (e.stage == 20 && e.operation == 1 && e.count == 1))) {

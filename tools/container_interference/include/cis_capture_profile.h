@@ -32,7 +32,7 @@ static inline int cis_profile_program(unsigned int profile, const char *name)
 	if (profile == 7)
 		return !strcmp(name, "counter_step");
 	if (profile == 8)
-		return !strcmp(name, "alloc_step") || !strcmp(name, "alloc_release");
+		return !strcmp(name, "alloc_step") || !strcmp(name, "alloc_release") || !strcmp(name, "maple_context");
 	if (profile == 9)
 		return !strcmp(name, "net_state") || !strcmp(name, "net_release");
 	if (profile == 10)
@@ -56,7 +56,7 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 		return 1;
 	if (profile == 3)
 		return !strcmp(name, "targets");
-	if (profile == 8 && !strcmp(name, "alloc_live"))
+	if (profile == 8 && (!strcmp(name, "alloc_live") || !strcmp(name, "maple_pending")))
 		return 1;
 	if (profile == 9)
 		return !strcmp(name, "targets") || !strcmp(name, "stacks") ||

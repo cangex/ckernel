@@ -25,6 +25,8 @@ def analyze(record,raw):
             defects=quality['defects']+['collector_scope_'+scope['status'].lower()])
     if collector=='allocator' and specialist['lifetimes']['status']=='FAIL':
         quality=dict(quality,status='FAIL',defects=quality['defects']+['allocation_lifetime_invalid'])
+    if collector=='allocator' and specialist['maple']['status']=='FAIL':
+        quality=dict(quality,status='FAIL',defects=quality['defects']+['maple_context_invalid'])
 
     def add(kind,level,actor,resource,participants,interval,chain,unknown,**detail):
         nonlocal omitted
@@ -65,12 +67,14 @@ def analyze(record,raw):
                 add('allocation_stages','E1',f['actor'],dict(kind='selected_cache',address=f['cache_address'],lifetime='UNKNOWN'),
                     [],f['interval_ns'],f['stack_leaf_to_root'],unknown,
                     phases=f['phases'],exclusive_wall_ns=f['exclusive_wall_ns'],outcome=f['returned_count'],
-                    allocation_stack_status=f['allocation_stack_status'],allocation_stack_error=f['allocation_stack_error'])
+                    allocation_stack_status=f['allocation_stack_status'],allocation_stack_error=f['allocation_stack_error'],
+                    maple_allocation_context=f['maple_context'])
             for f in specialist['lifetimes']['release_entries']:
                 add('allocation_release_entry','E2',f['allocation_requester'],
                     dict(kind='observed_allocation',address=f['object_address'],observation_key=f['observation_key']),[],
                     [f['allocation_time_ns'],f['release_entry_ns']],f['release_stack_leaf_to_root'],
-                    ['release entry is not backend completion or memcg billing'],release_executor=f['release_executor'])
+                    ['release entry is not backend completion or memcg billing'],release_executor=f['release_executor'],
+                    allocation_tree_context=f['allocation_tree_context'])
         elif collector=='net':
             for sock in specialist['sockets']:
                 resource=dict(kind='tcp_socket',cookie=sock['cookie'],netns=sock['netns'])

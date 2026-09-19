@@ -157,14 +157,31 @@ struct maple_subtree_state {
 #endif
 
 /* Functions */
-static inline struct maple_node *mt_alloc_one(gfp_t gfp)
+#ifdef __KERNEL__
+#include <linux/cis_maple.h>
+#else
+/* The standalone Maple tests do not load the kernel observation interface. */
+#define cis_maple_alloc(tree, cache, gfp, requested, count, operation, begin_ns) 0ULL
+#endif
+
+static inline struct maple_node *mt_alloc_one(struct maple_tree *tree, gfp_t gfp)
 {
-	return kmem_cache_alloc(maple_node_cache, gfp);
+	u64 observation = cis_maple_alloc(tree, maple_node_cache, gfp, 1, 0, 1, 0);
+	struct maple_node *node = kmem_cache_alloc(maple_node_cache, gfp);
+
+	if (observation)
+		(void)cis_maple_alloc(tree, maple_node_cache, gfp, 1, !!node, 1, observation);
+	return node;
 }
 
-static inline int mt_alloc_bulk(gfp_t gfp, size_t size, void **nodes)
+static inline int mt_alloc_bulk(struct maple_tree *tree, gfp_t gfp, size_t size, void **nodes)
 {
-	return kmem_cache_alloc_bulk(maple_node_cache, gfp, size, nodes);
+	u64 observation = cis_maple_alloc(tree, maple_node_cache, gfp, size, 0, 2, 0);
+	int count = kmem_cache_alloc_bulk(maple_node_cache, gfp, size, nodes);
+
+	if (observation)
+		(void)cis_maple_alloc(tree, maple_node_cache, gfp, size, count, 2, observation);
+	return count;
 }
 
 static inline void mt_free_one(struct maple_node *node)
@@ -1268,7 +1285,7 @@ static inline void mas_alloc_nodes(struct ma_state *mas, gfp_t gfp)
 	}
 
 	if (!allocated || mas->alloc->node_count == MAPLE_ALLOC_SLOTS) {
-		node = (struct maple_alloc *)mt_alloc_one(gfp);
+		node = (struct maple_alloc *)mt_alloc_one(mas->tree, gfp);
 		if (!node)
 			goto nomem_one;
 
@@ -1290,7 +1307,7 @@ static inline void mas_alloc_nodes(struct ma_state *mas, gfp_t gfp)
 		max_req = MAPLE_ALLOC_SLOTS - node->node_count;
 		slots = (void **)&node->slot[node->node_count];
 		max_req = min(requested, max_req);
-		count = mt_alloc_bulk(gfp, max_req, slots);
+		count = mt_alloc_bulk(mas->tree, gfp, max_req, slots);
 		if (!count)
 			goto nomem_bulk;
 
@@ -6738,7 +6755,7 @@ static inline void mas_dup_alloc(struct ma_state *mas, struct ma_state *new_mas,
 	type = mte_node_type(mas->node);
 	new_slots = ma_slots(new_node, type);
 	request = mas_data_end(mas) + 1;
-	count = mt_alloc_bulk(gfp, request, (void **)new_slots);
+	count = mt_alloc_bulk(new_mas->tree, gfp, request, (void **)new_slots);
 	if (unlikely(count < request)) {
 		memset(new_slots, 0, request * sizeof(void *));
 		mas_set_err(mas, -ENOMEM);
@@ -6785,7 +6802,7 @@ static inline void mas_dup_build(struct ma_state *mas, struct ma_state *new_mas,
 	if (mas_is_ptr(mas) || mas_is_none(mas))
 		goto set_new_tree;
 
-	node = mt_alloc_one(gfp);
+	node = mt_alloc_one(new_mas->tree, gfp);
 	if (!node) {
 		new_mas->status = ma_none;
 		mas_set_err(mas, -ENOMEM);

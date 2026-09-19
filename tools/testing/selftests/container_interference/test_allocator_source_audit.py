@@ -65,3 +65,18 @@ class AllocatorAudit(unittest.TestCase):
         for old,new in [('free_callback_calls=5','free_callback_calls=4'),('free_callback_max_ns=9999','free_callback_max_ns=9000')]:
             b=self.timed(1); b['source_audit']=b['source_audit'].replace(old,new)
             with self.assertRaises(ValueError): delta(self.timed(),b)
+
+    def test_maple_all_entry_cost_and_idle_switch(self):
+        rows=[]
+        for n in (0,1):
+            r=self.timed(n)
+            r['source_audit']=r['source_audit'].replace('version=4','version=5').replace('bytes_per_cpu=120','bytes_per_cpu=152').replace('guard_bytes_per_cpu=3','guard_bytes_per_cpu=3 maple_active=0')
+            r['source_audit']=r['source_audit'].rstrip()+(' maple_entries=%d maple_callbacks=%d maple_callback_ns=%d maple_callback_max_ns=300\n'%(20*n,18*n,2000*n))
+            rows.append(r)
+        result=delta(*rows)
+        self.assertEqual(result['totals']['maple_entries'],20)
+        self.assertEqual(result['totals']['maple_callbacks'],18)
+        self.assertEqual(result['maple_callback_boot_high_water_ns'],300)
+        self.assertEqual(result['declared_counter_bytes'],152)
+        rows[-1]['source_audit']=rows[-1]['source_audit'].replace('maple_active=0','maple_active=1')
+        with self.assertRaises(ValueError): delta(*rows)

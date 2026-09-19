@@ -115,7 +115,7 @@ def analyze(record, raw):
         if stack_id<0:
             stack_errors[str(stack_id)]+=1
         calls.append(dict(actor=list(key[:4]),call_ns=key[-1],evidence='E1',cache_address=first['cache'],
-            operation='single' if first['operation']==1 else 'bulk',requested=first['requested'],
+            operation='single' if first['operation']==1 else 'bulk',requested=first['requested'],gfp=first['gfp'],
             result=allocation_result(rows),
             returned_count=last['count'],rolled_back_count=rollbacks[0] if rollbacks else 0,
             object_address=last['object'] or None,requested_node=first['requested_node'],
@@ -131,7 +131,7 @@ def analyze(record, raw):
     result=dict(schema='cis-allocator-report-v1',quality=base['quality'],scope_audit=audit(record,raw),
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),
         analysis_source_sha256=dict(base['analysis_source_sha256'],**{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('allocator_report.py','allocator_lifetime.py')}),
+            for name in ('allocator_report.py','allocator_lifetime.py','maple_report.py')}),
         calls=calls,excluded=dict(excluded),allocation_stack_errors=dict(stack_errors),
         allocation_stack_errors_scope='completed accepted calls, not repeated stage records',
         performance_certification='NOT_ACCEPTED',
@@ -148,7 +148,9 @@ def analyze(record, raw):
                 'stack helper errors retain typed stages but do not establish a complete calling path',
                 'release entry is not allocator completion or RCU grace-period duration',
                 'allocation identity is the registered requesting container, not proof of memcg billing owner',
-                'no Maple tree identity or hardware cache-line cause is asserted'])
+                'Maple destination identity is allocation-bracket scoped; no cross-call tree lifetime or hardware cache-line cause'])
+    from maple_report import correlate as correlate_maple
+    result['maple']=correlate_maple(record,raw,result)
     from allocator_lifetime import correlate
     result['lifetimes']=correlate(record,raw,result,stacks)
     return result

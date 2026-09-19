@@ -115,7 +115,7 @@ static bool cis_trace_active(void)
 {
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
 	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
-	       trace_cis_alloc_release_enabled() || trace_cis_net_state_enabled() ||
+	       trace_cis_alloc_release_enabled() || trace_cis_maple_alloc_enabled() || trace_cis_net_state_enabled() ||
 	       trace_cis_net_skb_release_enabled() || trace_cis_rwsem_state_enabled() ||
 	       trace_cis_slublock_state_enabled() || cis_block_active();
 }
@@ -224,7 +224,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=12 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u\n",
+	seq_printf(m, "version=13 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -235,7 +235,8 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   trace_cis_rwsem_state_enabled(), trace_cis_slublock_state_enabled(),
 		   CIS_BLOCK_ON(block_tag_wait), cis_rwsem_filter_active(),
 		   CIS_BLOCK_ON(block_merge_link), CIS_BLOCK_ON(writeback_dirty_folio),
-		   CIS_BLOCK_ON(writeback_single_inode_start), CIS_BLOCK_ON(writeback_single_inode));
+		   CIS_BLOCK_ON(writeback_single_inode_start), CIS_BLOCK_ON(writeback_single_inode),
+		   trace_cis_maple_alloc_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -498,17 +499,21 @@ static DEFINE_PER_CPU(unsigned long, cis_alloc_free_irq);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_free_callback_calls);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_free_callback_ns);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_free_callback_max_ns);
+static DEFINE_PER_CPU(unsigned long, cis_maple_entries);
+static DEFINE_PER_CPU(unsigned long, cis_maple_callbacks);
+static DEFINE_PER_CPU(unsigned long, cis_maple_callback_ns);
+static DEFINE_PER_CPU(unsigned long, cis_maple_callback_max_ns);
 
 static int cis_alloc_audit_show(struct seq_file *m, void *unused)
 {
 	int cpu;
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-	seq_printf(m, "version=4 active=%u release_active=%u shift=%u cache=%s snapshot=non_atomic bytes_per_cpu=%zu guard_bytes_per_cpu=%zu\n",
+	seq_printf(m, "version=5 active=%u release_active=%u shift=%u cache=%s snapshot=non_atomic bytes_per_cpu=%zu guard_bytes_per_cpu=%zu maple_active=%u\n",
 		trace_cis_alloc_step_enabled(), trace_cis_alloc_release_enabled(), min(alloc_shift, 16U), alloc_cache,
-		15 * sizeof(unsigned long), sizeof(struct cis_alloc_free_guard));
+		19 * sizeof(unsigned long), sizeof(struct cis_alloc_free_guard), trace_cis_maple_alloc_enabled());
 	for_each_possible_cpu(cpu)
-		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu steps=%lu capped=%lu irq_filtered=%lu free_entries=%lu free_items=%lu free_capped=%lu free_nested=%lu free_nmi=%lu free_irq=%lu free_callback_calls=%lu free_callback_ns=%lu free_callback_max_ns=%lu\n", cpu,
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu steps=%lu capped=%lu irq_filtered=%lu free_entries=%lu free_items=%lu free_capped=%lu free_nested=%lu free_nmi=%lu free_irq=%lu free_callback_calls=%lu free_callback_ns=%lu free_callback_max_ns=%lu maple_entries=%lu maple_callbacks=%lu maple_callback_ns=%lu maple_callback_max_ns=%lu\n", cpu,
 			READ_ONCE(per_cpu(cis_alloc_entries, cpu)), READ_ONCE(per_cpu(cis_alloc_eligible, cpu)),
 			READ_ONCE(per_cpu(cis_alloc_selected, cpu)), READ_ONCE(per_cpu(cis_alloc_steps, cpu)),
 			READ_ONCE(per_cpu(cis_alloc_capped, cpu)), READ_ONCE(per_cpu(cis_alloc_irq_filtered, cpu)),
@@ -516,10 +521,47 @@ static int cis_alloc_audit_show(struct seq_file *m, void *unused)
 			READ_ONCE(per_cpu(cis_alloc_free_capped, cpu)), READ_ONCE(per_cpu(cis_alloc_free_nested, cpu)),
 			READ_ONCE(per_cpu(cis_alloc_free_nmi, cpu)), READ_ONCE(per_cpu(cis_alloc_free_irq, cpu)),
 			READ_ONCE(per_cpu(cis_alloc_free_callback_calls, cpu)), READ_ONCE(per_cpu(cis_alloc_free_callback_ns, cpu)),
-			READ_ONCE(per_cpu(cis_alloc_free_callback_max_ns, cpu)));
+			READ_ONCE(per_cpu(cis_alloc_free_callback_max_ns, cpu)),
+			READ_ONCE(per_cpu(cis_maple_entries, cpu)), READ_ONCE(per_cpu(cis_maple_callbacks, cpu)),
+			READ_ONCE(per_cpu(cis_maple_callback_ns, cpu)), READ_ONCE(per_cpu(cis_maple_callback_max_ns, cpu)));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_alloc_audit);
+
+u64 __cis_maple_alloc(struct maple_tree *tree, struct kmem_cache *cache,
+		unsigned long gfp, unsigned long requested, unsigned long count,
+		u32 operation, u64 begin_ns)
+{
+	struct cis_maple_sample sample;
+	u64 now, elapsed, result = 0;
+
+	preempt_disable();
+	this_cpu_inc(cis_maple_entries);
+	if (strcmp(alloc_cache, "maple_node"))
+		goto out;
+	if (in_interrupt() || this_cpu_read(cis_in_trace)) {
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	this_cpu_write(cis_in_trace, true);
+	now = ktime_get_ns();
+	result = begin_ns ?: now;
+	sample = (struct cis_maple_sample) {
+		.begin_ns = result, .time_ns = now, .tree = tree, .cache = cache,
+		.gfp = gfp, .requested = requested, .count = count,
+		.operation = operation, .phase = begin_ns ? 2 : 1,
+	};
+	trace_cis_maple_alloc(&sample);
+	elapsed = ktime_get_ns() - now;
+	this_cpu_inc(cis_maple_callbacks);
+	this_cpu_add(cis_maple_callback_ns, elapsed);
+	if (elapsed > this_cpu_read(cis_maple_callback_max_ns))
+		this_cpu_write(cis_maple_callback_max_ns, elapsed);
+	this_cpu_write(cis_in_trace, false);
+out:
+	preempt_enable();
+	return result;
+}
 
 void __cis_alloc_release(struct kmem_cache *cache, const char *name,
 		void **objects, int count, unsigned long caller)

@@ -6,6 +6,7 @@
 #include <linux/tracepoint.h>
 #include <linux/cis_counter.h>
 #include <linux/cis_alloc.h>
+#include <linux/cis_maple.h>
 #include <linux/cis_net.h>
 struct task_struct;
 int cis_observe_register(void);
@@ -35,6 +36,21 @@ DEFINE_EVENT(cis_net_class, cis_net_state,
 	TP_PROTO(const struct cis_net_sample *sample), TP_ARGS(sample));
 DEFINE_EVENT(cis_net_class, cis_net_skb_release,
 	TP_PROTO(const struct cis_net_sample *sample), TP_ARGS(sample));
+TRACE_EVENT(cis_maple_alloc,
+	TP_PROTO(const struct cis_maple_sample *sample),
+	TP_ARGS(sample),
+	TP_STRUCT__entry(
+		__field(void *, tree)
+		__field(u64, begin_ns)
+		__field(unsigned int, phase)
+	),
+	TP_fast_assign(
+		__entry->tree = sample->tree; __entry->begin_ns = sample->begin_ns;
+		__entry->phase = sample->phase;
+	),
+	TP_printk("tree=%p begin_ns=%llu phase=%u", __entry->tree,
+		__entry->begin_ns, __entry->phase)
+);
 TRACE_EVENT(cis_alloc_step,
 	TP_PROTO(const struct cis_alloc_sample *sample),
 	TP_ARGS(sample),
