@@ -52,9 +52,12 @@ class SlubSource(unittest.TestCase):
         self.assertIn('if (in_hardirq() || in_serving_softirq())',body)
         self.assertIn('phase = CIS_ESCAPE',body)
         bpf=(ROOT/'tools/container_interference/bpf/cis.bpf.c').read_text()
-        self.assertIn('if(!(key.kind==4 && phase==7)) identity(task,&actor)',bpf)
+        self.assertIn('if(!irq_barrier) identity(task,&actor)',bpf)
         self.assertIn('(phase==7 && key.kind!=4)',bpf)
-        self.assertIn('e.base.tid=(key.kind==4 && phase==7)?0:tid',bpf)
+        self.assertIn('e.base.tid=irq_barrier?0:tid',bpf)
+        self.assertIn('e.actor_start=irq_barrier?0:',bpf)
+        self.assertIn('volatile __u64 raw_flags=ctx->args[4]',bpf)
+        self.assertIn('e.base.ip=raw_flags',bpf)
 
 
 if __name__ == '__main__': unittest.main()

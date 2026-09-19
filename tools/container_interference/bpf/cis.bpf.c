@@ -657,6 +657,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 {
 	/* Keep this raw-tp argument as a scalar: older verifiers reject a ctx+40 alias. */
 	volatile __u64 raw_skipped=ctx->args[5];
+	volatile __u64 raw_flags=ctx->args[4];
 	struct cis_object_key key={.object=ctx->args[0],.kind=ctx->args[1]};
 	struct cis_owner_event e={0};
 	struct cis_identity actor={0},holder={0};
@@ -666,6 +667,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 	struct cis_bpf_stats *s=statistics();
 	__u64 now=bpf_ktime_get_ns(),tid=bpf_get_current_pid_tgid();
 	__u32 phase=ctx->args[2];
+	int irq_barrier=key.kind==4 && phase==7;
 	COUNT(s,received);
 	COUNT(s,owner_entries);
 	if (CIS_PROFILE == 12 ? key.kind != 4 : CIS_PROFILE == 6 ? key.kind != 3 :
@@ -674,12 +676,12 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		if(!s->owner_seen) {s->owner_seen=1;s->owner_skip_base=raw_skipped;}
 		s->owner_skipped=raw_skipped-s->owner_skip_base;
 	}
-	if(!synchronous_context() && !(key.kind==4 && phase==7)) return 0;
+	if(!synchronous_context() && !irq_barrier) return 0;
 	w=bpf_map_lookup_elem(&watched,&key);
 	if(w && !live_watch(w,now)) { bpf_map_delete_elem(&watched,&key); w=NULL; }
 	if(!w && phase!=2) return 0;
 	if(w && key.kind>=2 && w->events>64 && phase!=1 && phase!=8) return 0;
-	if(!(key.kind==4 && phase==7)) identity(task,&actor);
+	if(!irq_barrier) identity(task,&actor);
 	if(phase==2 && allowed(&actor,CIS_DIAG_OWNER,now)) {
 		struct cis_target *t=bpf_map_lookup_elem(&targets,&actor.id);
 		COUNT(s,owner_target_waits);
@@ -714,12 +716,12 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		}
 		e.base.id=w->id;e.base.generation=w->generation;e.base.sequence_ns=w->epoch;
 		e.base.time_ns=now;e.base.type=CIS_OWNER_EVENT;e.base.object=key.object;
-		e.base.cpu=bpf_get_smp_processor_id();e.base.tid=(key.kind==4 && phase==7)?0:tid;e.base.stack_id=-1;
+		e.base.cpu=bpf_get_smp_processor_id();e.base.tid=irq_barrier?0:tid;e.base.stack_id=-1;
 		e.phase=phase;e.resource=key.kind;e.skipped=s?s->owner_skipped:1;
 		e.actor_id=actor.id;e.actor_generation=actor.generation;
-		e.actor_start=(key.kind==4 && phase==7)?0:BPF_CORE_READ(task,start_boottime);
-		if(key.kind==4) e.base.ip=ctx->args[4];
-		else e.base.flags=ctx->args[4];
+		e.actor_start=irq_barrier?0:BPF_CORE_READ(task,start_boottime);
+		if(key.kind==4) e.base.ip=raw_flags;
+		else e.base.flags=raw_flags;
 		if(phase==2 || phase==3 || phase==12) {
 			struct cis_pending_key pk={.tid=tid,.object=key.object,
 				.task_start_ns=e.actor_start,.type=key.kind};
