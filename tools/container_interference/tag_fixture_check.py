@@ -25,6 +25,9 @@ def check(evidence, report=None, identities=None):
         errors.append('native_allocation_result')
     if call['disk'] != (1 if case=='private' else 0) or call['nowait']!=int(case=='nowait'):
         errors.append('case_route')
+    if (len({r['queue'] for r in holder})!=1 or not holder[0]['queue']
+            or (call['queue']==holder[0]['queue'])!=(case!='private')):
+        errors.append('actual_queue_route')
     if evidence['held_before'] != [len(holder),0]:
         errors.append('independent_held_count')
     w=evidence['window']

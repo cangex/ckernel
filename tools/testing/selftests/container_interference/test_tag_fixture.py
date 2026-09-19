@@ -6,10 +6,10 @@ from tag_fixture_check import check, order
 
 class TagFixtureTests(unittest.TestCase):
     def example(self,case):
-        truth=[dict(actor=0,op=0,result=0,depth=4,before_ns=10,after_ns=20) for _ in range(3 if case=='available' else 4)]
+        truth=[dict(actor=0,op=0,result=0,depth=4,before_ns=10,after_ns=20,queue=999) for _ in range(3 if case=='available' else 4)]
         truth.append(dict(actor=1,op=0,result=-11 if case=='nowait' else 0,depth=4,
             before_ns=30,after_ns=100_000_000,disk=int(case=='private'),nowait=int(case=='nowait'),
-            tid=100,task_start=1,queue=999))
+            tid=100,task_start=1,queue=998 if case=='private' else 999))
         if case=='exhausted': truth.append(dict(actor=0,op=1,result=0,depth=4,before_ns=70_000_000,after_ns=80_000_000))
         return dict(case=case,truth=truth,held_before=[3 if case=='available' else 4,0],
                     window=dict(start_ns=1,end_ns=200_000_000))
