@@ -11,6 +11,7 @@ from prototype_admission import SOURCE_KEYS
 from session_check import extract
 from source_switches import validate
 from unified_report import analyze
+from allocator_source_audit import delta as allocator_delta
 
 # Versioned cohort, not the mutable set of collectors in the current checkout.
 JOINT_COLLECTORS = ('ip','owner','fd','sched','reclaim','sync','counter','allocator','net','block')
@@ -91,7 +92,12 @@ def check(serial,output):
         if a.keys()!=b.keys(): errors.append('cpu_set_changed')
         cpu={k:[q-p for p,q in zip(a[k],b[k])] for k in a if k in b}
         if any(v<0 for row in cpu.values() for v in row): errors.append('cpu_counter_regression')
+        source_audit=None
+        if 'allocator_source_audit' in evidence['before'] or 'allocator_source_audit' in evidence['after']:
+            source_audit=allocator_delta(*[dict(time_ns=evidence[k]['time_ns'],
+                source_audit=evidence[k]['allocator_source_audit']) for k in ('before','after')])
         states.append(dict(label=label,mode=mode,round=r,workload=measured,cost=cost,relations=len(relations),
+            allocator_source_audit=source_audit,
             cpu_delta_ticks=cpu,cpu_clock_hz=plan['clock_ticks'],
             cpu_scope='whole benchmark enclosing capture; includes business CPU, not observer-only cost',
             elapsed_ns=evidence['after']['time_ns']-evidence['before']['time_ns'],
