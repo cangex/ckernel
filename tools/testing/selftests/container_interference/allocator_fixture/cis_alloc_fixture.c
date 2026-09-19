@@ -7,11 +7,14 @@
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/mm.h>
+#include <linux/nodemask.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/user_namespace.h>
 #include <linux/cis_alloc_test.h>
+#include "placement_uapi.h"
 
 static struct kmem_cache *caches[2];
 struct alloc_file {
@@ -79,6 +82,34 @@ static int alloc_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
+static long placement_ioctl(unsigned long arg)
+{
+	struct cis_alloc_placement q;
+	void *object;
+
+	if (copy_from_user(&q, (void __user *)arg, sizeof(q)))
+		return -EFAULT;
+	if (q.version != 1 || q.reserved[0] || q.reserved[1] ||
+	    q.requested_node < 0 || q.requested_node >= MAX_NUMNODES ||
+	    !node_online(q.requested_node) ||
+	    !node_isset(q.requested_node, current->mems_allowed))
+		return -EINVAL;
+	q.cache_address = (unsigned long)caches[0];
+	q.cpu = raw_smp_processor_id();
+	q.allowed_node = q.requested_node;
+	q.begin_ns = ktime_get_ns();
+	object = kmem_cache_alloc_node(caches[0], GFP_KERNEL, q.requested_node);
+	q.allocated_ns = ktime_get_ns();
+	q.object = (unsigned long)object;
+	q.result = object ? 0 : -ENOMEM;
+	q.actual_node = object ? page_to_nid(virt_to_head_page(object)) : -1;
+	q.release_begin_ns = ktime_get_ns();
+	if (object)
+		kmem_cache_free(caches[0], object);
+	q.end_ns = ktime_get_ns();
+	return copy_to_user((void __user *)arg, &q, sizeof(q)) ? -EFAULT : 0;
+}
+
 static long alloc_ioctl(struct file *file, unsigned int command, unsigned long arg)
 {
 	struct alloc_file *state = file->private_data;
@@ -87,6 +118,8 @@ static long alloc_ioctl(struct file *file, unsigned int command, unsigned long a
 	u32 i;
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
+	if (command == CIS_ALLOC_PLACEMENT)
+		return placement_ioctl(arg);
 	if (command != CIS_ALLOC_TEST_RUN)
 		return -ENOTTY;
 	if (copy_from_user(&request, (void __user *)arg, sizeof(request)))

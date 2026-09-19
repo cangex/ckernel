@@ -18,14 +18,18 @@ from allocator_fixture_check import CASES, check_case, case_order
 ORDER=['off0','allocator0','allocator1','off1','off2','allocator2']
 
 
-def run(fixture=False):
+def run(fixture=False,placement=False):
+    if placement: fixture=True
+    verify_case=check_case
+    if placement:
+        from allocator_placement_check import check_case as verify_case, nodes, case_order as placement_order, CASES as placement_cases
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     selection = [('alloc_shift','0'),('alloc_cache','cis_alloc_test')] if fixture else [('alloc_shift','6'),('alloc_cache','maple_node')]
     for name,value in selection:
         if Path('/sys/module/cis_observe/parameters/'+name).read_text().strip()!=value:
             raise ValueError('frozen source selection')
-    out=Path('/tmp/allocator-fixture-evidence' if fixture else '/tmp/allocator-evidence'); out.mkdir(mode=0o700)
+    out=Path('/tmp/allocator-placement-evidence' if placement else '/tmp/allocator-fixture-evidence' if fixture else '/tmp/allocator-evidence'); out.mkdir(mode=0o700)
     root=Path('/sys/fs/cgroup/cis-allocator'); root.mkdir()
     (root/'management').mkdir(); (root/'management/cgroup.procs').write_text(str(os.getpid()))
     (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
@@ -43,6 +47,11 @@ def run(fixture=False):
             sample_shift=0,cache='cis_alloc_test',release_tracking=True,window_ms=2000,cpu=[0,1],free_migration_cpu=[2,3],
             management_cpu=7,memory_max_bytes=64<<20,
             scope='test-only native allocation and release truth; full-rate selected cache, no production recall or free completion claim')
+    if placement:
+        topology={str(i):Path('/sys/devices/system/node/node%d/cpulist'%i).read_text().strip() for i in (0,1)}
+        if topology!={'0':'0-3','1':'4-7'}: raise ValueError('frozen two-node VM topology')
+        plan.update(order=placement_order(),cases=list(placement_cases),operations=8,placement=True,topology=topology,
+                    scope='explicit allowed nodes; same cache is not necessarily the same NUMA backend')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-allocator.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -81,6 +90,13 @@ def run(fixture=False):
         for label in plan['order']:
             case = label.split('-')[0] if fixture else None
             collecting = 'allocator' in label
+            placement_before=None
+            if placement:
+                for i,p in enumerate(roots):
+                    (p/'cpuset.cpus').write_text(str(i))
+                    (p/'cpuset.mems').write_text(str(nodes(case)[i]))
+                placement_before=[dict(cpu=(p/'cpuset.cpus.effective').read_text().strip(),
+                    mems=(p/'cpuset.mems.effective').read_text().strip()) for p in roots]
             sid=None; source_before=snapshot()
             if collecting:
                 sid=request('start',collector='allocator',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
@@ -92,6 +108,7 @@ def run(fixture=False):
             for i,p in enumerate(roots):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle)
                 command = ['/allocator_fixture_workload',case,str(start),str(int(case=='private' and i==1)),str(i)] if fixture else ['/allocator_workload',str(start)]
+                if placement: command=['/allocator_placement_workload',str(start),str(nodes(case)[i])]
                 child=subprocess.Popen(['/session_launch',str(p),str(i),*command],stdout=handle,stderr=handle)
                 children.append(child); running.append(child)
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()
@@ -102,14 +119,18 @@ def run(fixture=False):
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 report=analyze(record,(out/'records'/(sid+'.jsonl')).read_bytes())
                 identities = [record['root_identities'][t] for t in targets]
-                result=check_case(case,window,logs,report,identities,require_releases=True) if fixture else check_work(window,logs,report,identities)
+                result=verify_case(case,window,logs,report,identities,require_releases=True) if fixture else check_work(window,logs,report,identities)
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else:
                 idle=observe(None)
-                result=check_case(case,window,logs,require_releases=True) if fixture else check_work(window,logs)
+                result=verify_case(case,window,logs,require_releases=True) if fixture else check_work(window,logs)
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,source_before=source_before,source_after=snapshot(),exit_codes=codes,result=result)
+            if placement:
+                evidence['placement_before']=placement_before
+                evidence['placement_after']=[dict(cpu=(p/'cpuset.cpus.effective').read_text().strip(),
+                    mems=(p/'cpuset.mems.effective').read_text().strip()) for p in roots]
             (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2)); results.append(evidence)
             if result['status']!='PASS': raise ValueError(result)
         (out/'result.json').write_text(json.dumps(dict(status='PASS',source=source,plan=plan,states=results),indent=2))

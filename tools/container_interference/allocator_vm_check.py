@@ -46,19 +46,25 @@ def check_work(window,logs,report=None,identities=None):
                 recall=None,performance_certification='NOT_ACCEPTED')
 
 
-def verify(serial,output,fixture=False):
+def verify(serial,output,fixture=False,placement=False):
+    verify_case=check_case; cases=CASES; fixture_order=case_order
+    if placement:
+        fixture=True
+        from allocator_placement_check import check_case as verify_case, CASES as cases, case_order as fixture_order, nodes
     if serial.stat().st_size>128<<20: raise ValueError('serial capacity')
     raw=serial.read_bytes(); text=raw.decode(); files=extract(text)
-    prefix='/tmp/allocator-fixture-evidence/' if fixture else '/tmp/allocator-evidence/'
+    prefix='/tmp/allocator-placement-evidence/' if placement else '/tmp/allocator-fixture-evidence/' if fixture else '/tmp/allocator-evidence/'
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
-    order=case_order() if fixture else ORDER
+    order=fixture_order() if fixture else ORDER
+    if placement and (plan.get('placement') is not True or plan.get('topology')!={'0':'0-3','1':'4-7'}):
+        errors.append('frozen_numa_topology')
     if fixture:
         if (plan.get('order')!=order or plan.get('sample_shift')!=0 or plan.get('cache')!='cis_alloc_test' or
-                plan.get('operations')!=4 or plan.get('cases')!=list(CASES) or plan.get('rounds')!=3 or not plan.get('release_tracking')):
+                plan.get('operations')!=(8 if placement else 4) or plan.get('cases')!=list(cases) or plan.get('rounds')!=3 or not plan.get('release_tracking')):
             errors.append('frozen_plan')
         if 'CIS_ALLOC_FIXTURE_UNLOAD=0' not in text.splitlines(): errors.append('fixture_cleanup')
     elif (plan.get('order')!=order or plan.get('sample_shift')!=6 or plan.get('cache')!='maple_node' or
@@ -66,6 +72,9 @@ def verify(serial,output,fixture=False):
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
     for label in order:
         ev=value(label+'-evidence.json'); logs=[files[prefix+label+'-%d.log'%i] for i in range(2)]
+        if placement:
+            expected=[dict(cpu=str(i),mems=str(n)) for i,n in enumerate(nodes(label.split('-')[0]))]
+            if ev.get('placement_before')!=expected or ev.get('placement_after')!=expected: errors.append('cpuset_boundary_'+label)
         report=None; identities=None
         if 'allocator' in label:
             sid=str(ev['session_id'])
@@ -83,7 +92,7 @@ def verify(serial,output,fixture=False):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        result=check_case(label.split('-')[0],ev['window'],logs,report,identities,require_releases=True) if fixture else check_work(ev['window'],logs,report,identities)
+        result=verify_case(label.split('-')[0],ev['window'],logs,report,identities,require_releases=True) if fixture else check_work(ev['window'],logs,report,identities)
         audit=source_delta(ev['source_before'],ev['source_after'],
                            shift=0 if fixture else 6, cache='cis_alloc_test' if fixture else 'maple_node')
         if 'off' in label and any(audit['totals'].values()): errors.append('off_not_quiet_'+label)
@@ -91,7 +100,7 @@ def verify(serial,output,fixture=False):
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result,source_audit=audit))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
-        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native allocator fixture only' if fixture else 'ordinary VMA bridge only',
+        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='two-node allowed-placement fixture only' if placement else 'native allocator fixture only' if fixture else 'ordinary VMA bridge only',
         x3_status='INCOMPLETE',performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result
 
@@ -99,6 +108,7 @@ def verify(serial,output,fixture=False):
 if __name__=='__main__':
     p=argparse.ArgumentParser(); p.add_argument('serial',type=Path); p.add_argument('output',type=Path)
     p.add_argument('--fixture',action='store_true')
-    args=p.parse_args(); r=verify(args.serial,args.output,args.fixture)
+    p.add_argument('--placement',action='store_true')
+    args=p.parse_args(); r=verify(args.serial,args.output,args.fixture,args.placement)
     print(json.dumps(dict(status=r['status'],errors=r['errors'],states=len(r['states']))))
     raise SystemExit(r['status']!='PASS')
