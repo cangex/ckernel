@@ -43,15 +43,27 @@ def check_population(logs, raw, window, case, plan=None):
             errors.append('truth_completion')
         if len(truth) != (0 if native else count * 16):
             errors.append('truth_population_size')
+        local_calls = []
         for operation, q in enumerate(truth):
             if any(type(q.get(k)) is not int or q[k] <= 0 for k in (
                     'object', 'files', 'tid', 'tgid', 'cgroup_id', 'begin_ns',
                     'acquired_ns', 'release_begin_ns', 'released_ns')):
                 errors.append('truth_schema')
                 continue
+            if q['tid'] >= 1 << 32 or q['tgid'] >= 1 << 32:
+                errors.append('truth_task_id_range')
             if not start <= q['begin_ns'] <= q['acquired_ns'] < q['release_begin_ns'] <= q['released_ns'] <= end:
                 errors.append('truth_outside_window_or_order')
             calls.append(dict(q, log_index=log_index, operation=operation))
+            local_calls.append(q)
+        if not native:
+            task_counts = defaultdict(int)
+            owners = set()
+            for q in local_calls:
+                task_counts[(q['tgid'], q['tid'])] += 1
+                owners.add((q['tgid'], q['cgroup_id'], q['object'], q['files']))
+            if len(owners) != 1 or len(task_counts) != count or any(n != 16 for n in task_counts.values()):
+                errors.append('truth_task_population')
     # Never trim the denominator to the records the collector happened to see.
     by_task = defaultdict(list)
     for q in calls:

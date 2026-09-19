@@ -32,3 +32,7 @@ class CoverageTests(unittest.TestCase):
         self.assertIn('安静专项不算正例',CONTRACT['joint']['participants'])
         self.assertTrue(CONTRACT['rwsem']['pending'])
         self.assertTrue(CONTRACT['joint']['pending'])
+
+    def test_fd_call_denominator_cannot_be_upgraded_to_wait_recall(self):
+        self.assertIn('不等于真实阻塞关系召回','；'.join(CONTRACT['fd']['pending']))
+        self.assertIn('64事件前缀','；'.join(CONTRACT['fd']['pending']))

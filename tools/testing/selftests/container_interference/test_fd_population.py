@@ -101,5 +101,15 @@ class FDPopulation(unittest.TestCase):
         _,events,_=self.fixture();events[0]['session_id']=2
         self.assertIn('mixed_sessions',self.run_check(events)['errors'])
 
+    def test_total_calls_cannot_hide_inconsistent_task_population(self):
+        logs,events,window=self.fixture()
+        logs[0]=logs[0].replace('"tid": 40','"tid": 99',1)
+        r=check_population(logs,'\n'.join(map(json.dumps,events)),window,'private',POPULATION_PLAN)
+        self.assertIn('truth_task_population',r['errors'])
+        logs,events,window=self.fixture()
+        logs[0]=logs[0].replace('"tid": 40','"tid": 4294967296')
+        r=check_population(logs,'',window,'private',POPULATION_PLAN)
+        self.assertIn('truth_task_id_range',r['errors'])
+
 
 if __name__=='__main__': unittest.main()

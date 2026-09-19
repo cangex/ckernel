@@ -18,7 +18,7 @@ CONTRACT={
         pending=['窗口前对象仍为E1','non-owner使用和读者溢出不得提升归因','选定对象rwsem未计入普通应用十专项联合矩阵']),
     'fd': dict(name='FD表锁',collector='fd',discovered='已选定files_struct锁路径',
         object='对象地址、RETIRE及新watch边界',participants='观察到的持有/等待任务及容器',
-        pending=['固定eligible分母的总体捕获率','密集路径的入口成本']),
+        pending=['固定fixture调用分母已有独立统计；不等于真实阻塞关系召回','64事件前缀之外的覆盖与密集路径入口成本']),
     'counter': dict(name='page_counter',collector='counter',discovered='实际叶/祖先更新与限额回滚',
         object='初始化代次、地址和字段',participants='共同更新者，不是锁持有者',
         pending=['选定祖先汇总已做采样事件级验证；高事件率待测','全量更新计数不由采样推算','硬件cacheline证据（条件项）']),
