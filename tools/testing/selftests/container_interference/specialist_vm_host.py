@@ -79,13 +79,18 @@ def run(args):
     if args.label == 'x1-rwsem-overflow': command[-1] += ' cis_rwsem_test=overflow'
     if args.label == 'x7-rwsem-joint': command[-1] += ' cis_rwsem_test=joint'
     disks=[]
-    if args.label == 'x5-block':
+    if args.label in ('x5-block','x5-writeback'):
         for i in range(2):
             path=initrd.parent/(stamp+'-disk%d.raw'%i)
             fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR|os.O_NOFOLLOW,0o600)
-            try: os.ftruncate(fd,16<<20)
+            size=(64 if args.label=='x5-writeback' else 16)<<20
+            try: os.ftruncate(fd,size)
             finally: os.close(fd)
-            disks.append(dict(path=str(path),bytes=16<<20,before_sha256=sha(path)))
+            if args.label=='x5-writeback':
+                # Only this just-created regular scratch file, never a host device.
+                subprocess.run(['mkfs.ext4','-F','-q','-E','lazy_itable_init=0,lazy_journal_init=0',str(path)],check=True)
+            disks.append(dict(path=str(path),bytes=size,before_sha256=sha(path),
+                              filesystem='ext4' if args.label=='x5-writeback' else None))
             command += ['-drive','file=%s,format=raw,if=none,id=cis%d,cache=writeback,aio=threads'%(path,i),
                         '-device','virtio-blk-device,drive=cis%d'%i]
     manifest = dict(command=command, disposable_disks=disks,image_sha256=sha(image), initrd_sha256=sha(initrd),
@@ -145,6 +150,6 @@ if __name__ == '__main__':
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
     parser.add_argument('--source-diagnostics', action='store_true',
                         help='bounded recursion troubleshooting; not a performance cohort')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x5-block','x5-fixture','x6-diagnosis','x7-joint','x7-rwsem-joint'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     raise SystemExit(run(parser.parse_args()))
