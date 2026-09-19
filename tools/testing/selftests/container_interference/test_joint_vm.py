@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: GPL-2.0
 import unittest
-from joint_vm_check import workload,cpu_snapshot
+from joint_vm_check import workload,cpu_snapshot,cohort_collectors
 
 
 class JointValidation(unittest.TestCase):
+    def test_old_cohort_does_not_gain_new_collector_credit(self):
+        self.assertNotIn('slub',cohort_collectors('cis-x7-joint-plan-v1'))
+        self.assertIn('slub',cohort_collectors('cis-x7-joint-plan-v2'))
+        self.assertEqual(len(cohort_collectors('cis-x7-joint-plan-v2')),11)
+        with self.assertRaises(ValueError): cohort_collectors('future')
+
     def log(self):
         values=list(range(1,1501))
         return ('CIS_JOINT_WORK mode=file due_start_ns=100 begin_ns=110 end_ns=3000000100 offered=1500 completed=1500 errors=0 timeouts=0 period_ns=2000000 timeout_ns=100000000 p99_ns=1485 max_ns=1500 latency_sum_ns=1125750\n'

@@ -35,12 +35,12 @@ def run():
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
     source=source_manifest(args,env['boot_id']); permit=admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
-    plan=dict(schema='cis-x7-joint-plan-v1',source=source,order=order(),modes=['off']+list(JOINT_COLLECTORS),rounds=3,
+    plan=dict(schema='cis-x7-joint-plan-v2',source=source,order=order(),modes=['off']+list(JOINT_COLLECTORS),rounds=3,
         cpus=[0,0,1,1],workloads=['file','file','vma','vma'],management_cpu=7,
         offered_per_actor=1500,period_ns=2_000_000,timeout_ns=100_000_000,
         scope='native file and VMA operations, four active containers; no injected kernel delays',
         off='controller idle without attached probes, not absent-CIS baseline',
-        captures=30,p99='record_only',throughput='completed at fixed offered rate, not saturation throughput',
+        captures=3*len(JOINT_COLLECTORS),p99='record_only',throughput='completed at fixed offered rate, not saturation throughput',
         clock_ticks=os.sysconf('SC_CLK_TCK'),
         targets_by_round=[[0,2],[1,3],[0,3]],source_generation='same kernel and collector bundle per cohort')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))

@@ -14,7 +14,14 @@ from unified_report import analyze
 from allocator_source_audit import delta as allocator_delta
 
 # Versioned cohort, not the mutable set of collectors in the current checkout.
-JOINT_COLLECTORS = ('ip','owner','fd','sched','reclaim','sync','counter','allocator','net','block')
+JOINT_COLLECTORS_V1 = ('ip','owner','fd','sched','reclaim','sync','counter','allocator','net','block')
+JOINT_COLLECTORS = JOINT_COLLECTORS_V1 + ('slub',)
+
+
+def cohort_collectors(schema):
+    if schema == 'cis-x7-joint-plan-v1': return JOINT_COLLECTORS_V1
+    if schema == 'cis-x7-joint-plan-v2': return JOINT_COLLECTORS
+    raise ValueError('unknown joint cohort schema')
 
 
 def workload(log):
@@ -53,10 +60,11 @@ def check(serial,output):
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan=value('plan.json'); declared=value('result.json'); permit=value('permit.json')
     output.mkdir(mode=0o700); errors=[]; states=[]
-    modes=['off']+list(JOINT_COLLECTORS); order=[(r,m) for r in range(3) for m in (modes if r%2==0 else list(reversed(modes)))]
-    if (plan['schema']!='cis-x7-joint-plan-v1' or plan['order']!=[list(v) for v in order] or
+    collectors=cohort_collectors(plan['schema'])
+    modes=['off']+list(collectors); order=[(r,m) for r in range(3) for m in (modes if r%2==0 else list(reversed(modes)))]
+    if (plan['order']!=[list(v) for v in order] or
             plan['modes']!=modes or plan['cpus']!=[0,0,1,1] or plan['workloads']!=['file','file','vma','vma'] or
-            plan['targets_by_round']!=[[0,2],[1,3],[0,3]] or plan['captures']!=30 or plan['clock_ticks']<=0):
+            plan['targets_by_round']!=[[0,2],[1,3],[0,3]] or plan['captures']!=3*len(collectors) or plan['clock_ticks']<=0):
         raise ValueError('unexpected frozen matrix')
     if declared['source']!=plan['source'] or any(plan['source'][k]!=permit['source'][k] for k in SOURCE_KEYS): errors.append('source_binding')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
