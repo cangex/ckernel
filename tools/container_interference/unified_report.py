@@ -160,6 +160,12 @@ def markdown(report):
         lines.append('- **%s / %s**：任务 `%s`，资源 `%s`；参与者 `%s`。'%(labels.get(r['relation'],r['relation']),r['evidence'],
             r['affected_actor'],json.dumps(r['resource'],ensure_ascii=False),r['participants']))
         if r['chain_leaf_to_root']: lines.append('  调用栈（叶到根）：`%s`。'%' → '.join(r['chain_leaf_to_root']))
+        if r['relation'] in ('allocation_stages','allocation_release_entry'):
+            context=r['details'].get('maple_allocation_context') or r['details'].get('allocation_tree_context')
+            if context:
+                lines.append('  Maple目标树 `%s` 与分配后端调用 `%s` 已按请求边界连接。树、返回节点和SLUB缓存是不同对象；释放记录沿用申请时关联，不按释放线程猜树的所有者。'%(
+                    hex(context['tree_address']),context['backend_call_ns']))
+                lines.append('  树地址仅在本次申请内有效，不能据此跨次拼接树生命周期或指定阻塞容器。')
         if r['relation']=='block_request_episode':
             if r['details'].get('admission')=='bio_billing_root':
                 lines.append('  按bio计费容器 %s 纳入窗口；实际提交者保留为上述任务，不等于最初写文件的容器，独占inode归属仍未知。'%r['details']['selected_container'])

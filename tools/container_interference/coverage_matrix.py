@@ -30,6 +30,11 @@ CONTRACT={
     'allocator': dict(name='SLUB/Maple',collector='allocator',discovered='指定cache的分配阶段和释放入口',
         object='cache/节点/已观测分配代次',participants='分配请求方与释放执行方；后端锁持有者未知',
         pending=['允许节点放置、原生failslab拒绝及fail_page_alloc部分回滚已有专项；并发策略变化和真实压力待验证','SLUB节点锁关系由独立专项核验；其余后端锁仍未知','Maple树归属']),
+    'maple_context': dict(name='Maple请求与分配后端关联',collector='allocator',
+        discovered='原生申请闭合边界、目标树、SLUB调用与已采样节点释放入口',
+        object='树地址仅在一次申请内有效；节点分配代次独立保留',
+        participants='请求容器、目标树与释放执行者分开；复制使用目标树，不推断锁持有者',
+        pending=['不将跨申请同地址当作完整树生命周期','预分配节点实际安装位置未追踪','完整后端释放和RCU耗时仍未知']),
     'slub': dict(name='SLUB节点锁专项',collector='slub',discovered='指定cache的实际节点锁尝试、获取、释放与回收边界',
         object='完整cache指针、节点锁地址和watch代次',participants='已观察持有者与等待者；不含窗口前或中断持有者',
         pending=['受控节点锁不代表生产发生率','普通分配路径没有独立持有者召回分母','其他SLUB锁与Maple树归属','完整入口及后台成本与联合回归']),
@@ -74,6 +79,7 @@ VERIFIERS={
     'sync': ('sync_vm_check','sync',{}), 'fd':('fd_vm_check','fd',{}),
     'counter':('counter_vm_check','counter',{}),
     'allocator':('allocator_vm_check','allocator',{}),
+    'maple_context':('allocator_vm_check','maple_context',dict(maple=True)),
     'allocator_fixture':('allocator_vm_check','allocator',dict(fixture=True)),
     'allocator_placement':('allocator_vm_check','allocator',dict(placement=True)),
     'allocator_failure':('allocator_vm_check','allocator',dict(failure=True)),
@@ -135,6 +141,11 @@ def replay(index,base,output):
                 if len(selected)!=6 or any(v.get('result',{}).get('inode_request_link')!='CLOSED_NATIVE_CONTEXT' or
                         len(v.get('result',{}).get('dirty_transition_actors',[]))!=2 for v in selected):
                     raise ValueError('closed inode context and two observed dirtying actors required')
+            if key=='maple_context':
+                selected=[v for v in checked.get('states',[]) if v.get('label','').startswith('allocator')]
+                if len(selected)!=3 or any(len(v.get('result',{}).get('participants',[]))!=2 or
+                        any(not p.get('joins') or not p.get('release_entries') for p in v['result']['participants']) for v in selected):
+                    raise ValueError('Maple destination and release truth required')
             error=None; passed=checked.get('status') in ('PASS','PASS_SCOPED') and not checked.get('errors') and not checked.get('defects')
         except (ValueError,KeyError,AssertionError) as exc:
             checked={}; error=type(exc).__name__+': '+str(exc); passed=False

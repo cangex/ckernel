@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 from allocator_report import analyze
 import test_allocator_report
+from unified_report import markdown
 
 
 class MapleReport(unittest.TestCase):
@@ -86,3 +87,13 @@ class MapleReport(unittest.TestCase):
         self.assertIn('if (saved->base.weight ||',text)
         self.assertIn('bpf_map_delete_elem(&maple_pending, &key)',text)
         self.assertNotIn('BPF_ANY',text)
+
+    def test_readable_report_keeps_the_identity_boundary(self):
+        r,rows=self.setup_rows()
+        context=self.run_rows(r,rows)['calls'][0]['maple_context']
+        report=dict(session_id='7',collector='allocator',quality=dict(status='PASS'),relations=[dict(
+            relation='allocation_stages',evidence='E1',affected_actor=[1,1],resource=dict(address=100),
+            participants=[],chain_leaf_to_root=[],details=dict(maple_allocation_context=context))])
+        rendered=markdown(report)
+        self.assertIn('Maple目标树',rendered)
+        self.assertIn('树地址仅在本次申请内有效',rendered)
