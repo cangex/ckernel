@@ -76,6 +76,7 @@ def run(group='common'):
         return dict(time_ns=time.monotonic_ns(),proc_stat=Path('/proc/stat').read_text(),
             memory=Path('/proc/meminfo').read_text(),softirqs=Path('/proc/softirqs').read_text(),
             allocator_source_audit=Path('/sys/kernel/debug/cis_alloc_audit').read_text(),
+            recursion_source_audit=Path('/sys/kernel/debug/cis_recursion').read_text(),
             roots=[{name:(p/name).read_text() for name in ('cpu.stat','memory.current','memory.peak','memory.events')} for p in roots])
 
     try:
