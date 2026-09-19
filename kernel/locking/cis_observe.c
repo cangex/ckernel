@@ -22,6 +22,7 @@
 #include <linux/cis_observe.h>
 #undef CREATE_TRACE_POINTS
 #include <linux/cis_rwsem.h>
+#include <linux/cis_slub.h>
 
 static DEFINE_PER_CPU(bool, cis_in_trace);
 static DEFINE_PER_CPU(unsigned long, cis_skipped);
@@ -52,7 +53,7 @@ static bool cis_block_active(void)
  * while any probe is registered; another container's holder is never filtered
  * by its identity. BPF owner watches are created only by WAIT events. */
 #define CIS_GATE_BITS 16
-static unsigned long cis_waited[2][BITS_TO_LONGS(1U << CIS_GATE_BITS)];
+static unsigned long cis_waited[3][BITS_TO_LONGS(1U << CIS_GATE_BITS)];
 static bool wait_gate;
 module_param(wait_gate, bool, 0400);
 MODULE_PARM_DESC(wait_gate, "Admit WAIT and all subsequent events for possibly waited objects");
@@ -79,18 +80,27 @@ int cis_fd_observe_register(void)
 
 void cis_fd_observe_unregister(void) { }
 
+int cis_slub_observe_register(void)
+{
+	bitmap_zero(cis_waited[2], 1U << CIS_GATE_BITS);
+	return 0;
+}
+
+void cis_slub_observe_unregister(void) { }
+
 static bool cis_trace_active(void)
 {
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
 	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
 	       trace_cis_alloc_release_enabled() || trace_cis_net_state_enabled() ||
-	       trace_cis_net_skb_release_enabled() || trace_cis_rwsem_state_enabled() || cis_block_active();
+	       trace_cis_net_skb_release_enabled() || trace_cis_rwsem_state_enabled() ||
+	       trace_cis_slublock_state_enabled() || cis_block_active();
 }
 
 static bool cis_gate_allows(void *object, unsigned int kind, unsigned int phase)
 {
 	unsigned int bit = hash_long(((unsigned long)object >> 3) ^ kind, CIS_GATE_BITS);
-	unsigned long *gate = cis_waited[kind == CIS_FDLOCK];
+	unsigned long *gate = cis_waited[kind == CIS_SLUBLOCK ? 2 : kind == CIS_FDLOCK];
 
 	if (phase == CIS_WAIT) {
 		if (!test_bit(bit, gate)) {
@@ -187,7 +197,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=7 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u\n",
+	seq_printf(m, "version=8 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -195,7 +205,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_rq_insert), CIS_BLOCK_ON(block_rq_issue),
 		   CIS_BLOCK_ON(block_rq_requeue), CIS_BLOCK_ON(block_rq_complete),
 		   CIS_BLOCK_ON(block_rq_merge), CIS_BLOCK_ON(block_rq_remap),
-		   trace_cis_rwsem_state_enabled());
+		   trace_cis_rwsem_state_enabled(), trace_cis_slublock_state_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -266,7 +276,9 @@ void __cis_lock_event(void *object, unsigned int kind, unsigned int phase,
 		d->outer_kind = kind;
 		d->outer_phase = phase;
 	}
-	if (kind == CIS_FDLOCK)
+	if (kind == CIS_SLUBLOCK)
+		trace_cis_slublock_state(object, kind, phase, owner, flags, this_cpu_read(cis_skipped));
+	else if (kind == CIS_FDLOCK)
 		trace_cis_fdlock_state(object, kind, phase, owner, flags, this_cpu_read(cis_skipped));
 	else
 		trace_cis_lock_state(object, kind, phase, owner, flags, this_cpu_read(cis_skipped));
@@ -276,6 +288,7 @@ void __cis_lock_event(void *object, unsigned int kind, unsigned int phase,
 EXPORT_SYMBOL_GPL(__cis_lock_event);
 EXPORT_TRACEPOINT_SYMBOL_GPL(cis_lock_state);
 EXPORT_TRACEPOINT_SYMBOL_GPL(cis_fdlock_state);
+EXPORT_TRACEPOINT_SYMBOL_GPL(cis_slublock_state);
 
 #ifdef CONFIG_CIS_OBSERVE_COUNTER
 static unsigned int counter_shift = 6;
@@ -390,6 +403,22 @@ void __cis_counter_start(struct cis_counter_ctx *ctx, struct page_counter *leaf,
 static char alloc_cache[64] = "maple_node";
 module_param_string(alloc_cache, alloc_cache, sizeof(alloc_cache), 0400);
 MODULE_PARM_DESC(alloc_cache, "Exact SLUB cache name admitted for short allocation diagnostics");
+void __cis_slub_event(const char *name, void *cache, void *object,
+		unsigned int phase)
+{
+	if (!name || strcmp(name, alloc_cache))
+		return;
+	/* Interrupt executor identity is not a container holder. Propagate a gap
+	 * instead of attributing asynchronous work to the interrupted task. */
+	if (in_interrupt()) {
+		preempt_disable_notrace();
+		this_cpu_inc(cis_skipped);
+		preempt_enable_notrace();
+		return;
+	}
+	__cis_lock_event(object, CIS_SLUBLOCK, phase, NULL, (unsigned long)cache);
+}
+EXPORT_SYMBOL_GPL(__cis_slub_event);
 static unsigned int alloc_shift = 6;
 module_param(alloc_shift, uint, 0400);
 static DEFINE_PER_CPU(unsigned long, cis_alloc_entries);

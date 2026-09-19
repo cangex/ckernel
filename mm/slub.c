@@ -42,11 +42,83 @@
 #include <kunit/test-bug.h>
 #include <linux/sort.h>
 #include <linux/cis_alloc.h>
+#include <linux/cis_slub.h>
+#ifdef CONFIG_CIS_SLUB_TEST
+#include <linux/cis_slub_test.h>
+#include <linux/capability.h>
+#include <linux/ktime.h>
+#include <linux/user_namespace.h>
+#endif
 
 #include <linux/debugfs.h>
 #include <trace/events/kmem.h>
 
 #include "internal.h"
+
+/* Observe the real lock operation, not a separate diagnostic lock. */
+#define slub_node_event(s, n, phase) \
+	cis_slub_event((s)->name, (s), &(n)->list_lock, (phase))
+#define slub_node_lock_irqsave(s, n, flags) do { \
+	slub_node_event(s, n, CIS_WAIT); \
+	spin_lock_irqsave(&(n)->list_lock, flags); \
+	slub_node_event(s, n, CIS_ACQUIRE); \
+} while (0)
+#define slub_node_unlock_irqrestore(s, n, flags) do { \
+	slub_node_event(s, n, CIS_RELEASE_BEGIN); \
+	spin_unlock_irqrestore(&(n)->list_lock, flags); \
+	slub_node_event(s, n, CIS_RELEASE_END); \
+} while (0)
+#define slub_node_lock_irq(s, n) do { \
+	slub_node_event(s, n, CIS_WAIT); \
+	spin_lock_irq(&(n)->list_lock); \
+	slub_node_event(s, n, CIS_ACQUIRE); \
+} while (0)
+#define slub_node_unlock_irq(s, n) do { \
+	slub_node_event(s, n, CIS_RELEASE_BEGIN); \
+	spin_unlock_irq(&(n)->list_lock); \
+	slub_node_event(s, n, CIS_RELEASE_END); \
+} while (0)
+
+#ifdef CONFIG_CIS_SLUB_TEST
+/* Test-only: the fixture holds a live cache reference throughout this call.
+ * Truth timestamps bracket the observer's inner interval independently.
+ * No list contents, allocation policy or production delays are changed. */
+int cis_slub_test_lock(struct kmem_cache *s, int node, unsigned int hold_us,
+		atomic_t *entered, struct cis_slub_test_truth *truth)
+{
+	struct kmem_cache_node *n;
+	unsigned long flags;
+	u64 deadline;
+
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+	if (in_interrupt() || hold_us > 5000 || !s || !entered || !truth ||
+	    strcmp(s->name, "cis_slub_fixture") || node < 0 ||
+	    node >= MAX_NUMNODES || !node_state(node, N_NORMAL_MEMORY))
+		return -EINVAL;
+	n = get_node(s, node);
+	if (!n)
+		return -ENODEV;
+	truth->cache = (unsigned long)s;
+	truth->object = (unsigned long)&n->list_lock;
+	truth->begin_ns = ktime_get_ns();
+	slub_node_event(s, n, CIS_WAIT);
+	spin_lock_irqsave(&n->list_lock, flags);
+	truth->acquired_ns = ktime_get_ns();
+	slub_node_event(s, n, CIS_ACQUIRE);
+	atomic_inc(entered);
+	deadline = ktime_get_ns() + (u64)hold_us * 1000;
+	while (ktime_get_ns() < deadline)
+		cpu_relax();
+	slub_node_event(s, n, CIS_RELEASE_BEGIN);
+	truth->release_ns = ktime_get_ns();
+	spin_unlock_irqrestore(&n->list_lock, flags);
+	slub_node_event(s, n, CIS_RELEASE_END);
+	truth->end_ns = ktime_get_ns();
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cis_slub_test_lock);
+#endif
 
 /*
  * Lock order:
@@ -2250,7 +2322,7 @@ static void *alloc_single_from_new_slab(struct kmem_cache *s,
 		 */
 		return NULL;
 
-	spin_lock_irqsave(&n->list_lock, flags);
+	slub_node_lock_irqsave(s, n, flags);
 
 	if (slab->inuse == slab->objects)
 		add_full(s, n, slab);
@@ -2258,7 +2330,7 @@ static void *alloc_single_from_new_slab(struct kmem_cache *s,
 		add_partial(n, slab, DEACTIVATE_TO_HEAD);
 
 	inc_slabs_node(s, nid, slab->objects);
-	spin_unlock_irqrestore(&n->list_lock, flags);
+	slub_node_unlock_irqrestore(s, n, flags);
 
 	return object;
 }
@@ -2292,7 +2364,7 @@ static struct slab *get_partial_node(struct kmem_cache *s,
 		return NULL;
 
 	cis_alloc_step(pc->cis, CIS_CA_NODE_WAIT, NULL, &n->list_lock, NUMA_NO_NODE, 0);
-	spin_lock_irqsave(&n->list_lock, flags);
+	slub_node_lock_irqsave(s, n, flags);
 	cis_alloc_step(pc->cis, CIS_CA_NODE_HELD, NULL, &n->list_lock, NUMA_NO_NODE, 0);
 	list_for_each_entry_safe(slab, slab2, &n->partial, slab_list) {
 		if (!pfmemalloc_match(slab, pc->flags))
@@ -2330,7 +2402,7 @@ static struct slab *get_partial_node(struct kmem_cache *s,
 	}
 	cis_alloc_step(pc->cis, CIS_CA_NODE_RELEASE, partial, &n->list_lock,
 		partial ? slab_nid(partial) : NUMA_NO_NODE, !!partial);
-	spin_unlock_irqrestore(&n->list_lock, flags);
+	slub_node_unlock_irqrestore(s, n, flags);
 	cis_alloc_step(pc->cis, CIS_CA_NODE_DONE, partial, &n->list_lock,
 		partial ? slab_nid(partial) : NUMA_NO_NODE, !!partial);
 	return partial;
@@ -2571,9 +2643,9 @@ static void deactivate_slab(struct kmem_cache *s, struct slab *slab,
 		discard_slab(s, slab);
 		stat(s, FREE_SLAB);
 	} else if (new.freelist) {
-		spin_lock_irqsave(&n->list_lock, flags);
+		slub_node_lock_irqsave(s, n, flags);
 		add_partial(n, slab, tail);
-		spin_unlock_irqrestore(&n->list_lock, flags);
+		slub_node_unlock_irqrestore(s, n, flags);
 		stat(s, tail);
 	} else {
 		stat(s, DEACTIVATE_FULL);
@@ -2594,10 +2666,10 @@ static void __put_partials(struct kmem_cache *s, struct slab *partial_slab)
 		n2 = get_node(s, slab_nid(slab));
 		if (n != n2) {
 			if (n)
-				spin_unlock_irqrestore(&n->list_lock, flags);
+				slub_node_unlock_irqrestore(s, n, flags);
 
 			n = n2;
-			spin_lock_irqsave(&n->list_lock, flags);
+			slub_node_lock_irqsave(s, n, flags);
 		}
 
 		if (unlikely(!slab->inuse && n->nr_partial >= s->min_partial)) {
@@ -2610,7 +2682,7 @@ static void __put_partials(struct kmem_cache *s, struct slab *partial_slab)
 	}
 
 	if (n)
-		spin_unlock_irqrestore(&n->list_lock, flags);
+		slub_node_unlock_irqrestore(s, n, flags);
 
 	while (slab_to_discard) {
 		slab = slab_to_discard;
@@ -2927,17 +2999,17 @@ out:
 #endif /* CONFIG_SLUB_DEBUG */
 
 #if defined(CONFIG_SLUB_DEBUG) || defined(SLAB_SUPPORTS_SYSFS)
-static unsigned long count_partial(struct kmem_cache_node *n,
+static unsigned long count_partial(struct kmem_cache *s, struct kmem_cache_node *n,
 					int (*get_count)(struct slab *))
 {
 	unsigned long flags;
 	unsigned long x = 0;
 	struct slab *slab;
 
-	spin_lock_irqsave(&n->list_lock, flags);
+	slub_node_lock_irqsave(s, n, flags);
 	list_for_each_entry(slab, &n->partial, slab_list)
 		x += get_count(slab);
-	spin_unlock_irqrestore(&n->list_lock, flags);
+	slub_node_unlock_irqrestore(s, n, flags);
 	return x;
 }
 #endif /* CONFIG_SLUB_DEBUG || SLAB_SUPPORTS_SYSFS */
@@ -2969,7 +3041,7 @@ slab_out_of_memory(struct kmem_cache *s, gfp_t gfpflags, int nid)
 		unsigned long nr_objs;
 		unsigned long nr_free;
 
-		nr_free  = count_partial(n, count_free);
+		nr_free  = count_partial(s, n, count_free);
 		nr_slabs = node_nr_slabs(n);
 		nr_objs  = node_nr_objs(n);
 
@@ -3592,7 +3664,7 @@ static noinline void free_to_partial_list(
 	if (s->flags & SLAB_STORE_USER)
 		handle = set_track_prepare();
 
-	spin_lock_irqsave(&n->list_lock, flags);
+	slub_node_lock_irqsave(s, n, flags);
 
 	if (free_debug_processing(s, slab, head, tail, &cnt, addr, handle)) {
 		void *prior = slab->freelist;
@@ -3631,7 +3703,7 @@ static noinline void free_to_partial_list(
 		dec_slabs_node(s, slab_nid(slab_free), slab_free->objects);
 	}
 
-	spin_unlock_irqrestore(&n->list_lock, flags);
+	slub_node_unlock_irqrestore(s, n, flags);
 
 	if (slab_free) {
 		stat(s, FREE_SLAB);
@@ -3672,7 +3744,7 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
 
 	do {
 		if (unlikely(n)) {
-			spin_unlock_irqrestore(&n->list_lock, flags);
+			slub_node_unlock_irqrestore(s, n, flags);
 			n = NULL;
 		}
 		prior = slab->freelist;
@@ -3694,7 +3766,7 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
 				 * Otherwise the list_lock will synchronize with
 				 * other processors updating the list of slabs.
 				 */
-				spin_lock_irqsave(&n->list_lock, flags);
+				slub_node_lock_irqsave(s, n, flags);
 
 				on_node_partial = slab_test_node_partial(slab);
 			}
@@ -3730,7 +3802,7 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
 	 * in which case we shouldn't manipulate its list, just return.
 	 */
 	if (prior && !on_node_partial) {
-		spin_unlock_irqrestore(&n->list_lock, flags);
+		slub_node_unlock_irqrestore(s, n, flags);
 		return;
 	}
 
@@ -3745,7 +3817,7 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
 		add_partial(n, slab, DEACTIVATE_TO_TAIL);
 		stat(s, FREE_ADD_PARTIAL);
 	}
-	spin_unlock_irqrestore(&n->list_lock, flags);
+	slub_node_unlock_irqrestore(s, n, flags);
 	return;
 
 slab_empty:
@@ -3757,7 +3829,7 @@ slab_empty:
 		stat(s, FREE_REMOVE_PARTIAL);
 	}
 
-	spin_unlock_irqrestore(&n->list_lock, flags);
+	slub_node_unlock_irqrestore(s, n, flags);
 	stat(s, FREE_SLAB);
 	discard_slab(s, slab);
 }
@@ -4345,6 +4417,7 @@ static void early_kmem_cache_node_alloc(int node)
 	slab->inuse = 1;
 	kmem_cache_node->node[node] = n;
 	init_kmem_cache_node(n);
+	slub_node_event(kmem_cache_node, n, CIS_RESET);
 	inc_slabs_node(kmem_cache_node, node, slab->objects);
 
 	/*
@@ -4361,6 +4434,7 @@ static void free_kmem_cache_nodes(struct kmem_cache *s)
 
 	for_each_kmem_cache_node(s, node, n) {
 		s->node[node] = NULL;
+		slub_node_event(s, n, CIS_RETIRE);
 		kmem_cache_free(kmem_cache_node, n);
 	}
 }
@@ -4394,6 +4468,7 @@ static int init_kmem_cache_nodes(struct kmem_cache *s)
 		}
 
 		init_kmem_cache_node(n);
+		slub_node_event(s, n, CIS_RESET);
 		s->node[node] = n;
 	}
 	return 1;
@@ -4666,7 +4741,7 @@ static void free_partial(struct kmem_cache *s, struct kmem_cache_node *n)
 	struct slab *slab, *h;
 
 	BUG_ON(irqs_disabled());
-	spin_lock_irq(&n->list_lock);
+	slub_node_lock_irq(s, n);
 	list_for_each_entry_safe(slab, h, &n->partial, slab_list) {
 		if (!slab->inuse) {
 			remove_partial(n, slab);
@@ -4676,7 +4751,7 @@ static void free_partial(struct kmem_cache *s, struct kmem_cache_node *n)
 			  "Objects remaining in %s on __kmem_cache_shutdown()");
 		}
 	}
-	spin_unlock_irq(&n->list_lock);
+	slub_node_unlock_irq(s, n);
 
 	list_for_each_entry_safe(slab, h, &discard, slab_list)
 		discard_slab(s, slab);
@@ -4880,7 +4955,7 @@ static int __kmem_cache_do_shrink(struct kmem_cache *s)
 		for (i = 0; i < SHRINK_PROMOTE_MAX; i++)
 			INIT_LIST_HEAD(promote + i);
 
-		spin_lock_irqsave(&n->list_lock, flags);
+		slub_node_lock_irqsave(s, n, flags);
 
 		/*
 		 * Build lists of slabs to discard or promote.
@@ -4913,7 +4988,7 @@ static int __kmem_cache_do_shrink(struct kmem_cache *s)
 		for (i = SHRINK_PROMOTE_MAX - 1; i >= 0; i--)
 			list_splice(promote + i, &n->partial);
 
-		spin_unlock_irqrestore(&n->list_lock, flags);
+		slub_node_unlock_irqrestore(s, n, flags);
 
 		/* Release empty slabs */
 		list_for_each_entry_safe(slab, t, &discard, slab_list)
@@ -5009,6 +5084,7 @@ static int slab_mem_going_online_callback(void *arg)
 			goto out;
 		}
 		init_kmem_cache_node(n);
+		slub_node_event(s, n, CIS_RESET);
 		s->node[nid] = n;
 	}
 	/*
@@ -5238,7 +5314,7 @@ static int validate_slab_node(struct kmem_cache *s,
 	struct slab *slab;
 	unsigned long flags;
 
-	spin_lock_irqsave(&n->list_lock, flags);
+	slub_node_lock_irqsave(s, n, flags);
 
 	list_for_each_entry(slab, &n->partial, slab_list) {
 		validate_slab(s, slab, obj_map);
@@ -5264,7 +5340,7 @@ static int validate_slab_node(struct kmem_cache *s,
 	}
 
 out:
-	spin_unlock_irqrestore(&n->list_lock, flags);
+	slub_node_unlock_irqrestore(s, n, flags);
 	return count;
 }
 
@@ -5545,7 +5621,7 @@ static ssize_t show_slab_objects(struct kmem_cache *s,
 			if (flags & SO_TOTAL)
 				x = node_nr_objs(n);
 			else if (flags & SO_OBJECTS)
-				x = node_nr_objs(n) - count_partial(n, count_free);
+				x = node_nr_objs(n) - count_partial(s, n, count_free);
 			else
 				x = node_nr_slabs(n);
 			total += x;
@@ -5559,9 +5635,9 @@ static ssize_t show_slab_objects(struct kmem_cache *s,
 
 		for_each_kmem_cache_node(s, node, n) {
 			if (flags & SO_TOTAL)
-				x = count_partial(n, count_total);
+				x = count_partial(s, n, count_total);
 			else if (flags & SO_OBJECTS)
-				x = count_partial(n, count_inuse);
+				x = count_partial(s, n, count_inuse);
 			else
 				x = n->nr_partial;
 			total += x;
@@ -6489,12 +6565,12 @@ static int slab_debug_trace_open(struct inode *inode, struct file *filep)
 		if (!node_nr_slabs(n))
 			continue;
 
-		spin_lock_irqsave(&n->list_lock, flags);
+		slub_node_lock_irqsave(s, n, flags);
 		list_for_each_entry(slab, &n->partial, slab_list)
 			process_slab(t, s, slab, alloc, obj_map);
 		list_for_each_entry(slab, &n->full, slab_list)
 			process_slab(t, s, slab, alloc, obj_map);
-		spin_unlock_irqrestore(&n->list_lock, flags);
+		slub_node_unlock_irqrestore(s, n, flags);
 	}
 
 	/* Sort locations by count */
@@ -6572,7 +6648,7 @@ void get_slabinfo(struct kmem_cache *s, struct slabinfo *sinfo)
 	for_each_kmem_cache_node(s, node, n) {
 		nr_slabs += node_nr_slabs(n);
 		nr_objs += node_nr_objs(n);
-		nr_free += count_partial(n, count_free);
+		nr_free += count_partial(s, n, count_free);
 	}
 
 	sinfo->active_objs = nr_objs - nr_free;

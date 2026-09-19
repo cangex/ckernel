@@ -12,6 +12,8 @@ int cis_observe_register(void);
 void cis_observe_unregister(void);
 int cis_fd_observe_register(void);
 void cis_fd_observe_unregister(void);
+int cis_slub_observe_register(void);
+void cis_slub_observe_unregister(void);
 DECLARE_EVENT_CLASS(cis_net_class,
 	TP_PROTO(const struct cis_net_sample *sample),
 	TP_ARGS(sample),
@@ -121,6 +123,27 @@ TRACE_EVENT_FN(cis_fdlock_state,
 		__entry->object, __entry->kind, __entry->phase, __entry->owner,
 		__entry->flags, __entry->skipped),
 	cis_fd_observe_register, cis_fd_observe_unregister
+);
+TRACE_EVENT_FN(cis_slublock_state,
+	TP_PROTO(void *object, unsigned int kind, unsigned int phase,
+		 struct task_struct *owner, unsigned long flags, unsigned long skipped),
+	TP_ARGS(object, kind, phase, owner, flags, skipped),
+	TP_STRUCT__entry(
+		__field(void *, object)
+		__field(unsigned int, kind)
+		__field(unsigned int, phase)
+		__field(void *, owner)
+		__field(unsigned long, flags)
+		__field(unsigned long, skipped)
+	),
+	TP_fast_assign(
+		__entry->object=object; __entry->kind=kind; __entry->phase=phase;
+		__entry->owner=owner; __entry->flags=flags; __entry->skipped=skipped;
+	),
+	TP_printk("object=%p kind=%u phase=%u owner=%p cache=%lx skipped=%lu",
+		__entry->object, __entry->kind, __entry->phase, __entry->owner,
+		__entry->flags, __entry->skipped),
+	cis_slub_observe_register, cis_slub_observe_unregister
 );
 TRACE_EVENT(cis_rwsem_state,
 	TP_PROTO(void *object, unsigned int phase, unsigned long skipped),
