@@ -7,6 +7,17 @@ ROOT=Path(__file__).resolve().parents[4]
 
 
 class BlockSources(unittest.TestCase):
+    def test_merge_observation_preserves_native_policy_and_precedes_transfer(self):
+        text=(ROOT/'block/blk-merge.c').read_text()
+        self.assertIn('if (!blk_cgroup_mergeable(rq, bio))',text)
+        self.assertLess(text.index('trace_block_merge_link(req, next'),text.index('req->biotail->bi_next = next->bio'))
+        self.assertEqual(text.count('trace_block_merge_link('),4)
+        self.assertEqual(expected_fields('11','block')['block_link'],'1')
+        self.assertEqual(expected_fields('11',None)['block_link'],'0')
+        bpf=(ROOT/'tools/container_interference/bpf/block.bpf.c').read_text()
+        self.assertIn('index < 8',bpf); self.assertIn('depth < 32',bpf)
+        self.assertIn('if (phase == 3) block_bios',bpf)
+
     def test_tag_event_brackets_native_sleep_not_every_tag_success(self):
         text=(ROOT/'block/blk-mq-tag.c').read_text()
         start=text.index('unsigned int blk_mq_get_tag(')

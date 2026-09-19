@@ -23,6 +23,8 @@
 #define CIS_BLOCK_EVENT 17
 #define CIS_RWSEM_EVENT 18
 #define CIS_BLOCK_TAG_EVENT 19
+#define CIS_BLOCK_LINK_EVENT 20
+#define CIS_BLOCK_BIO_EVENT 21
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -99,6 +101,16 @@ struct cis_block_tag_event {
 	__u32 phase, alloc_flags, dev_major, dev_minor;
 	__s32 tag;
 	__u32 reserved;
+};
+struct cis_block_link_event {
+	struct cis_event base;
+	__u64 queue, victim, victim_episode, bio;
+	__u32 kind, before_bytes, added_bytes, reserved;
+};
+struct cis_block_bio_event {
+	struct cis_event base;
+	__u64 bio, cgroup, owner_id, owner_generation;
+	__u32 index, bytes, remaining, more, overdepth, reserved;
 };
 struct cis_object_key { __u64 object; __u32 kind, reserved; };
 struct cis_rwsem_event {

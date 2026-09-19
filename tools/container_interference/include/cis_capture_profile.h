@@ -38,7 +38,7 @@ static inline int cis_profile_program(unsigned int profile, const char *name)
 	if (profile == 10)
 		return !strcmp(name,"block_start") || !strcmp(name,"block_insert") ||
 		       !strcmp(name,"block_issue") || !strcmp(name,"block_requeue") ||
-		       !strcmp(name,"block_complete") || !strcmp(name,"block_merge") || !strcmp(name,"block_remap") || !strcmp(name,"block_tag");
+		       !strcmp(name,"block_complete") || !strcmp(name,"block_merge") || !strcmp(name,"block_remap") || !strcmp(name,"block_tag") || !strcmp(name,"block_link");
 	if (profile == 11)
 		return !strcmp(name, "rwsem_state");
 	return (profile == 2 || profile == 6 || profile == 12) && (!strcmp(name, "owner_state") || !strcmp(name, "owner_switch"));

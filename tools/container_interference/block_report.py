@@ -9,6 +9,7 @@ from collector_audit import audit
 from explain import explain, within_window
 from owner_report import fields
 from block_tag_report import tag_episodes
+from block_merge_report import analyze_provenance
 
 REQUIRED = {'protocol','sample_time_ns','request','episode_ns','submitter_tid','submitter_start',
     'queue','bio','phase','dev_major','dev_minor','remaining','completed','operation','multi_bio',
@@ -141,24 +142,27 @@ def analyze(record,raw):
         tag['stack_leaf_to_root']=stacks.get(tag['stack_id'],[])
         tag['stack_error']=tag['stack_id'] if tag['stack_id']<0 else None
     excluded.update(tag_defects)
+    provenance,provenance_defects=analyze_provenance(record,raw,groups)
+    excluded.update(provenance_defects)
     if tags and 'block_tag' not in record.get('inventory',{}).get('program_names',[]):
         excluded['tag_missing_producer']+=1
     quality=dict(base['quality'])
     if excluded: quality.update(status='FAIL',defects=quality['defects']+list(excluded))
-    if quality['status']!='PASS' or scope['status']!='PASS': requests=[]; tags=[]
+    if quality['status']!='PASS' or scope['status']!='PASS':
+        requests=[]; tags=[]; provenance['issue_sources']=[]; provenance['merge_transfers']=[]
     return dict(schema='cis-block-report-v1',boot_id=record.get('boot_id'),session_id=record.get('session_id'),
-        quality=quality,scope_audit=scope,requests=requests,tag_waits=tags,
+        quality=quality,scope_audit=scope,requests=requests,tag_waits=tags,provenance=provenance,
         tag_coverage='AVAILABLE' if 'block_tag' in record.get('inventory',{}).get('program_names',[]) else 'HISTORICAL_NOT_RECORDED',
         excluded=dict(excluded),stack_capture_errors=dict(stack_errors),
         raw_sha256=hashlib.sha256(raw).hexdigest(),source=base['source'],
         analysis_source_sha256=dict(base['analysis_source_sha256'],**{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('block_report.py','block_tag_report.py')}),
+            for name in ('block_report.py','block_tag_report.py','block_merge_report.py')}),
         performance_certification='NOT_ACCEPTED',limits=[
             'initial request submitter is not an exclusive owner of merged bios or writeback work',
             'device overlap identifies neither a holder nor a blocking container',
             'tag slowpath excludes immediate successes and does not identify slot holders; TAG_FOUND can still be rejected by inactive hctx',
             'tag io_schedule intervals include wakeup/scheduling and probe overhead, not exclusive device delay or spin cycles',
             'tag pool address is an episode-local route, not a proven lifetime; scheduler/device internal queues not covered',
-            'merge survivor unknown; partial completion is not request memory release',
+            'merge links require observed episodes; bio blkcg byte weights are issue-local, not exclusive ownership; partial completion is not request memory release',
             'queue and execution intervals are wall time, not CPU cycles or exclusive delay causes',
             'E3 requires a separately controlled counterfactual; this report provides none'])

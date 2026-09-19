@@ -870,6 +870,9 @@ static struct request *attempt_merge(struct request_queue *q,
 	if (next->start_time_ns < req->start_time_ns)
 		req->start_time_ns = next->start_time_ns;
 
+#ifdef CONFIG_CIS_OBSERVE
+	trace_block_merge_link(req, next, next->bio, 1);
+#endif
 	req->biotail->bi_next = next->bio;
 	req->biotail = next->biotail;
 
@@ -1002,6 +1005,9 @@ static enum bio_merge_status bio_attempt_back_merge(struct request *req,
 
 	blk_update_mixed_merge(req, bio, false);
 
+#ifdef CONFIG_CIS_OBSERVE
+	trace_block_merge_link(req, NULL, bio, 2);
+#endif
 	req->biotail->bi_next = bio;
 	req->biotail = bio;
 	req->__data_len += bio->bi_iter.bi_size;
@@ -1029,6 +1035,9 @@ static enum bio_merge_status bio_attempt_front_merge(struct request *req,
 
 	blk_update_mixed_merge(req, bio, true);
 
+#ifdef CONFIG_CIS_OBSERVE
+	trace_block_merge_link(req, NULL, bio, 3);
+#endif
 	bio->bi_next = req->bio;
 	req->bio = bio;
 
@@ -1055,6 +1064,9 @@ static enum bio_merge_status bio_attempt_discard_merge(struct request_queue *q,
 
 	rq_qos_merge(q, req, bio);
 
+#ifdef CONFIG_CIS_OBSERVE
+	trace_block_merge_link(req, NULL, bio, 4);
+#endif
 	req->biotail->bi_next = bio;
 	req->biotail = bio;
 	req->__data_len += bio->bi_iter.bi_size;

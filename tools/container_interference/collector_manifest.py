@@ -76,6 +76,9 @@ COLLECTORS['rwsem']['source_filter'] = 'manual 1..8 administrator-selected addre
 COLLECTORS['block']['programs'].append('block_tag')
 COLLECTORS['block']['maps'].append('tag_pending')
 COLLECTORS['block']['source_filter'] += '; 256 task-start keyed tag-wait episodes before request creation; no inferred tag holder'
+LEGACY_TAG_BLOCK = deepcopy(COLLECTORS['block'])
+COLLECTORS['block']['programs'].append('block_link')
+COLLECTORS['block']['source_filter'] += '; successful native merge links before transfer; issue-time snapshot of at most eight bios with blkcg byte weights, remainder unknown, never inferred blockers'
 
 
 def contract(name, legacy_block=False, legacy_rwsem=False):
@@ -121,6 +124,11 @@ def validate_record_inventory(record):
         expected=contract(name,legacy_block=True)
         if record.get('collector_contract_sha256')!=digest(expected):
             raise ValueError('unproven historical block contract')
+    elif name=='block' and isinstance(inventory,dict) and 'block_link' not in inventory.get('program_names',[]):
+        expected=contract(name)
+        for key,value in LEGACY_TAG_BLOCK.items(): expected[key]=deepcopy(value)
+        if record.get('collector_contract_sha256')!=digest(expected):
+            raise ValueError('unproven historical tag block contract')
     legacy=COMMON_MAPS+['targets','stacks','pending']
     if (name=='counter' and isinstance(inventory,dict) and set(inventory.get('map_names',[]))==set(legacy)):
         expected['maps']=legacy

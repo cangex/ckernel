@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 28
+#define CIS_DIAGNOSTIC_LINKS 29
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -132,6 +132,26 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	char detail[768];
 	const char *symbol;
 	(void)cpu;
+	if(size>=sizeof(struct cis_block_link_event) && size<=sizeof(struct cis_block_link_event)+7 && e->type==CIS_BLOCK_LINK_EVENT) {
+		struct cis_block_link_event *v=data;
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(detail,sizeof(detail),"protocol=1 sample_time_ns=%llu request=0x%llx episode_ns=%llu queue=0x%llx victim=0x%llx victim_episode_ns=%llu bio=0x%llx merge_kind=%u before_bytes=%u added_bytes=%u",
+			(unsigned long long)e->time_ns,(unsigned long long)e->object,(unsigned long long)e->sequence_ns,
+			(unsigned long long)v->queue,(unsigned long long)v->victim,(unsigned long long)v->victim_episode,
+			(unsigned long long)v->bio,v->kind,v->before_bytes,v->added_bytes);
+		cis_report(ctx,"BLOCK_LINK",r,detail);return;
+	}
+	if(size>=sizeof(struct cis_block_bio_event) && size<=sizeof(struct cis_block_bio_event)+7 && e->type==CIS_BLOCK_BIO_EVENT) {
+		struct cis_block_bio_event *v=data;
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(detail,sizeof(detail),"protocol=1 sample_time_ns=%llu request=0x%llx episode_ns=%llu bio=0x%llx index=%u bytes=%u remaining=%u more=%u bio_cgroup=%llu bio_owner_id=%llu bio_owner_generation=%llu bio_origin_overdepth=%u",
+			(unsigned long long)e->time_ns,(unsigned long long)e->object,(unsigned long long)e->sequence_ns,
+			(unsigned long long)v->bio,v->index,v->bytes,v->remaining,v->more,
+			(unsigned long long)v->cgroup,(unsigned long long)v->owner_id,(unsigned long long)v->owner_generation,v->overdepth);
+		cis_report(ctx,"BLOCK_BIO",r,detail);return;
+	}
 	if(size>=sizeof(struct cis_block_tag_event) && size<=sizeof(struct cis_block_tag_event)+7 && e->type==CIS_BLOCK_TAG_EVENT) {
 		struct cis_block_tag_event *v=data;
 		char d[1000];
@@ -318,7 +338,7 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"alloc_step",64},{"alloc_release",64},{"net_state",128},{"net_release",128},
 		{"block_start",256},{"block_insert",256},{"block_issue",256},
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
-		{"block_tag",256},
+		{"block_tag",256},{"block_link",256},
 		{"rwsem_state",512}};
 	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;

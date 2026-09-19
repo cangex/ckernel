@@ -13,6 +13,27 @@
 #define RWBS_LEN	8
 
 #ifdef CONFIG_CIS_OBSERVE
+/* Successful merge, before bios/bytes transfer. No clock or walk when disabled. */
+TRACE_EVENT(block_merge_link,
+	TP_PROTO(struct request *survivor, struct request *victim,
+		 struct bio *bio, unsigned int kind),
+	TP_ARGS(survivor, victim, bio, kind),
+	TP_STRUCT__entry(
+		__field(void *, survivor)
+		__field(void *, victim)
+		__field(void *, bio)
+		__field(unsigned int, kind)
+	),
+	TP_fast_assign(
+		__entry->survivor = survivor;
+		__entry->victim = victim;
+		__entry->bio = bio;
+		__entry->kind = kind;
+	),
+	TP_printk("survivor=%p victim=%p bio=%p kind=%u",
+		__entry->survivor, __entry->victim, __entry->bio, __entry->kind)
+);
+
 /* Slow allocation episode only. A bitmap address is not an owner identity. */
 TRACE_EVENT(block_tag_wait,
 	TP_PROTO(struct request_queue *q, void *pool, unsigned int phase,

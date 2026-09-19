@@ -64,6 +64,80 @@ int block_tag(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
+/* Only selected, watched requests. Each issue is a separate remaining-byte
+ * snapshot, not an allocation owner or an additional completed-byte count. */
+static __noinline void block_bios(void *ctx, struct request *rq,
+				const struct cis_event *base)
+{
+	struct cis_block_bio_event e = {};
+	struct cis_bpf_stats *s = statistics();
+	struct bio *bio = BPF_CORE_READ(rq, bio);
+
+	e.base = *base;
+	e.base.type = CIS_BLOCK_BIO_EVENT;
+	e.remaining = BPF_CORE_READ(rq, __data_len);
+#pragma clang loop unroll(disable)
+	for (int index = 0; index < 8; index++) {
+		struct kernfs_node *kn;
+		struct bio *next;
+
+		if (!bio) break;
+		e.bio = (__u64)bio; e.index = index;
+		e.bytes = BPF_CORE_READ(bio, bi_iter.bi_size);
+		next = BPF_CORE_READ(bio, bi_next); e.more = next != NULL;
+		kn = BPF_CORE_READ(bio, bi_blkg, blkcg, css.cgroup, kn);
+		e.cgroup = BPF_CORE_READ(kn, id);
+		e.owner_id = 0; e.owner_generation = 0; e.overdepth = 0;
+#pragma clang loop unroll(disable)
+		for (int depth = 0; depth < 32; depth++) {
+			struct cis_identity *origin;
+			__u64 cg;
+
+			if (!kn) break;
+			cg = BPF_CORE_READ(kn, id);
+			origin = bpf_map_lookup_elem(&roots, &cg);
+			if (origin) {
+				e.owner_id = origin->id; e.owner_generation = origin->generation;
+				kn = NULL; break;
+			}
+			kn = BPF_CORE_READ(kn, parent);
+		}
+		if (kn) e.overdepth = 1;
+		if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
+		else COUNT(s, emitted);
+		bio = next;
+	}
+}
+
+SEC("raw_tp/block_merge_link")
+int block_link(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct request *rq = (void *)ctx->args[0], *victim = (void *)ctx->args[1];
+	struct bio *bio = (void *)ctx->args[2];
+	struct cis_block_event *saved, *other;
+	struct cis_block_link_event e = {};
+	struct cis_bpf_stats *s = statistics();
+	__u64 object = (__u64)rq, next = (__u64)victim, now = bpf_ktime_get_ns();
+
+	COUNT(s, received);
+	saved = bpf_map_lookup_elem(&block_watched, &object);
+	if (!saved) { COUNT(s, unmatched); return 0; }
+	if (!same_window(&saved->base, CIS_DIAG_BLOCK, now)) { COUNT(s, expired); return 0; }
+	e.base = saved->base; e.base.time_ns = now; e.base.type = CIS_BLOCK_LINK_EVENT;
+	e.queue = (__u64)BPF_CORE_READ(rq, q);
+	e.victim = next; e.bio = (__u64)bio; e.kind = ctx->args[3];
+	e.before_bytes = BPF_CORE_READ(rq, __data_len);
+	e.added_bytes = victim ? BPF_CORE_READ(victim, __data_len) : BPF_CORE_READ(bio, bi_iter.bi_size);
+	if (victim) {
+		other = bpf_map_lookup_elem(&block_watched, &next);
+		if (other && same_window(&other->base, CIS_DIAG_BLOCK, now))
+			e.victim_episode = other->base.sequence_ns;
+	}
+	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
+	else COUNT(s, emitted);
+	return 0;
+}
+
 static __always_inline int block_event(void *ctx, struct request *rq,
 		__u32 phase, __u32 completed, __u32 status)
 {
@@ -128,6 +202,7 @@ static __always_inline int block_event(void *ctx, struct request *rq,
 	}
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);
+	if (phase == 3) block_bios(ctx, rq, &e.base);
 	return 0;
 }
 

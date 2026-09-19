@@ -4,12 +4,17 @@ import unittest
 import test_counter_report
 import test_collector_manifest
 from block_report import analyze
+from collector_manifest import contract, LEGACY_TAG_BLOCK
+from periodic_plan import digest
 
 
 class BlockReport(unittest.TestCase):
     def record(self):
         r=test_counter_report.CounterReport().record(); r['collector']='block'
         r['inventory']=test_collector_manifest.CollectorContract().inventory('block')
+        r['inventory']['program_names'].remove('block_link'); r['inventory']['programs'].pop()
+        old=contract('block'); old.update(LEGACY_TAG_BLOCK)
+        r['collector_contract_sha256']=digest(old)
         return r
 
     def row(self,time,phase,epoch=10,request=1000,who=1,context=0,**changes):
