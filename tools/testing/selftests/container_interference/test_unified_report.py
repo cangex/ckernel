@@ -8,6 +8,7 @@ import test_collector_manifest
 import test_allocator_report
 import test_allocator_lifetime
 import test_block_tag_report
+import test_block_merge_report
 from owner_test import event
 from unified_report import analyze,markdown
 
@@ -21,6 +22,17 @@ def encode(rows):
 
 
 class UnifiedReport(unittest.TestCase):
+    def test_block_sources_are_not_misreported_as_holders(self):
+        f=test_block_merge_report.MergeReport(); f.setUp()
+        result=analyze(f.record(),encode(f.appended()))
+        self.assertEqual(result['quality']['status'],'PASS',result)
+        r=result['relations'][0]
+        self.assertFalse(r['participants'])
+        self.assertEqual(r['details']['issue_bio_sources'][0]['remaining_bytes'],8192)
+        self.assertEqual(len(r['details']['merge_transfers']),1)
+        self.assertIn('未知 0 字节',markdown(result))
+        self.assertIn('不表示设备存在唯一阻塞容器',markdown(result))
+
     def test_tag_wait_stays_e1_with_no_invented_holder(self):
         f=test_block_tag_report.TagReport()
         raw=encode([f.row(t,p) for t,p in ((10,1),(20,2),(30,3),(40,4))])

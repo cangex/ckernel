@@ -103,6 +103,11 @@ def analyze(record,raw):
                         observed_holders=f['observed_holders'],mode=f['mode'],outcome=f['outcome'],
                         unexplained_elapsed_ns=f['unexplained_elapsed_ns'])
         elif collector=='block':
+            bio_sources={}; merge_transfers={}
+            for row in specialist.get('provenance',{}).get('issue_sources',[]):
+                bio_sources.setdefault((row['request'],row['episode_ns']),[]).append(row)
+            for row in specialist.get('provenance',{}).get('merge_transfers',[]):
+                merge_transfers.setdefault(tuple(row['survivor']),[]).append(row)
             for f in specialist['tag_waits']:
                 add('block_tag_wait','E1',f['container']+[f['tid'],f['task_start']],
                     dict(kind='tag_allocation_episode',queue=f['queue'],pools=f['pools'],episode_ns=f['episode_ns']),
@@ -115,6 +120,8 @@ def analyze(record,raw):
                     ['initial submitter is not a merge/writeback owner; device peers are not proven blockers'],
                     devices=f['devices'],queue_intervals_ns=f['queue_intervals_ns'],service_intervals=f['service_intervals'],
                     head_bio_origins=f['head_bio_origins'],origin_coverage=f['origin_coverage'],
+                    issue_bio_sources=bio_sources.get((f['request'],f['episode_ns']),[]),
+                    merge_transfers=merge_transfers.get((f['request'],f['episode_ns']),[]),
                     uncertainty=f['uncertainty'],terminal=f['terminal'])
     result=dict(schema='cis-explanation-v2',boot_id=record.get('boot_id'),session_id=record['session_id'],collector=collector,
         window=record.get('window'),quality=quality,scope_audit=scope,relations=relations,omitted_relations=omitted,
@@ -143,6 +150,14 @@ def markdown(report):
         lines.append('- **%s / %s**：任务 `%s`，资源 `%s`；参与者 `%s`。'%(labels.get(r['relation'],r['relation']),r['evidence'],
             r['affected_actor'],json.dumps(r['resource'],ensure_ascii=False),r['participants']))
         if r['chain_leaf_to_root']: lines.append('  调用栈（叶到根）：`%s`。'%' → '.join(r['chain_leaf_to_root']))
+        if r['relation']=='block_request_episode':
+            snapshots=r['details'].get('issue_bio_sources',[])
+            for snap in snapshots[:4]:
+                lines.append('  下发时剩余 %d 字节；bio计费来源 %s；未知 %d 字节。重排队快照不累加为新请求量。'%(
+                    snap['remaining_bytes'],json.dumps(snap['sources'],ensure_ascii=False),snap['unknown_bytes']))
+            if len(snapshots)>4: lines.append('  其余下发快照见JSON。')
+            if r['details'].get('merge_transfers'):
+                lines.append('  观察到 %d 次原生合并转移；这不表示设备存在唯一阻塞容器。'%len(r['details']['merge_transfers']))
     if not report['relations']: lines.append('本窗口未形成可接收的关系；不能据此认定不存在干扰。')
     lines+=['','## 边界','共享计数器、队列参与者和锁持有者是不同关系。不能把其中任意一种直接称为唯一阻塞方。',
         '候选产生前的周期等待、专项排队时间和解释耗时分别记录，不混为异常发现延迟。',

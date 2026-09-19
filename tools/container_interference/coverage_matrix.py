@@ -45,6 +45,11 @@ CONTRACT={
     'block_tag': dict(name='块请求槽位等待',collector='block',discovered='原生tag慢分配、io_schedule及NOWAIT拒绝',
         object='调用episode、队列与本次bitmap地址',participants='等待任务；未推断占用槽位的请求或唯一阻塞容器',
         pending=['API fixture不代表真实设备负载覆盖','多硬件队列迁移与reserved池运行验证','槽位持有请求的完整生命周期']),
+    'block_merge': dict(name='bio合并与字节来源',collector='block',
+        discovered='原生前向/后向合并、下发时有界bio列表和blkcg字节权重',
+        object='请求episode、合并转移和每次下发快照，最多8个bio',
+        participants='请求提交者与bio计费来源分开，超限和未知来源保留，不推断设备阻塞方',
+        pending=['request-to-request合并仍缺运行正例','buffered writeback脏页来源','bio拆分及取消运行反例','高事件率与普通应用联合成本']),
     'routing': dict(name='有界专项调度',collector='controller',discovered='真实巡检候选到单槽专项',
         object='配置epoch、目标代次及候选来源会话',participants='按目标轮转，候选不是因果认定',
         pending=['四容器混合来源联合验收']),
@@ -66,6 +71,7 @@ VERIFIERS={
     'slub':('slub_vm_check','slub',{}),
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
+    'block_merge':('block_vm_check','block_merge',{}),
     'routing':('diagnosis_vm_check','routing',{}),
     'control':('x0_check','control',{}), 'rwsem':('rwsem_vm_check','rwsem',{}),
     'rwsem_joint':('rwsem_vm_check','rwsem_joint',dict(joint=True)),
@@ -76,7 +82,7 @@ def validate_index(index):
     if not isinstance(index,dict) or set(index)!={'schema','cohorts'} or index['schema']!='cis-coverage-input-v1':
         raise ValueError('versioned evidence index required')
     rows=index['cohorts']; names=set()
-    if not isinstance(rows,list) or not 1<=len(rows)<=32: raise ValueError('bounded nonempty evidence required')
+    if not isinstance(rows,list) or not 1<=len(rows)<=64: raise ValueError('bounded nonempty evidence required')
     for row in rows:
         if (set(row)!={'name','verifier','serial','sha256'} or row['verifier'] not in VERIFIERS or
                 not isinstance(row['name'],str) or not row['name'].isascii() or
@@ -109,6 +115,8 @@ def replay(index,base,output):
                 raise ValueError('backlog cohort required')
             if key=='net' and labels and all(v.startswith('backlog-') for v in labels):
                 raise ValueError('logical ownership cohort required')
+            if key=='block_merge' and checked.get('fixture')!='merge':
+                raise ValueError('native merge truth cohort required')
             error=None; passed=checked.get('status') in ('PASS','PASS_SCOPED') and not checked.get('errors') and not checked.get('defects')
         except (ValueError,KeyError,AssertionError) as exc:
             checked={}; error=type(exc).__name__+': '+str(exc); passed=False
