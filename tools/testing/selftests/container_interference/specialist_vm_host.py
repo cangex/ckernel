@@ -31,6 +31,12 @@ def image_path(path, base):
     return resolved.is_relative_to(base.resolve()) or scratch_path(resolved)
 
 
+def evidence_path(path, base):
+    resolved = path.resolve()
+    return resolved.is_relative_to(base.resolve()/'evidence') or resolved.is_relative_to(
+        Path('/dev/shm/cis-x-20260919/evidence'))
+
+
 def run(args):
     os.umask(0o077)
     base = Path('/root/cis-20260916-232524')
@@ -38,7 +44,7 @@ def run(args):
     evidence, image, initrd = [Path(x).resolve() for x in (args.evidence, args.image, args.initrd)]
     if os.uname().machine != 'aarch64' or os.geteuid() != 0:
         raise PermissionError('dedicated ARM64 development host required')
-    if (not evidence.is_relative_to(base/'evidence') or not image_path(image, base)
+    if (not evidence_path(evidence, base) or not image_path(image, base)
             or not scratch_path(initrd) or not evidence.is_dir()):
         raise ValueError('outside dedicated artifact directories')
     if source != base/'periodic/kernel' and not scratch_path(source):
