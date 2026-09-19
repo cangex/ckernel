@@ -12,6 +12,7 @@ from session_check import extract
 from source_switches import validate
 from unified_report import analyze
 from allocator_source_audit import delta as allocator_delta
+from joint_costs import analyze as system_costs
 
 # Versioned cohort, not the mutable set of collectors in the current checkout.
 JOINT_COLLECTORS_V1 = ('ip','owner','fd','sched','reclaim','sync','counter','allocator','net','block')
@@ -61,6 +62,7 @@ def check(serial,output):
     text=raw.decode(); files=extract(text); prefix='/tmp/joint-evidence/'
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan=value('plan.json'); declared=value('result.json'); permit=value('permit.json')
+    if plan.get('cost_schema') not in (None,'cis-x7-cost-v1'): raise ValueError('unknown cost schema')
     output.mkdir(mode=0o700); errors=[]; states=[]
     collectors=cohort_collectors(plan['schema'],plan.get('group'))
     modes=['off']+list(collectors); order=[(r,m) for r in range(3) for m in (modes if r%2==0 else list(reversed(modes)))]
@@ -101,12 +103,17 @@ def check(serial,output):
         a=cpu_snapshot(evidence['before']['proc_stat']); b=cpu_snapshot(evidence['after']['proc_stat'])
         if a.keys()!=b.keys(): errors.append('cpu_set_changed')
         cpu={k:[q-p for p,q in zip(a[k],b[k])] for k in a if k in b}
-        if any(v<0 for row in cpu.values() for v in row): errors.append('cpu_counter_regression')
+        # iowait can decrease; it is not a reliable additive waiting-time metric.
+        if any(v<0 for row in cpu.values() for i,v in enumerate(row) if i!=4): errors.append('cpu_counter_regression')
+        resources=None
+        if plan.get('cost_schema'):
+            resources=system_costs(evidence['before'],evidence['after'],plan['clock_ticks'])
         source_audit=None
         if 'allocator_source_audit' in evidence['before'] or 'allocator_source_audit' in evidence['after']:
             source_audit=allocator_delta(*[dict(time_ns=evidence[k]['time_ns'],
                 source_audit=evidence[k]['allocator_source_audit']) for k in ('before','after')])
         states.append(dict(label=label,mode=mode,round=r,workload=measured,cost=cost,relations=len(relations),
+            system_cost=resources,
             allocator_source_audit=source_audit,
             cpu_delta_ticks=cpu,cpu_clock_hz=plan['clock_ticks'],
             cpu_scope='whole benchmark enclosing capture; includes business CPU, not observer-only cost',

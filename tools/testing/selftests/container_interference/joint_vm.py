@@ -16,6 +16,7 @@ from owner_report import fields
 from session import source_manifest
 from source_switches import observe
 from unified_report import analyze
+from joint_costs import CGROUP_FILES,kernel_threads
 
 
 def order(collectors):
@@ -43,6 +44,7 @@ def run(group='common'):
         scope='native file and VMA operations, four active containers; no injected kernel delays',
         off='controller idle without attached probes, not absent-CIS baseline',
         captures=3*len(collectors),p99='record_only',throughput='completed at fixed offered rate, not saturation throughput',
+        cost_schema='cis-x7-cost-v1',
         clock_ticks=os.sysconf('SC_CLK_TCK'),
         targets_by_round=[[0,2],[1,3],[0,3]],source_generation='same kernel and collector bundle per cohort')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
@@ -73,11 +75,15 @@ def run(group='common'):
         raise TimeoutError(key)
 
     def snapshot():
-        return dict(time_ns=time.monotonic_ns(),proc_stat=Path('/proc/stat').read_text(),
+        result=dict(time_ns=time.monotonic_ns(),proc_stat=Path('/proc/stat').read_text(),
             memory=Path('/proc/meminfo').read_text(),softirqs=Path('/proc/softirqs').read_text(),
             allocator_source_audit=Path('/sys/kernel/debug/cis_alloc_audit').read_text(),
             recursion_source_audit=Path('/sys/kernel/debug/cis_recursion').read_text(),
-            roots=[{name:(p/name).read_text() for name in ('cpu.stat','memory.current','memory.peak','memory.events')} for p in roots])
+            roots=[{name:(p/name).read_text() for name in CGROUP_FILES} for p in roots],
+            management={name:(root/'management'/name).read_text() for name in CGROUP_FILES},
+            kthreads=kernel_threads())
+        result['read_end_ns']=time.monotonic_ns()
+        return result
 
     try:
         limit=time.monotonic()+10
