@@ -79,6 +79,13 @@ def verify(plan, state, logs, record, hz):
         raise ValueError('native rwsem filter not exercised')
     if not state['enabled'] and source['entries']:
         raise ValueError('rwsem source active in OFF case')
+    if record:
+        receipt=record['receipt']; terminal=receipt['terminal']
+        if (terminal.get('valid') is not True or type(terminal.get('received')) is not int or
+                not 0<=terminal['received']<=source['selected']):
+            raise ValueError('rwsem BPF entries exceed audited selected source')
+        if not info['before']['read_end_ns'] < record['requested_ns'] <= receipt['prepared_ns'] < receipt['destroyed_ns'] < info['after']['time_ns']:
+            raise ValueError('rwsem source bookends do not contain producer lifetime')
     return dict(workload=work, system_cost=resources,
                 native_source=source,
                 scope='fixture and ordinary operations plus controller; not exclusive observer CPU',

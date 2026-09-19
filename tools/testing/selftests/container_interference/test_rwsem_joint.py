@@ -25,7 +25,9 @@ class RwsemJoint(unittest.TestCase):
         for name,mode in zip(info['logs'],PLAN['ordinary_workloads']):
             logs[name]=('CIS_JOINT_WORK mode=%s due_start_ns=1000 begin_ns=1100 end_ns=3000001000 offered=1500 completed=1500 errors=0 timeouts=0 period_ns=2000000 timeout_ns=100000000 p99_ns=1485 max_ns=1500 latency_sum_ns=1125750\n'%mode+
                         'CIS_JOINT_LATENCIES '+','.join(map(str,range(1,1501)))+'\n')
-        return state,logs,dict(window=dict(start_ns=1_000_000,end_ns=2_001_000_000))
+        return state,logs,dict(window=dict(start_ns=1_000_000,end_ns=2_001_000_000),
+            requested_ns=900_000,receipt=dict(prepared_ns=950_000,destroyed_ns=2_100_000_000,
+                                           terminal=dict(valid=True,received=10)))
 
     @patch('rwsem_joint.cost_analysis',return_value=dict(scope='bookends'))
     def test_four_active_containers_and_rotation_are_verified(self,mock):
@@ -45,6 +47,13 @@ class RwsemJoint(unittest.TestCase):
         state,logs,record=self.sample()
         state['joint']['after']['rwsem_source_audit']='version=1\ncpu=0 entries=10 filtered=0\n'
         with self.assertRaisesRegex(ValueError,'not exercised'): verify(PLAN,state,logs,record,100)
+
+    @patch('rwsem_joint.cost_analysis',return_value={})
+    def test_native_and_bpf_audits_have_matching_boundaries(self,mock):
+        state,logs,record=self.sample(); record['receipt']['terminal']['received']=11
+        with self.assertRaisesRegex(ValueError,'exceed audited'): verify(PLAN,state,logs,record,100)
+        state,logs,record=self.sample(); record['requested_ns']=400
+        with self.assertRaisesRegex(ValueError,'producer lifetime'): verify(PLAN,state,logs,record,100)
 
     @patch('rwsem_joint.cost_analysis',return_value={})
     def test_missing_bystander_or_incomplete_window_rejected(self,mock):
