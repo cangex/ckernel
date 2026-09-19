@@ -49,6 +49,11 @@ CONTRACT={
         object='独立Socket cookie集合及窗口内watch容量',
         participants='保护通过不表示截断窗口可用于持有者归因',
         pending=['该测试不是高事件率或ring满验收','未证明所有网络元数据容量路径']),
+    'net_guard': dict(name='网络高事件率采集保护',collector='net',
+        discovered='独立Socket高频原生操作，停止采集并验证同一业务继续',
+        object='私有Socket cookie和真实源开关，不是跨容器竞争正例',
+        participants='截断窗口不得输出持有者关系，保护通过不等于密集采集可用',
+        pending=['按实际触发的保护原因分别留证','不代表所有采集器或所有容量路径','完整源端CPU与后台成本']),
     'net_tx': dict(name='TCP发送缓冲区申请与释放',collector='net',
         discovered='原生fclone申请、内存准入与原始skb头部释放入口',
         object='Socket cookie、请求任务代次与分配边界；原始头部地址不代表共享数据页',
@@ -120,6 +125,7 @@ VERIFIERS={
     'net_tx_failure':('net_vm_check','net_tx_failure',{}),
     'net_tx_admission':('net_vm_check','net_tx_admission',{}),
     'net_capacity':('net_vm_check','net_capacity',{}),
+    'net_guard':('net_guard_check','net_guard',{}),
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
     'block_merge':('block_vm_check','block_merge',{}),
     'block_lifecycle':('block_vm_check','block_lifecycle',{}),
@@ -174,6 +180,13 @@ def replay(index,base,output):
                         v.get('result',{}).get('native_cookies')!=80 or
                         v.get('result',{}).get('quality',{}).get('status')!='FAIL' for v in selected)):
                     raise ValueError('native watch overflow and rejected observation required')
+            if key=='net_guard':
+                selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
+                if (len(selected)!=3 or any(not v['label'].startswith('storm-') or
+                        v.get('result',{}).get('reason') not in ('ENTRY_RATE_LIMIT','WORKER_CPU_LIMIT','DATA_LIMIT','QUALITY') or
+                        len(v['result'].get('post_detach_operations',[]))!=2 or
+                        min(v['result']['post_detach_operations'])<=0 for v in selected)):
+                    raise ValueError('rejected dense capture and continued business required')
             if key=='net_tx':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
                 if len(selected)!=3 or any(not v.get('result',{}).get('tx') or
