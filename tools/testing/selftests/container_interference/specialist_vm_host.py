@@ -54,7 +54,7 @@ def run(args):
                '-append', 'console=ttyAMA0 rdinit=/init panic=-1 cis_observe.wait_gate=1']
     if args.label == 'x2-counter':
         command[-1] += ' cis_observe.counter_shift=0'
-    if args.label in ('x3-fixture','x3-placement'):
+    if args.label in ('x3-fixture','x3-placement','x3-failure'):
         command[-1] += ' cis_observe.alloc_shift=0 cis_observe.alloc_cache=cis_alloc_test'
     if args.label == 'x3-placement':
         command += ['-object','memory-backend-ram,id=cisram0,size=2048M',
@@ -130,6 +130,6 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     for name in ('image','image-sha256','initrd','evidence'): parser.add_argument('--'+name,required=True)
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-fixture','x3-placement','x4-net','x4-backlog','x4-net-rights','x5-block','x6-diagnosis','x7-joint'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-fixture','x3-placement','x3-failure','x4-net','x4-backlog','x4-net-rights','x5-block','x6-diagnosis','x7-joint'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     raise SystemExit(run(parser.parse_args()))

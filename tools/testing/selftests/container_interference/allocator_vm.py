@@ -18,18 +18,21 @@ from allocator_fixture_check import CASES, check_case, case_order
 ORDER=['off0','allocator0','allocator1','off1','off2','allocator2']
 
 
-def run(fixture=False,placement=False):
-    if placement: fixture=True
+def run(fixture=False,placement=False,failure=False):
+    if placement and failure: raise ValueError('separate cohorts required')
+    if placement or failure: fixture=True
     verify_case=check_case
     if placement:
         from allocator_placement_check import check_case as verify_case, nodes, case_order as placement_order, CASES as placement_cases
+    if failure:
+        from allocator_failure_check import check_case as verify_case, SETTINGS, case_order as failure_order, CASES as failure_cases
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     selection = [('alloc_shift','0'),('alloc_cache','cis_alloc_test')] if fixture else [('alloc_shift','6'),('alloc_cache','maple_node')]
     for name,value in selection:
         if Path('/sys/module/cis_observe/parameters/'+name).read_text().strip()!=value:
             raise ValueError('frozen source selection')
-    out=Path('/tmp/allocator-placement-evidence' if placement else '/tmp/allocator-fixture-evidence' if fixture else '/tmp/allocator-evidence'); out.mkdir(mode=0o700)
+    out=Path('/tmp/allocator-failure-evidence' if failure else '/tmp/allocator-placement-evidence' if placement else '/tmp/allocator-fixture-evidence' if fixture else '/tmp/allocator-evidence'); out.mkdir(mode=0o700)
     root=Path('/sys/fs/cgroup/cis-allocator'); root.mkdir()
     (root/'management').mkdir(); (root/'management/cgroup.procs').write_text(str(os.getpid()))
     (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
@@ -52,6 +55,27 @@ def run(fixture=False,placement=False):
         if topology!={'0':'0-3','1':'4-7'}: raise ValueError('frozen two-node VM topology')
         plan.update(order=placement_order(),cases=list(placement_cases),operations=8,placement=True,topology=topology,
                     scope='explicit allowed nodes; same cache is not necessarily the same NUMA backend')
+    fault_root=Path('/sys/kernel/debug/failslab')
+    def fault_snapshot():
+        return dict(settings={name:(fault_root/name).read_text().strip() for name in SETTINGS},
+                    caches={name:Path('/sys/kernel/slab/'+name+'/failslab').read_text().strip()
+                            for name in ('cis_alloc_test','cis_alloc_private')})
+    if failure:
+        if not Path('/cis-disposable-vm').exists(): raise ValueError('VM-only failslab')
+        original=fault_snapshot()
+        (out/'failslab-original.json').write_text(json.dumps(original,indent=2))
+        if original['settings']['probability']!='0' or any(v!='0' for v in original['caches'].values()):
+            raise ValueError('unexpected existing fault injection')
+        # Only this test cache and explicitly marked tasks can fail.
+        for name,value in SETTINGS.items():
+            if name!='probability': (fault_root/name).write_text(value)
+        Path('/sys/kernel/slab/cis_alloc_private/failslab').write_text('0')
+        Path('/sys/kernel/slab/cis_alloc_test/failslab').write_text('1')
+        (fault_root/'probability').write_text(SETTINGS['probability'])
+        expected_fault=dict(settings=SETTINGS,caches=dict(cis_alloc_test='1',cis_alloc_private='0'))
+        if fault_snapshot()!=expected_fault: raise ValueError('failslab configuration readback')
+        plan.update(order=failure_order(),cases=list(failure_cases),operations=8,failure=True,
+                    fault_configuration=expected_fault,scope='native failslab pre-hook failure and task/cache negative controls')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-allocator.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -97,6 +121,7 @@ def run(fixture=False,placement=False):
                     (p/'cpuset.mems').write_text(str(nodes(case)[i]))
                 placement_before=[dict(cpu=(p/'cpuset.cpus.effective').read_text().strip(),
                     mems=(p/'cpuset.mems.effective').read_text().strip()) for p in roots]
+            fault_before=fault_snapshot() if failure else None
             sid=None; source_before=snapshot()
             if collecting:
                 sid=request('start',collector='allocator',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
@@ -109,6 +134,7 @@ def run(fixture=False,placement=False):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle)
                 command = ['/allocator_fixture_workload',case,str(start),str(int(case=='private' and i==1)),str(i)] if fixture else ['/allocator_workload',str(start)]
                 if placement: command=['/allocator_placement_workload',str(start),str(nodes(case)[i])]
+                if failure: command=['/allocator_failure_workload',case,str(start),str(i)]
                 child=subprocess.Popen(['/session_launch',str(p),str(i),*command],stdout=handle,stderr=handle)
                 children.append(child); running.append(child)
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()
@@ -131,6 +157,11 @@ def run(fixture=False,placement=False):
                 evidence['placement_before']=placement_before
                 evidence['placement_after']=[dict(cpu=(p/'cpuset.cpus.effective').read_text().strip(),
                     mems=(p/'cpuset.mems.effective').read_text().strip()) for p in roots]
+            if failure:
+                evidence['fault_before']=fault_before
+                evidence['fault_after']=fault_snapshot()
+                if fault_before!=expected_fault or evidence['fault_after']!=expected_fault:
+                    raise ValueError('fault settings changed')
             (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2)); results.append(evidence)
             if result['status']!='PASS': raise ValueError(result)
         (out/'result.json').write_text(json.dumps(dict(status='PASS',source=source,plan=plan,states=results),indent=2))
@@ -145,6 +176,15 @@ def run(fixture=False,placement=False):
         try: daemon.wait(timeout=15)
         except subprocess.TimeoutExpired: daemon.kill(); daemon.wait()
         requests.close(); log.close()
+        if failure:
+            (fault_root/'probability').write_text('0')
+            for name,value in original['caches'].items(): Path('/sys/kernel/slab/'+name+'/failslab').write_text(value)
+            for name,value in original['settings'].items():
+                if name!='probability': (fault_root/name).write_text(value)
+            (fault_root/'probability').write_text(original['settings']['probability'])
+            restored=fault_snapshot()
+            (out/'failslab-restored.json').write_text(json.dumps(restored,indent=2))
+            if restored!=original: raise ValueError('failslab restore')
 
 
 if __name__=='__main__': run()
