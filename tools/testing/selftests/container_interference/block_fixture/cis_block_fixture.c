@@ -13,7 +13,7 @@
 
 static unsigned int test_mode;
 module_param(test_mode, uint, 0444);
-MODULE_PARM_DESC(test_mode, "1=requeue once, 2=two 2048-byte completions, 3=native plug bio merges");
+MODULE_PARM_DESC(test_mode, "1=requeue, 2=partial, 3=plug bio merges, 4=scheduler request merges");
 static bool disposable_vm;
 module_param(disposable_vm, bool, 0444);
 
@@ -66,7 +66,7 @@ static blk_status_t cis_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct cis_merge_truth *truth = NULL;
 	struct bio *bio;
 
-	if (test_mode == 3 && rq->bio && rq->bio->bi_end_io == cis_bio_done) {
+	if (test_mode >= 3 && rq->bio && rq->bio->bi_end_io == cis_bio_done) {
 		struct cis_merge_job *job = rq->bio->bi_private;
 		int index = atomic_inc_return(&job->issued) - 1;
 
@@ -86,7 +86,7 @@ static blk_status_t cis_queue_rq(struct blk_mq_hw_ctx *hctx,
 	blk_mq_start_request(rq);
 	if (!cmd->requeued)
 		atomic64_inc(&requests);
-	if ((test_mode == 3 ? (!blk_rq_bytes(rq) || blk_rq_bytes(rq) > CIS_MERGE_MAX * 4096) : blk_rq_bytes(rq) != 4096) ||
+	if ((test_mode >= 3 ? (!blk_rq_bytes(rq) || blk_rq_bytes(rq) > CIS_MERGE_MAX * 4096) : blk_rq_bytes(rq) != 4096) ||
 	    offset > CIS_BYTES - blk_rq_bytes(rq) ||
 	    (req_op(rq) != REQ_OP_READ && req_op(rq) != REQ_OP_WRITE)) {
 		atomic64_inc(&errors);
@@ -137,6 +137,14 @@ static int cis_init_request(struct blk_mq_tag_set *set, struct request *rq,
 static const struct blk_mq_ops cis_mq_ops = {
 	.queue_rq = cis_queue_rq, .init_request = cis_init_request,
 };
+static unsigned int cis_block_index(struct cis_merge_test *test, unsigned int i)
+{
+	static const unsigned int bridge[] = { 0, 2, 1 };
+
+	if (test->pattern == 3) return bridge[i];
+	return test->pattern == 1 ? i * 2 : test->pattern == 2 ? test->count - 1 - i : i;
+}
+
 static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 			   unsigned int command, unsigned long arg)
 {
@@ -148,7 +156,7 @@ static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 	unsigned int i, n, block;
 	int error = -ENOMEM;
 
-	if (test_mode != 3 || command != CIS_MERGE_RUN) return -ENOTTY;
+	if (test_mode < 3 || command != CIS_MERGE_RUN) return -ENOTTY;
 	if (!(mode & BLK_OPEN_WRITE)) return -EPERM;
 	job = kzalloc(sizeof(*job), GFP_KERNEL);
 	if (!job) return -ENOMEM;
@@ -156,8 +164,9 @@ static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 		error = -EFAULT; goto out;
 	}
 	n = job->output.count;
-	if (job->output.role > 1 || (n != 2 && n != 9) ||
-	    job->output.pattern > 2 || job->output.reserved) {
+	if (job->output.role > 1 || job->output.reserved ||
+	    (test_mode == 3 && ((n != 2 && n != 9) || job->output.pattern > 2)) ||
+	    (test_mode == 4 && !((n == 3 && job->output.pattern == 3) || (n == 2 && job->output.pattern == 1)))) {
 		error = -EINVAL; goto out;
 	}
 	memset(&job->output.requests, 0, sizeof(job->output) - offsetof(struct cis_merge_test, requests));
@@ -169,7 +178,7 @@ static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 		bios[i] = bio_alloc(bdev, 1, REQ_OP_WRITE, GFP_KERNEL);
 		if (!bios[i]) goto out;
 		if (bio_add_page(bios[i], pages[i], 4096, 0) != 4096) goto out;
-		block = job->output.pattern == 1 ? i * 2 : job->output.pattern == 2 ? n - 1 - i : i;
+		block = cis_block_index(&job->output, i);
 		bios[i]->bi_iter.bi_sector = (1 + job->output.role * 32 + block) * 8;
 		bios[i]->bi_private = job; bios[i]->bi_end_io = cis_bio_done;
 	}
@@ -183,7 +192,7 @@ static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 	job->output.errors = atomic_read(&job->errors);
 	job->output.verified = 1;
 	for (i = 0; i < n; i++) {
-		block = job->output.pattern == 1 ? i * 2 : job->output.pattern == 2 ? n - 1 - i : i;
+		block = cis_block_index(&job->output, i);
 		if (memcmp(disk->data + (1 + job->output.role * 32 + block) * 4096,
 			   page_address(pages[i]), 4096)) job->output.verified = 0;
 	}
@@ -211,7 +220,7 @@ static int cis_add_disk(struct cis_disk *d, unsigned int index)
 	d->tags.queue_depth = 16;
 	d->tags.numa_node = NUMA_NO_NODE;
 	d->tags.cmd_size = sizeof(struct cis_cmd);
-	d->tags.flags = BLK_MQ_F_BLOCKING | (test_mode == 3 ? BLK_MQ_F_SHOULD_MERGE : 0);
+	d->tags.flags = BLK_MQ_F_BLOCKING | (test_mode >= 3 ? BLK_MQ_F_SHOULD_MERGE : 0);
 	d->tags.driver_data = d;
 	error = blk_mq_alloc_tag_set(&d->tags);
 	if (error)
@@ -230,9 +239,9 @@ static int cis_add_disk(struct cis_disk *d, unsigned int index)
 	d->disk->private_data = d;
 	snprintf(d->disk->disk_name, DISK_NAME_LEN, "cisblock%u", index);
 	blk_queue_logical_block_size(d->disk->queue, 512);
-	blk_queue_max_hw_sectors(d->disk->queue, test_mode == 3 ? 128 : 8);
+	blk_queue_max_hw_sectors(d->disk->queue, test_mode >= 3 ? 128 : 8);
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, d->disk->queue);
-	if (test_mode != 3) blk_queue_flag_set(QUEUE_FLAG_NOMERGES, d->disk->queue);
+	if (test_mode < 3) blk_queue_flag_set(QUEUE_FLAG_NOMERGES, d->disk->queue);
 	set_capacity(d->disk, CIS_BYTES >> SECTOR_SHIFT);
 	error = add_disk(d->disk);
 	if (!error)
@@ -259,7 +268,7 @@ static int __init cis_init(void)
 {
 	int error;
 
-	if (!disposable_vm || (test_mode < 1 || test_mode > 3))
+	if (!disposable_vm || (test_mode < 1 || test_mode > 4))
 		return -EINVAL;
 	major = register_blkdev(0, "cisblock");
 	if (major < 0)

@@ -19,6 +19,8 @@ import block_merge_check
 
 def run(fixture=None):
     if fixture is not None and fixture not in FIXTURES: raise ValueError('fixture mode')
+    merging=fixture in ('merge','merge-scheduler'); scheduler=fixture=='merge-scheduler'
+    merge_cases=block_merge_check.SCHEDULER_CASES if scheduler else block_merge_check.CASES
     os.umask(0o077); os.sched_setaffinity(0,{7})
     if not Path('/cis-disposable-vm').exists(): raise PermissionError('disposable VM only')
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
@@ -40,9 +42,14 @@ def run(fixture=None):
             scope='disposable memory device request lifecycle; not production device contention')
         selected=int(Path('/sys/module/cis_block_fixture/parameters/test_mode').read_text())
         if selected!=FIXTURES.index(fixture)+1: raise ValueError('fixture module configuration')
-    if fixture=='merge':
-        plan.update(order=block_merge_check.case_order(),direct=False,operations_per_actor=None,
-                    mechanism='native submit_bio with plug; independent driver request truth',cases=block_merge_check.CASES)
+    if merging:
+        plan.update(order=block_merge_check.case_order(scheduler),direct=False,operations_per_actor=None,
+                    mechanism='native submit_bio with plug; independent driver request truth',cases=merge_cases)
+    if scheduler:
+        for name in ('cisblock0','cisblock1'):
+            path=Path('/sys/block')/name/'queue/scheduler'; path.write_text('mq-deadline')
+            if '[mq-deadline]' not in path.read_text(): raise ValueError('test device scheduler')
+        plan['scheduler']='mq-deadline'
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     fds=[]
     for path in plan['devices']:
@@ -87,7 +94,7 @@ def run(fixture=None):
         targets=[request('register',path=str(p))['target'] for p in roots]
         for label in plan['order']:
             case=label.split('-')[0]; collecting='-block' in label; sid=None
-            selected=[fds[0],fds[0] if case=='shared' or fixture=='merge' else fds[1]]
+            selected=[fds[0],fds[0] if case=='shared' or merging else fds[1]]
             if collecting:
                 sid=request('start',collector='block',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
                 window=wait(sid,'window')['window']; active=observe('block')
@@ -98,9 +105,9 @@ def run(fixture=None):
             for i,p in enumerate(roots):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle); fd=selected[i]
                 command=['/session_launch',str(p),str(i),'/block_workload',str(fd),str(i),str(start)]
-                if fixture=='merge':
+                if merging:
                     command[3]='/block_merge_workload'
-                    command += [str(v) for v in block_merge_check.CASES[case]]
+                    command += [str(v) for v in merge_cases[case]]
                 child=subprocess.Popen(command,
                     stdout=handle,stderr=handle,pass_fds=(fd,))
                 children.append(child); running.append(child)
@@ -115,9 +122,9 @@ def run(fixture=None):
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            result=(block_merge_check.check_case(case,window,logs,report,identities) if fixture=='merge' else
+            result=(block_merge_check.check_case(case,window,logs,report,identities) if merging else
                     check_case(case,window,logs,report,identities,verify_blkcg=True,fixture=fixture))
-            if fixture=='merge':
+            if merging:
                 result['fixture_counters']=block_merge_check.check_counters(before['fixture_counters'],after['fixture_counters'],result)
                 if result['fixture_counters']['status']!='PASS': result['status']='FAIL'
             elif fixture:

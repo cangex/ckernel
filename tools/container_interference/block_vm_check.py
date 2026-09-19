@@ -18,17 +18,20 @@ def verify(serial,output):
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     fixture=plan.get('fixture')
+    merging=fixture in ('merge','merge-scheduler'); scheduler=fixture=='merge-scheduler'
     if fixture is not None and fixture not in FIXTURES: raise ValueError('fixture mode')
     output.mkdir(mode=0o700); errors=[]; states=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_BLOCK_DEVICE_UNLOAD=0' not in text.splitlines(): errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
-    order=block_merge_check.case_order() if fixture=='merge' else case_order()
+    order=block_merge_check.case_order(scheduler) if merging else case_order()
     if (plan.get('order')!=order or plan.get('rounds')!=3 or
-            plan.get('operations_per_actor')!=(None if fixture=='merge' else 8) or
-            plan.get('device_bytes')!=16<<20 or plan.get('direct') is not (fixture!='merge') or plan.get('bytes_per_io')!=4096 or
+            plan.get('operations_per_actor')!=(None if merging else 8) or
+            plan.get('device_bytes')!=16<<20 or plan.get('direct') is not (not merging) or plan.get('bytes_per_io')!=4096 or
             plan.get('verify_head_bio_blkcg') is not True): errors.append('frozen_plan')
-    if fixture=='merge' and plan.get('cases')!={k:list(v) for k,v in block_merge_check.CASES.items()}:
+    cases=block_merge_check.SCHEDULER_CASES if scheduler else block_merge_check.CASES
+    if merging and plan.get('cases')!={k:list(v) for k,v in cases.items()}:
         errors.append('merge_cases')
+    if scheduler and plan.get('scheduler')!='mq-deadline': errors.append('scheduler_plan')
     if plan.get('devices')!=(['/dev/cisblock0','/dev/cisblock1'] if fixture else ['/dev/vda','/dev/vdb']):
         errors.append('device_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
@@ -52,10 +55,10 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        result=(block_merge_check.check_case(label.split('-')[0],ev['window'],logs,report,identities) if fixture=='merge' else
+        result=(block_merge_check.check_case(label.split('-')[0],ev['window'],logs,report,identities) if merging else
                 check_case(label.split('-')[0],ev['window'],logs,report,identities,
                     verify_blkcg=plan.get('verify_head_bio_blkcg',False),fixture=fixture))
-        if fixture=='merge':
+        if merging:
             result['fixture_counters']=block_merge_check.check_counters(ev['before']['fixture_counters'],ev['after']['fixture_counters'],result)
             if result['fixture_counters']['status']!='PASS': errors.append('fixture_counters_'+label)
         elif fixture:

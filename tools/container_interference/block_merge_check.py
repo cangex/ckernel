@@ -3,15 +3,16 @@
 import re
 
 CASES = {'back': (2, 0), 'front': (2, 2), 'gap': (2, 1), 'cap': (9, 0)}
+SCHEDULER_CASES = {'bridge': (3, 3), 'gap': (2, 1)}
 
 
-def case_order():
-    return [f'{case}-{mode}-r{round_}' for round_ in range(1,4) for case in CASES
+def case_order(scheduler=False):
+    return [f'{case}-{mode}-r{round_}' for round_ in range(1,4) for case in (SCHEDULER_CASES if scheduler else CASES)
             for mode in (('off','block') if round_%2 else ('block','off'))]
 
 
 def check_case(case, window, logs, report=None, identities=None):
-    errors=[]; used=set(); total=0; count,pattern=CASES[case]; expected_requests=count if case=='gap' else 1
+    errors=[]; used=set(); total=0; count,pattern={**CASES,**SCHEDULER_CASES}[case]; expected_requests=count if case=='gap' else 1
     for role,text in enumerate(logs):
         pids=re.findall(r'CIS_SESSION_CONTAINER host_pid=(\d+)',text)
         jobs=re.findall(r'CIS_MERGE_JOB role=(\d+) count=(\d+) pattern=(\d+) begin_ns=(\d+) end_ns=(\d+) rc=(-?\d+) requests=(\d+) completed=(\d+) errors=(\d+) verified=(\d+)',text)
@@ -40,17 +41,35 @@ def check_case(case, window, logs, report=None, identities=None):
                 errors.append('request_lifetime')
             p=report['provenance']; snaps=[s for s in p['issue_sources'] if (s['request'],s['episode_ns'])==key]
             links=[l for l in p['merge_transfers'] if l['survivor']==list(key)]
+            if case=='bridge':
+                family={key}
+                for unused in range(3):
+                    for link in p['merge_transfers']:
+                        if tuple(link['survivor']) in family and link['victim']:
+                            family.add(tuple(link['victim']))
+                links=[l for l in p['merge_transfers'] if tuple(l['survivor']) in family]
+                victims=[v for v in report['requests'] if (v['request'],v['episode_ns']) in family-{key}]
+                if (len(family)!=2 or len(victims)!=1 or victims[0]['terminal']!='merge_transfer' or
+                        victims[0]['submitter'][:3]!=owner+[(pid<<32)|pid] or
+                        not lo<=victims[0]['episode_ns']<begin or
+                        victims[0].get('merge_survivor')!=list(key)):
+                    errors.append('scheduler_victim_truth')
+                used.update(family)
             expected_unknown=max(0,bios-8)*4096
             if (len(snaps)!=1 or snaps[0]['remaining_bytes']!=size or snaps[0]['unknown_bytes']!=expected_unknown or
                     snaps[0]['observed_bios']!=min(bios,8) or snaps[0]['truncated']!=(bios>8) or
                     snaps[0]['sources']!=[dict(container=owner,bytes=size-expected_unknown,fraction=(size-expected_unknown)/size)]):
                 errors.append('bio_weights')
-            if (len(links)!=bios-1 or any(l['state']!='BIO_APPEND' or l['kind']!=(3 if case=='front' else 2)
+            if case=='bridge':
+                if (len(links)!=2 or len([l for l in links if l['kind']==1 and l['state']=='OBSERVED_TRANSFER'])!=1 or
+                        len([l for l in links if l['kind'] in (2,3) and l['state']=='BIO_APPEND' and l['transferred_bytes']==4096])!=1):
+                    errors.append('scheduler_native_links')
+            elif (len(links)!=bios-1 or any(l['state']!='BIO_APPEND' or l['kind']!=(3 if case=='front' else 2)
                                          or l['transferred_bytes']!=4096 for l in links)):
                 errors.append('native_merge_links')
     if report is not None:
         if report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS': errors.append('quality')
-        if len(used)!=len(report['requests']) or len(used)!=total: errors.append('population')
+        if len(used)!=len(report['requests']) or len(used)!=total*(2 if case=='bridge' else 1): errors.append('population')
         if any(r['blocking_container'] is not None for r in report['requests']): errors.append('false_blocker')
     return dict(status='FAIL' if errors else 'PASS',errors=sorted(set(errors)),driver_requests=total,
                 bytes=2*count*4096,scope='native bio merge and dispatch, not cross-container causal blocking')
