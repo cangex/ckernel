@@ -59,5 +59,15 @@ class SlubSource(unittest.TestCase):
         self.assertIn('volatile __u64 raw_flags=ctx->args[4]',bpf)
         self.assertIn('e.base.ip=raw_flags',bpf)
 
+    def test_irq_guard_is_callback_only_with_explicit_debug_cost(self):
+        source=(ROOT/'kernel/locking/cis_observe.c').read_text()
+        begin=source.index('void __cis_slub_event(')
+        body=source[begin:source.index('EXPORT_SYMBOL_GPL(__cis_slub_event)',begin)]
+        self.assertLess(body.index('local_irq_save(irq_flags)'),body.index('__cis_lock_event('))
+        self.assertLess(body.index('__cis_lock_event('),body.index('local_irq_restore(irq_flags)'))
+        self.assertLess(body.index('phase = CIS_ESCAPE'),body.index('local_irq_save(irq_flags)'))
+        self.assertIn('slub_irqoff_max_ns',body)
+        self.assertNotIn('spin_lock',body)
+
 
 if __name__ == '__main__': unittest.main()

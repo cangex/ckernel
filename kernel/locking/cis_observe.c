@@ -120,6 +120,7 @@ struct cis_recursion_sample {
 };
 struct cis_recursion_diag {
 	unsigned long sync_skipped, irq_skipped;
+	u64 slub_irqoff_calls, slub_irqoff_ns, slub_irqoff_max_ns;
 	unsigned long by_phase[CIS_RESOURCE_END][CIS_DIAG_PHASES];
 	void *outer_object;
 	unsigned int outer_kind, outer_phase;
@@ -175,6 +176,9 @@ static int cis_diag_show(struct seq_file *m, void *unused)
 		seq_printf(m, "cpu=%d skipped=%lu sync=%lu irq=%lu filtered=%lu\n", cpu,
 			   per_cpu(cis_skipped, cpu), READ_ONCE(d->sync_skipped), READ_ONCE(d->irq_skipped),
 			   per_cpu(cis_gate_filtered, cpu));
+		seq_printf(m, "slub_irqoff cpu=%d calls=%llu body_ns=%llu max_body_ns=%llu debug_only=1\n",
+			   cpu, READ_ONCE(d->slub_irqoff_calls), READ_ONCE(d->slub_irqoff_ns),
+			   READ_ONCE(d->slub_irqoff_max_ns));
 		for (kind = 0; kind < CIS_RESOURCE_END; kind++)
 			for (phase = 0; phase < CIS_DIAG_PHASES; phase++)
 				if (READ_ONCE(d->by_phase[kind][phase]))
@@ -406,6 +410,9 @@ MODULE_PARM_DESC(alloc_cache, "Exact SLUB cache name admitted for short allocati
 void __cis_slub_event(const char *name, void *cache, void *object,
 		unsigned int phase)
 {
+	unsigned long irq_flags;
+	u64 begin = 0;
+
 	if (!name || strcmp(name, alloc_cache))
 		return;
 	/* An observed interrupt boundary is not lost data. Invalidate the
@@ -419,7 +426,24 @@ void __cis_slub_event(const char *name, void *cache, void *object,
 	}
 	if (in_hardirq() || in_serving_softirq())
 		phase = CIS_ESCAPE;
+	/* Protect only this callback, never the native lock attempt or hold.
+	 * Otherwise IRQ-exit softirq can reenter the same raw trace program.
+	 * This adds IRQ-off work; debug accounting is not a latency bound. */
+	preempt_disable_notrace();
+	local_irq_save(irq_flags);
+	if (diag)
+		begin = ktime_get_ns();
 	__cis_lock_event(object, CIS_SLUBLOCK, phase, NULL, (unsigned long)cache);
+	if (diag) {
+		struct cis_recursion_diag *d = this_cpu_ptr(&cis_recursion_diag);
+		u64 elapsed = ktime_get_ns() - begin;
+
+		d->slub_irqoff_calls++;
+		d->slub_irqoff_ns += elapsed;
+		d->slub_irqoff_max_ns = max(d->slub_irqoff_max_ns, elapsed);
+	}
+	local_irq_restore(irq_flags);
+	preempt_enable_notrace();
 }
 EXPORT_SYMBOL_GPL(__cis_slub_event);
 static unsigned int alloc_shift = 6;
