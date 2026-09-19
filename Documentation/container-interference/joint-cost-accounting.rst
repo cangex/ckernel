@@ -33,3 +33,37 @@ These additions improve background and memory visibility but do not certify
 complete source-callback CPU, asynchronous memory ownership, production tails
 or an all-inclusive observer cost. OFF comparisons are descriptive and retain
 business throughput, arrival-relative latency, timeouts and unknown causes.
+
+Scoped runtime, kernel 6864117ae / tools 619897476
+------------------------------------------------
+
+Image SHA256 is
+``fbe205ea89fa9b80ed96f424fdf87f2edafb503f217d88b95c21196318ee0501``.
+Independent raw replays passed:
+
+* Common group: ``x7-joint-20260919-223842.log``, SHA256
+  ``5f0cce68e10956df850ad24acc7fc352f1758fef66cb0fda8215d36c8b065adc``.
+  33 states / 30 captures, 198,000 completed operations, no errors/timeouts.
+  Maximum process CAPTURING CPU 31.81849ms; combined RSS 38,420,480 bytes.
+* SLUB group: ``x7-joint-20260919-224707.log``, SHA256
+  ``d0288ac5781509e213360a85402396229da6ab6527d4d4e220248db555e17542``.
+  6 states / 3 captures, 36,000 completed operations, no errors/timeouts.
+  Maximum process CAPTURING CPU 11.55319ms; combined RSS 33,464,320 bytes.
+
+Both retained the unmodified 40ms capture gate and P99 record-only policy.
+No kthread scan hit the cap or lost a stat read. The common group saw 14
+new/gone thread keys across bookends, not fabricated zero CPU for those
+threads. Surviving thread CPU deltas ranged from 0 to 4 ticks (100Hz); these
+are VM-wide kernel-thread activity, not exclusive observer cost. Management
+cgroup usage ranged from 11.413 to 1,014.389ms per enclosing benchmark; it
+includes preparation, harness and post-capture analysis, so the capture CPU
+number is not a claim that total work cost only 31.82ms.
+
+The longest sequential snapshot took 53.82783ms wall time in the common group
+and 42.92568ms in the SLUB group. This bookend measurement cost is outside the
+capture, retained visibly, and is not called application lock wait or folded
+into the 40ms capture limit. Memory gauges increased and decreased; no total
+observer memory was inferred. These cohorts still provide no independent
+ordinary-application attribution recall and do not complete X7's remaining
+mixed-source truth, tag/merge/writeback, skb transformation or Maple ownership
+requirements.
