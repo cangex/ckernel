@@ -41,8 +41,11 @@ def check(record,raw,logs,evidence):
         reason='OFF'
     else:
         report=analyze(record,raw); receipt=record.get('receipt',{}); reason=receipt.get('reason')
+        controller_stop=reason=='CANCELLED' and record.get('budget_reason')=='COMBINED_PROCESS_CPU_CAPTURING'
+        if controller_stop: reason=record['budget_reason']
         validate(active,'net',record['requested_ns'],record['window']['end_ns'])
-        if (record.get('collector')!='net' or record.get('result')!='PARTIAL' or receipt.get('result')!='PARTIAL' or
+        if (record.get('collector')!='net' or record.get('result')!='PARTIAL' or
+                receipt.get('result')!=('CANCELLED' if controller_stop else 'PARTIAL') or
                 not record.get('finalized') or record.get('state')!='IDLE' or record.get('objects_absent') is not True):
             errors.append('capture_or_cleanup')
         events=[json.loads(line) for line in raw.splitlines()]
@@ -55,6 +58,13 @@ def check(record,raw,logs,evidence):
                 errors.append('entry_stop_without_rate_proof')
         elif reason=='WORKER_CPU_LIMIT':
             if receipt.get('armed_capture_cpu_ns',0)<=20000000: errors.append('cpu_stop_without_cost')
+        elif reason=='COMBINED_PROCESS_CPU_CAPTURING':
+            budget=record.get('process_cpu_budget',{}); first=budget.get('first_violation',{})
+            if (budget.get('violation')!=reason or first.get('reason')!=reason or first.get('phase')!='CAPTURING' or
+                    budget.get('phase_limits_ns',{}).get('CAPTURING')!=40000000 or
+                    first.get('phase_limit_ns')!=40000000 or first.get('phase_cpu_ns',0)<=40000000 or
+                    budget.get('phase_peak_cpu_ns',{}).get('CAPTURING',0)<first.get('phase_cpu_ns',0)):
+                errors.append('combined_cpu_stop_without_fixed_limit_proof')
         elif reason=='QUALITY':
             if counters.get('lost',0)<=0: errors.append('quality_stop_without_ring_loss')
         elif reason=='DATA_LIMIT':
@@ -65,7 +75,7 @@ def check(record,raw,logs,evidence):
             errors.append('incomplete_capture_admitted_relations')
         if source['totals']['selected']<1000: errors.append('no_native_event_pressure')
     return dict(status='FAIL' if errors else 'PASS',errors=errors,reason=reason,rates=rate,
-                counters=counters,post_detach_operations=progress,source_audit=source,
+        counters=counters,post_detach_operations=progress,source_audit=source,
                 scope='dense private Socket protection and business continuation, not attribution or performance acceptance')
 
 

@@ -12,6 +12,10 @@ window must be rejected with independently checked entry-rate, worker-CPU,
 output-capacity or actual ring-loss evidence. A completed-looking dense
 capture cannot pass this protection test. Safe stop is not dense profiling
 acceptance, and any rejected window must produce no Socket or TX relations.
+Controller-requested cancellation is accepted only as protection when its
+recorded first combined-CAPTURING violation exceeds the unchanged 40ms limit,
+with matching phase, limit, peak and reason. A user cancellation alone is
+not an overload proof, and such a rejected sample does not pass CPU acceptance.
 
 After source switches and program removal have been verified, the same
 business processes must continue making successful operations. Native source

@@ -55,6 +55,20 @@ class NetGuard(unittest.TestCase):
         args=self.fixture(); args[3]['idle_sources']['observed']['net']='1'
         with self.assertRaises(ValueError): check(*args)
 
+    def test_controller_cancel_requires_independent_cpu_violation(self):
+        args=self.fixture(); r=args[0]
+        r['receipt'].update(result='CANCELLED',reason='CANCELLED')
+        r['budget_reason']='COMBINED_PROCESS_CPU_CAPTURING'
+        self.assertIn('combined_cpu_stop_without_fixed_limit_proof',check(*args)['errors'])
+        r['process_cpu_budget']=dict(violation=r['budget_reason'],
+            phase_limits_ns=dict(CAPTURING=40000000),phase_peak_cpu_ns=dict(CAPTURING=42000000),
+            first_violation=dict(reason=r['budget_reason'],phase='CAPTURING',phase_limit_ns=40000000,phase_cpu_ns=41000000))
+        self.assertEqual(check(*args)['status'],'PASS')
+        r['process_cpu_budget']['first_violation']['phase_cpu_ns']=39000000
+        self.assertIn('combined_cpu_stop_without_fixed_limit_proof',check(*args)['errors'])
+        r.pop('budget_reason')
+        self.assertIn('unexpected_stop_reason',check(*args)['errors'])
+
     def test_private_object_identity_must_not_be_shared(self):
         args=self.fixture(); args[2][1]=args[2][1].replace('"cookie": 2','"cookie": 1')
         self.assertIn('private_socket_identity',check(*args)['errors'])

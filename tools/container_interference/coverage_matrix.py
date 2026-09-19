@@ -58,7 +58,7 @@ CONTRACT={
         discovered='原生fclone申请、内存准入与原始skb头部释放入口',
         object='Socket cookie、请求任务代次与分配边界；原始头部地址不代表共享数据页',
         participants='申请容器与释放执行者分开；不是分配器锁持有关系或报文内容所有权',
-        pending=['接收与clone/GSO/GRO来源变换不在此闭环','后端经过时间不是独占CPU','完整释放后端和原生失败路径运行验证']),
+        pending=['接收与clone/GSO/GRO来源变换不在此闭环','后端经过时间不是独占CPU','完整释放后端未知；原生分配失败与内存准入拒绝由独立专项核验']),
     'net_tx_failure': dict(name='TCP发送分配失败与恢复',collector='net',
         discovered='任务与cache限定的原生failslab失败、系统调用返回及同Socket恢复',
         object='私有Socket cookie、请求任务代次与实际send调用边界',
@@ -183,7 +183,7 @@ def replay(index,base,output):
             if key=='net_guard':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
                 if (len(selected)!=3 or any(not v['label'].startswith('storm-') or
-                        v.get('result',{}).get('reason') not in ('ENTRY_RATE_LIMIT','WORKER_CPU_LIMIT','DATA_LIMIT','QUALITY') or
+                        v.get('result',{}).get('reason') not in ('ENTRY_RATE_LIMIT','WORKER_CPU_LIMIT','COMBINED_PROCESS_CPU_CAPTURING','DATA_LIMIT','QUALITY') or
                         len(v['result'].get('post_detach_operations',[]))!=2 or
                         min(v['result']['post_detach_operations'])<=0 for v in selected)):
                     raise ValueError('rejected dense capture and continued business required')
