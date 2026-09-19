@@ -78,6 +78,11 @@ CONTRACT={
     'routing': dict(name='有界专项调度',collector='controller',discovered='真实巡检候选到单槽专项',
         object='配置epoch、目标代次及候选来源会话',participants='按目标轮转，候选不是因果认定',
         pending=['四容器混合来源联合验收']),
+    'mixed': dict(name='网络与块I/O混合来源独立真值',collector='joint',
+        discovered='四容器普通文件/VMA覆盖同窗网络锁和直接I/O，OFF/IP/NET/BLOCK轮换',
+        object='Socket cookie、请求episode和独立工作负载时间括号',
+        participants='网络持有者/等待者与I/O提交/计费身份分开；私有反例及角色轮换',
+        pending=['受控TCP逻辑锁和虚拟块设备不代表生产发生率','单采集器窗口不代表多采集器并发','完整异步后台和内核内存成本']),
     'joint': dict(name='四容器普通应用联合成本',collector='joint',
         discovered='OFF/IP/专项的固定轮次、角色切换与等到达率响应',object='逐容器操作窗口、实际采集对象与源码绑定',
         participants='无完整应用真值时不伪造召回；安静专项不算正例',
@@ -105,7 +110,7 @@ VERIFIERS={
     'routing':('diagnosis_vm_check','routing',{}),
     'control':('x0_check','control',{}), 'rwsem':('rwsem_vm_check','rwsem',{}),
     'rwsem_joint':('rwsem_vm_check','rwsem_joint',dict(joint=True)),
-    'joint':('joint_vm_check','joint',{})}
+    'joint':('joint_vm_check','joint',{}), 'mixed':('mixed_vm_check','mixed',{})}
 
 
 def validate_index(index):
