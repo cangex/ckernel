@@ -268,14 +268,22 @@ static int attach(struct capture *c,const char *name,struct bpf_link **slot)
 
 static int configure_links(struct capture *c,unsigned int kinds)
 {
-	static const char *names[]={"sched_wait","lock_begin","lock_end","reclaim_begin","reclaim_end","work_queue","work_start","work_end","work_cancel_begin","work_cancel_end","memcg_begin","memcg_end","owner_state","owner_switch","counter_step","alloc_step","alloc_release","net_state","net_release","block_start","block_insert","block_issue","block_requeue","block_complete","block_merge","block_remap","rwsem_state"};
-	static const unsigned int masks[]={1,2,2,4,4,8,8,8,8,8,4,4,16,16,32,64,64,128,128,256,256,256,256,256,256,256};
-	_Static_assert(sizeof(names)/sizeof(names[0]) == CIS_DIAGNOSTIC_LINKS, "link names");
-	_Static_assert(sizeof(masks)/sizeof(masks[0]) == CIS_DIAGNOSTIC_LINKS, "link masks");
+	static const struct { const char *name; unsigned int mask; } links[]={
+		{"sched_wait",1},{"lock_begin",2},{"lock_end",2},
+		{"reclaim_begin",4},{"reclaim_end",4},
+		{"work_queue",8},{"work_start",8},{"work_end",8},
+		{"work_cancel_begin",8},{"work_cancel_end",8},
+		{"memcg_begin",4},{"memcg_end",4},
+		{"owner_state",16},{"owner_switch",16},{"counter_step",32},
+		{"alloc_step",64},{"alloc_release",64},{"net_state",128},{"net_release",128},
+		{"block_start",256},{"block_insert",256},{"block_issue",256},
+		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
+		{"rwsem_state",512}};
+	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
-		if(!(kinds&masks[i])) { bpf_link__destroy(c->diagnostic_links[i]); c->diagnostic_links[i]=NULL; }
-		else if(!c->diagnostic_links[i] && attach(c,names[i],&c->diagnostic_links[i])) return -EIO;
+		if(!(kinds&links[i].mask)) { bpf_link__destroy(c->diagnostic_links[i]); c->diagnostic_links[i]=NULL; }
+		else if(!c->diagnostic_links[i] && attach(c,links[i].name,&c->diagnostic_links[i])) return -EIO;
 	}
 	if(c->active_kinds!=kinds) {
 		char detail[256];
