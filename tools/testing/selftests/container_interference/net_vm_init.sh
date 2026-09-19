@@ -19,6 +19,7 @@ if ! (insmod /cis_net_fixture.ko && /bin/busybox ifconfig lo up &&
 fi
 case " $(cat /proc/cmdline) " in
     *" cis_net_test=backlog "*) /usr/bin/python3 /profile/net_vm.py --backlog ;;
+    *" cis_net_test=rights "*) /usr/bin/python3 /profile/net_vm.py --rights ;;
     *) /usr/bin/python3 /profile/net_vm.py ;;
 esac
 status=$?

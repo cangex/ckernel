@@ -144,6 +144,7 @@ def analyze(record,raw):
                 wait['stack_capture_error']=stack_id if stack_id<0 else None
                 wait['stack_status']='AVAILABLE' if wait['stack_leaf_to_root'] else 'UNAVAILABLE'
             sockets.append(dict(cookie=cookie,socket_address=rows[0]['socket'],netns=rows[0]['netns'],
+                creation_owner='UNOBSERVED',
                 lifetime='native_socket_cookie',waits=waits if not owner_bad else [],
                 backlog=backlog if not queue_bad else [],owner_unknown=owner_unknown,queue_unknown=queue_unknown,
                 observed_actors=[list(a) for a in sorted({actor(r) for r in rows if all(actor(r))})]))

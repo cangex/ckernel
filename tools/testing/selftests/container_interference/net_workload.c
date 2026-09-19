@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 #include "net_fixture/uapi.h"
@@ -20,17 +21,67 @@ static int until(uint64_t ns)
 	return error;
 }
 
+static int socket_cookie(int fd, uint64_t *cookie)
+{
+	socklen_t length=sizeof(*cookie);
+	return getsockopt(fd,SOL_SOCKET,SO_COOKIE,cookie,&length) || length!=sizeof(*cookie) || !*cookie;
+}
+
+/* A real SCM_RIGHTS transfer, between the already isolated fixture actors. */
+static int transfer_socket(int channel, unsigned int actor, int private_socket)
+{
+	union { char bytes[CMSG_SPACE(sizeof(int))]; struct cmsghdr aligned; } control={0};
+	char byte='S';
+	struct iovec iov={.iov_base=&byte,.iov_len=1};
+	struct msghdr msg={.msg_iov=&iov,.msg_iovlen=1,.msg_control=control.bytes,.msg_controllen=sizeof(control)};
+	struct cmsghdr *cmsg;
+	struct timeval timeout={.tv_sec=2};
+	uint64_t sent=0,received=0,used=0,ack=0;
+	int fd=-1;
+	if(setsockopt(channel,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout)) ||
+	   setsockopt(channel,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout))) return -1;
+	if(!actor) {
+		fd=socket(AF_INET,SOCK_STREAM|SOCK_CLOEXEC,0);
+		if(fd<0 || socket_cookie(fd,&sent)) goto fail;
+		cmsg=CMSG_FIRSTHDR(&msg); cmsg->cmsg_level=SOL_SOCKET; cmsg->cmsg_type=SCM_RIGHTS;
+		cmsg->cmsg_len=CMSG_LEN(sizeof(fd)); memcpy(CMSG_DATA(cmsg),&fd,sizeof(fd));
+		if(sendmsg(channel,&msg,MSG_NOSIGNAL)!=1 || recv(channel,&ack,sizeof(ack),0)!=(ssize_t)sizeof(ack) || ack!=sent) goto fail;
+	} else {
+		if(recvmsg(channel,&msg,MSG_CMSG_CLOEXEC)!=1) goto fail;
+		cmsg=CMSG_FIRSTHDR(&msg);
+		if(!cmsg || cmsg->cmsg_level!=SOL_SOCKET || cmsg->cmsg_type!=SCM_RIGHTS || cmsg->cmsg_len!=CMSG_LEN(sizeof(fd))) goto fail;
+		memcpy(&fd,CMSG_DATA(cmsg),sizeof(fd));
+		if(msg.msg_flags&(MSG_CTRUNC|MSG_TRUNC) || CMSG_NXTHDR(&msg,cmsg) || byte!='S' || socket_cookie(fd,&received)) goto fail;
+		if(send(channel,&received,sizeof(received),MSG_NOSIGNAL)!=(ssize_t)sizeof(received)) goto fail;
+		if(private_socket) {
+			close(fd); fd=socket(AF_INET,SOCK_STREAM|SOCK_CLOEXEC,0);
+			if(fd<0) goto fail;
+		}
+	}
+	if(socket_cookie(fd,&used)) goto fail;
+	printf("CIS_NET_RIGHTS actor=%u sent_cookie=%llu received_cookie=%llu used_cookie=%llu private=%d\n",
+		actor,(unsigned long long)sent,(unsigned long long)received,(unsigned long long)used,private_socket);
+	fflush(stdout); close(channel); return fd;
+fail:
+	if(fd>=0) close(fd);
+	return -1;
+}
+
 int main(int argc, char **argv)
 {
 	struct cis_net_test_request r = {0};
 	uint64_t start, cookie = 0;
 	socklen_t length = sizeof(cookie);
-	unsigned int i, actor, swap;
+	unsigned int i, actor, swap, rights, private_socket;
 	int device, fd;
 	if (argc != 5) return 2;
 	fd = atoi(argv[1]); actor = strtoul(argv[2], NULL, 10);
-	start = strtoull(argv[3], NULL, 10); swap = !strcmp(argv[4], "switch");
+	start = strtoull(argv[3], NULL, 10);
+	rights=!strcmp(argv[4],"rightsShared") || !strcmp(argv[4],"rightsPrivate");
+	private_socket=!strcmp(argv[4],"rightsPrivate");
+	swap = !strcmp(argv[4], "switch") || rights;
 	if (fd < 0 || actor > 1 || (strcmp(argv[4], "shared") && strcmp(argv[4], "private") && !swap)) return 2;
+	if(rights) { fd=transfer_socket(fd,actor,private_socket); if(fd<0) { perror("SCM_RIGHTS"); return 8; } }
 	if (getsockopt(fd, SOL_SOCKET, SO_COOKIE, &cookie, &length) || length != sizeof(cookie) || !cookie) return 3;
 	device = open("/dev/cis-net-test", O_RDWR | O_CLOEXEC);
 	if (device < 0) return 4;

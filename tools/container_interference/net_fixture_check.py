@@ -3,6 +3,7 @@
 from owner_report import fields
 
 CASES=('shared','private','switch')
+RIGHTS_CASES=('rightsShared','rightsPrivate')
 
 
 def case_order(cases=CASES):
@@ -14,7 +15,8 @@ def check_case(case,window,logs,report=None,identities=None):
     if case=='backlog':
         from net_backlog_check import check_backlog
         return check_backlog(window,logs,report,identities)
-    if case not in CASES or len(logs)!=2: raise ValueError('fixture case')
+    if case not in CASES+RIGHTS_CASES or len(logs)!=2: raise ValueError('fixture case')
+    private=case in ('private','rightsPrivate'); switching=case=='switch' or case in RIGHTS_CASES
     errors=[]; truth=[]; pids=[]
     for actor,log in enumerate(logs):
         pid=[fields(line)['host_pid'] for line in log.splitlines() if line.startswith('CIS_SESSION_CONTAINER ')]
@@ -25,21 +27,32 @@ def check_case(case,window,logs,report=None,identities=None):
             errors.append('truth_shape_'+str(actor)); pids.append(None); truth.append([]); continue
         pids.append(pid[0]); truth.append(rows)
         for i,r in enumerate(rows):
-            expected_holder=i%2 if case=='switch' else 0
+            expected_holder=i%2 if switching else 0
             if (r['actor']!=actor or r['scenario']!=case or not r['cookie'] or not r['socket'] or
                     not window['start_ns']<=r['enter_ns']<=r['acquired_ns']<=r['release_begin_ns']<=r['released_ns']<=window['end_ns'] or
                     r['hold_ms']!=(30 if actor==expected_holder else 0)):
                 errors.append('truth_value_'+str(actor)+'_'+str(i))
     eligible=[]; matches=[]
     if len(truth[0])==4 and len(truth[1])==4:
-        if len({(r['cookie'],r['socket']) for group in truth for r in group})!=(2 if case=='private' else 1):
+        if len({(r['cookie'],r['socket']) for group in truth for r in group})!=(2 if private else 1):
             errors.append('socket_identity')
         for i in range(4):
-            holder=i%2 if case=='switch' else 0; waiter=1-holder
+            holder=i%2 if switching else 0; waiter=1-holder
             h,w=truth[holder][i],truth[waiter][i]
             if h['cookie']==w['cookie'] and h['acquired_ns']<w['enter_ns']<h['release_begin_ns']:
                 eligible.append((holder,waiter,i,h,w))
-        if len(eligible)!=(0 if case=='private' else 4): errors.append('truth_overlap_incomplete')
+        if len(eligible)!=(0 if private else 4): errors.append('truth_overlap_incomplete')
+    if case in RIGHTS_CASES:
+        transfers=[[fields(v) for v in log.splitlines() if v.startswith('CIS_NET_RIGHTS ')] for log in logs]
+        if any(len(v)!=1 for v in transfers): errors.append('missing_rights_transfer')
+        else:
+            a,b=transfers[0][0],transfers[1][0]
+            if (a.get('actor')!=0 or b.get('actor')!=1 or not a.get('sent_cookie') or
+                a['sent_cookie']!=b.get('received_cookie') or a.get('received_cookie')!=0 or b.get('sent_cookie')!=0 or
+                a.get('used_cookie')!=a['sent_cookie'] or a.get('private')!=int(private) or b.get('private')!=int(private) or
+                (b.get('used_cookie')==a['sent_cookie'])==private): errors.append('wrong_rights_transfer')
+            if any(not group or any(r['cookie']!=x.get('used_cookie') for r in group) for group,x in zip(truth,(a,b))):
+                errors.append('used_socket_not_transferred_selection')
     if report is not None:
         if report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS' or report['excluded']:
             errors.append('capture_quality')

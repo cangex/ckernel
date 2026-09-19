@@ -12,7 +12,7 @@ import prototype_admission
 from session import source_manifest
 from source_switches import observe
 from net_report import analyze
-from net_fixture_check import CASES,case_order,check_case
+from net_fixture_check import CASES,RIGHTS_CASES,case_order,check_case
 from net_source_audit import delta
 
 
@@ -28,7 +28,7 @@ def tcp_pair():
         except BaseException: client.close(); raise
 
 
-def run(backlog=False):
+def run(backlog=False,rights=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/net_shift').read_text().strip()!='0':
@@ -43,7 +43,7 @@ def run(backlog=False):
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
     source=source_manifest(args,env['boot_id']); permit=prototype_admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
-    cases=('backlog',) if backlog else CASES
+    cases=('backlog',) if backlog else RIGHTS_CASES if rights else CASES
     plan=dict(order=case_order(cases),cases=list(cases),rounds=3,operations=4,roots=2,net_shift=0,
         window_ms=2000,cpu=[0,1],management_cpu=7,memory_max_bytes=64<<20,
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
@@ -51,6 +51,11 @@ def run(backlog=False):
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if backlog:
         plan.update(unheld_drain_transfers=1,drain_offset_ms=450,skb_release_not_bounded_by_recv_return=True)
+        (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    if rights:
+        plan.update(socket_namespace='TCP socket created inside actor0 network namespace; passed with SCM_RIGHTS',
+            fd_transfer='real SCM_RIGHTS; rightsPrivate recipient creates a different TCP socket',
+            creator_attribution='fixture truth only; observer creation owner remains UNOBSERVED')
         (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-net.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -88,7 +93,8 @@ def run(backlog=False):
         targets=[request('register',path=str(p))['target'] for p in roots]
         for label in plan['order']:
             case=label.split('-')[0]; collecting='-net' in label; sid=None
-            client,server=tcp_pair(); sockets.extend((client,server)); selected=[server,server]
+            client,server=socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET) if rights else tcp_pair()
+            sockets.extend((client,server)); selected=[client,server] if rights else [server,server]
             if case=='backlog': selected=[server,client]
             if case=='private':
                 other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server)); selected[1]=other_server
@@ -143,5 +149,6 @@ def run(backlog=False):
 
 if __name__=='__main__':
     import argparse
-    parser=argparse.ArgumentParser(); parser.add_argument('--backlog',action='store_true')
-    run(parser.parse_args().backlog)
+    parser=argparse.ArgumentParser(); group=parser.add_mutually_exclusive_group()
+    group.add_argument('--backlog',action='store_true'); group.add_argument('--rights',action='store_true')
+    a=parser.parse_args(); run(a.backlog,a.rights)

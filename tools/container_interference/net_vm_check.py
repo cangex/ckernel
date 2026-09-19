@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from net_fixture_check import CASES,case_order,check_case
+from net_fixture_check import CASES,RIGHTS_CASES,case_order,check_case
 from net_report import analyze
 from net_source_audit import delta
 from prototype_admission import SOURCE_KEYS
@@ -19,7 +19,9 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     cases=tuple(plan.get('cases',[]))
-    if cases not in (CASES,('backlog',)): raise ValueError('unsupported frozen case set')
+    if cases not in (CASES,RIGHTS_CASES,('backlog',)): raise ValueError('unsupported frozen case set')
+    if cases==RIGHTS_CASES and plan.get('fd_transfer')!='real SCM_RIGHTS; rightsPrivate recipient creates a different TCP socket':
+        errors.append('rights_plan')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_NET_FIXTURE_UNLOAD=0' not in text.splitlines():
         errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
