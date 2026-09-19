@@ -15,7 +15,7 @@ CONTRACT={
     'rwsem': dict(name='rwsem有界持有者专项',collector='rwsem',
         discovered='公共非RT接口的尝试、获取、释放、降级和中止',object='本窗实际初始化事件与对象地址',
         participants='已观察写者或至多8个读者；集合不保证完整',
-        pending=['窗口前对象仍为E1','non-owner使用和读者溢出不得提升归因','新内核联合分配器递归遗漏尚未解决']),
+        pending=['窗口前对象仍为E1','non-owner使用和读者溢出不得提升归因','选定对象rwsem未计入普通应用十专项联合矩阵']),
     'fd': dict(name='FD表锁',collector='fd',discovered='已选定files_struct锁路径',
         object='对象地址、RETIRE及新watch边界',participants='观察到的持有/等待任务及容器',
         pending=['固定eligible分母的总体捕获率','密集路径的入口成本']),
