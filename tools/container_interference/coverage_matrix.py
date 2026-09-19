@@ -55,6 +55,11 @@ CONTRACT={
         object='请求episode和bio计费身份，不是完整inode生命周期',
         participants='已注册计费根与真实kworker分别记录；共享inode不推断唯一脏化者或阻塞方',
         pending=['脏化到inode再到bio的受限闭环','多写入者、归属切换和回收并发','写回节流及完整后台成本']),
+    'writeback_inode': dict(name='原生inode回写与请求上下文',collector='block',
+        discovered='容器脏化事件、闭合inode回写调用与其同步提交的请求',
+        object='I_SYNC调用边界、inode观测属性、任务代次与请求episode',
+        participants='脏化执行者、memcg回写归属、bio计费根及后台执行者分开；不推断唯一写入者或阻塞方',
+        pending=['脏化事件到回写之前的完整inode生命周期未闭合','异步脱离调用的提交与合并内容不推断inode','写回节流及完整后台成本']),
     'routing': dict(name='有界专项调度',collector='controller',discovered='真实巡检候选到单槽专项',
         object='配置epoch、目标代次及候选来源会话',participants='按目标轮转，候选不是因果认定',
         pending=['四容器混合来源联合验收']),
@@ -78,6 +83,7 @@ VERIFIERS={
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
     'block_merge':('block_vm_check','block_merge',{}),
     'writeback':('writeback_vm_check','writeback',{}),
+    'writeback_inode':('writeback_vm_check','writeback_inode',{}),
     'routing':('diagnosis_vm_check','routing',{}),
     'control':('x0_check','control',{}), 'rwsem':('rwsem_vm_check','rwsem',{}),
     'rwsem_joint':('rwsem_vm_check','rwsem_joint',dict(joint=True)),
@@ -123,6 +129,12 @@ def replay(index,base,output):
                 raise ValueError('logical ownership cohort required')
             if key=='block_merge' and checked.get('fixture') not in ('merge','merge-scheduler'):
                 raise ValueError('native merge truth cohort required')
+            if key=='writeback_inode':
+                states=checked.get('states',[])
+                selected=[v for v in states if '-block-' in v.get('label','')]
+                if len(selected)!=6 or any(v.get('result',{}).get('inode_request_link')!='CLOSED_NATIVE_CONTEXT' or
+                        len(v.get('result',{}).get('dirty_transition_actors',[]))!=2 for v in selected):
+                    raise ValueError('closed inode context and two observed dirtying actors required')
             error=None; passed=checked.get('status') in ('PASS','PASS_SCOPED') and not checked.get('errors') and not checked.get('defects')
         except (ValueError,KeyError,AssertionError) as exc:
             checked={}; error=type(exc).__name__+': '+str(exc); passed=False
