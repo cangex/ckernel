@@ -10,15 +10,20 @@ from source_switches import validate
 from rwsem_report import analyze
 from rwsem_fixture_check import check as fixture
 from owner_report import fields
+from rwsem_joint import PLAN as JOINT_PLAN, verify as verify_joint, comparisons
 
 CASES=('writeRead','writeWrite','readers','private','tryFailure','abort','nonOwner','preWindow','reuse','downgrade')
 
-def check(serial, output):
+def check(serial, output, joint=False):
     raw=serial.read_bytes()
     if len(raw)>128<<20: raise ValueError('serial capacity')
     text=raw.decode(); files=extract(text); prefix='/tmp/rwsem-evidence/'
     value=lambda name: json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan=value('plan.json'); result=value('result.json'); permit=value('permit.json')
+    if joint and plan.get('joint') != JOINT_PLAN: raise ValueError('joint cohort required')
+    joint_plan=plan.get('joint')
+    if joint_plan is not None and (joint_plan != JOINT_PLAN or plan['cases'] != list(CASES)):
+        raise ValueError('unexpected frozen joint plan')
     if (plan['schema']!='cis-rwsem-vm-plan-v1' or plan['cases'] not in (list(CASES),['overflow']) or
         plan['rounds']!=3 or plan['eligible_min_overlap_ns']!=1_000_000 or plan['reader_limit']!=8 or
         plan['target_indices']!=[0,1] or plan['registered_roots']!=4): raise ValueError('unexpected frozen plan')
@@ -35,6 +40,7 @@ def check(serial, output):
         if (state['round'],state['case'],state['enabled'])!=(r,c,e): errors.append('state_binding')
         if any(code!=0 for code in state['exit_codes']) or len(state['exit_codes'])!=len(state['jobs']): errors.append('workload_exit_'+label)
         logs={name:files[prefix+name] for name in state['logs']}; report=None; record=None
+        if bool(joint_plan) != ('joint' in state): errors.append('joint_state_binding_'+label)
         if e:
             sid=state['session_id']; record=value('records/'+sid+'.json')
             if record['collector']!='rwsem' or record['nonce']!=label.replace('-','') or record['targets']!=state['targets']: errors.append('capture_binding_'+label)
@@ -52,13 +58,19 @@ def check(serial, output):
             validate(state['active_sources'],None,0,2**64-1); validate(state['idle_sources'],None,0,2**64-1)
             truth=fixture(None,state['jobs'],logs,[dict(id=i,generation=0) for i in range(4)],c,None); cost=None
         if truth['status']=='FAIL': errors.append(label+':'+','.join(truth['errors']))
-        states.append(dict(label=label,truth=truth,cost=cost))
+        joint_evidence=None
+        if joint_plan:
+            joint_evidence=verify_joint(joint_plan,state,
+                {name:files[prefix+name] for name in state['joint']['logs']},record,plan['clock_ticks'])
+        states.append(dict(label=label,case=c,round=r,enabled=e,truth=truth,cost=cost,joint=joint_evidence))
     verification=dict(schema='cis-rwsem-vm-check-v1',status='FAIL' if errors else 'PASS_SCOPED',errors=errors,
         serial_sha256=hashlib.sha256(raw).hexdigest(),source=plan['source'],states=states,
+        joint=bool(joint_plan),comparisons=comparisons(states) if joint_plan else [],
         x7_complete=False,limits=['fixture public API coverage only','reader set not complete','no full-kernel performance certification'])
     (output/'verification.json').write_text(json.dumps(verification,indent=2)); return verification
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(); p.add_argument('serial',type=Path); p.add_argument('output',type=Path); a=p.parse_args()
-    r=check(a.serial,a.output); print(json.dumps(dict(status=r['status'],errors=r['errors'],states=len(r['states']))))
+    p=argparse.ArgumentParser(); p.add_argument('serial',type=Path); p.add_argument('output',type=Path)
+    p.add_argument('--joint',action='store_true'); a=p.parse_args()
+    r=check(a.serial,a.output,joint=a.joint); print(json.dumps(dict(status=r['status'],errors=r['errors'],states=len(r['states']))))
     raise SystemExit(r['status']=='FAIL')

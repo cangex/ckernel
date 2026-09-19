@@ -16,6 +16,11 @@ CONTRACT={
         discovered='公共非RT接口的尝试、获取、释放、降级和中止',object='本窗实际初始化事件与对象地址',
         participants='已观察写者或至多8个读者；集合不保证完整',
         pending=['窗口前对象仍为E1','non-owner使用和读者溢出不得提升归因','选定对象rwsem未计入普通应用十专项联合矩阵']),
+    'rwsem_joint': dict(name='rwsem与四容器业务联合真值',collector='rwsem',
+        discovered='普通文件/VMA负载覆盖诊断窗口，独立rwsem正反例同时执行',
+        object='受控公共rwsem接口及本窗初始化代次',
+        participants='目标轮换，真实尝试/持有区间独立核对，不从热点推断持有者',
+        pending=['受控rwsem不代表所有混合资源来源','完整异步后台与内核内存成本','真实应用竞争发生率']),
     'fd': dict(name='FD表锁',collector='fd',discovered='已选定files_struct锁路径',
         object='对象地址、RETIRE及新watch边界',participants='观察到的持有/等待任务及容器',
         pending=['固定fixture调用分母已有独立统计；不等于真实阻塞关系召回','64事件前缀之外的覆盖与密集路径入口成本']),
@@ -63,6 +68,7 @@ VERIFIERS={
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
     'routing':('diagnosis_vm_check','routing',{}),
     'control':('x0_check','control',{}), 'rwsem':('rwsem_vm_check','rwsem',{}),
+    'rwsem_joint':('rwsem_vm_check','rwsem_joint',dict(joint=True)),
     'joint':('joint_vm_check','joint',{})}
 
 
@@ -94,8 +100,8 @@ def replay(index,base,output):
         try:
             if key in ('routing','control'):
                 checked=implementation.check(data.decode())
-            elif key in ('rwsem','joint','slub'):
-                checked=implementation.check(serial,output/row['name'])
+            elif key in ('rwsem','rwsem_joint','joint','slub'):
+                checked=implementation.check(serial,output/row['name'],**options)
             else: checked=implementation.verify(serial,output/row['name'],**options)
             # A logical-lock cohort cannot be relabelled as backlog coverage.
             labels=[r.get('label','') for r in checked.get('states',[])]

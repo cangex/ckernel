@@ -18,6 +18,7 @@ if ! (insmod /cis_rwsem_fixture.ko && mkdir -p /container-root/dev && cp -a /dev
 fi
 case " $(cat /proc/cmdline) " in
     *" cis_rwsem_test=overflow "*) /usr/bin/python3 /profile/rwsem_vm.py --overflow ;;
+    *" cis_rwsem_test=joint "*) /usr/bin/python3 /profile/rwsem_vm.py --joint ;;
     *) /usr/bin/python3 /profile/rwsem_vm.py ;;
 esac
 status=$?

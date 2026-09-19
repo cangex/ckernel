@@ -10,6 +10,18 @@ MEMORY_KB = ('MemAvailable','MemFree','Buffers','Cached','Slab','SReclaimable',
              'SUnreclaim','KernelStack','PageTables','Percpu','VmallocUsed')
 
 
+def snapshot(root, roots):
+    result = dict(time_ns=time.monotonic_ns(), proc_stat=Path('/proc/stat').read_text(),
+        memory=Path('/proc/meminfo').read_text(), softirqs=Path('/proc/softirqs').read_text(),
+        allocator_source_audit=Path('/sys/kernel/debug/cis_alloc_audit').read_text(),
+        recursion_source_audit=Path('/sys/kernel/debug/cis_recursion').read_text(),
+        roots=[{name:(p/name).read_text() for name in CGROUP_FILES} for p in roots],
+        management={name:(root/'management'/name).read_text() for name in CGROUP_FILES},
+        kthreads=kernel_threads())
+    result['read_end_ns'] = time.monotonic_ns()
+    return result
+
+
 def task_stat(text):
     left=text.find('('); right=text.rfind(')')
     if left<1 or right<=left: raise ValueError('task stat delimiters')

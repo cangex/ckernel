@@ -15,11 +15,14 @@ from session import source_manifest
 from source_switches import observe
 from rwsem_report import analyze
 from owner_report import fields
+from joint_costs import snapshot
+from rwsem_joint import PLAN as JOINT_PLAN, roles as joint_roles, verify as verify_joint
 
 CASES=('writeRead','writeWrite','readers','private','tryFailure','abort','nonOwner','preWindow','reuse','downgrade')
 
 
-def run(overflow=False):
+def run(overflow=False, joint=False):
+    if overflow and joint: raise ValueError('overflow is a separate cohort')
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=admission.environment(); admission.check_environment(env)
     out=Path('/tmp/rwsem-evidence'); out.mkdir(mode=0o700)
@@ -44,12 +47,16 @@ def run(overflow=False):
         target_indices=[0,1],registered_roots=4,cpus=[0,1,2,3],hold_ms=200,extended_hold_ms=500,
         eligible_min_overlap_ns=1_000_000,reader_limit=8,selected_objects=selected,off_on_order='OFF_ON,ON_OFF,OFF_ON',
         scope='native public rwsem fixture only; no production or full-kernel coverage claim')
+    if joint:
+        plan['joint'] = JOINT_PLAN
+        plan['clock_ticks'] = os.sysconf('SC_CLK_TCK')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-rwsem.sock'; log=(out/'controller.log').open('x'); requests=(out/'requests.jsonl').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
         '--worker',args.worker,'--residue',args.residue,'--bpf',args.bpf,'--admission-policy','prototype',
         '--prototype-permit',str(out/'permit.json'),'daemon'],stdout=log,stderr=log)
     children=[]; handles=[]; states=[]; token=0
+    role_map=list(range(4))
 
     def request(op,**kw):
         req=dict(version=1,op=op,**kw); before=time.monotonic_ns()
@@ -90,11 +97,29 @@ def run(overflow=False):
         registered=[request('register',path=str(p))['target'] for p in roots]
         targets=registered[:2]; observe(None)
         for repeat in range(3):
+            role_map=joint_roles(repeat) if joint else list(range(4))
+            targets=[registered[i] for i in role_map[:2]]
             for case in cases:
                 for enabled in ((False,True) if repeat%2==0 else (True,False)):
                     label='%s%d-%s'%(case,repeat,'on' if enabled else 'off'); token+=1
-                    begin=len(children); logs=[]; jobs=[]; sid=None; active=None; window=None
+                    logs=[]; jobs=[]; sid=None; active=None; window=None
+                    ordinary=[]; joint_info=None
+                    if joint:
+                        before=snapshot(root, roots)
+                        ordinary_start=time.monotonic_ns()+500_000_000
+                        ordinary_logs=[]
+                        for i in range(4):
+                            name=label+'-ordinary-%d.log'%i
+                            handle=(out/name).open('x'); handles.append(handle); ordinary_logs.append(name)
+                            proc=subprocess.Popen(['/session_launch',str(roots[i]),str(JOINT_PLAN['ordinary_cpus'][i]),
+                                '/joint_workload',JOINT_PLAN['ordinary_workloads'][i],str(ordinary_start)],stdout=handle,stderr=handle)
+                            children.append(proc); ordinary.append(proc)
+                        time.sleep(max(0,(ordinary_start-time.monotonic_ns())/1e9)+.15)
+                        if any(p.poll() is not None for p in ordinary): raise ValueError('ordinary business exited early')
+                        joint_info=dict(start_ns=ordinary_start,logs=ordinary_logs,before=before)
+                    fixture_begin=len(children)
                     def start(suffix,actor,**kw):
+                        actor=role_map[actor]
                         name=label+'-'+suffix; logs.append(name+'.log')
                         jobs.append(dict(log=name+'.log',actor_index=actor,token=token,arguments=kw))
                         return launch(name,actor,**kw)
@@ -125,7 +150,7 @@ def run(overflow=False):
                         start('waiter',1,slot=1 if case=='private' else 0,
                             mode=1 if case in ('writeWrite','nonOwner','downgrade') else 2 if case=='tryFailure' else 6 if case=='abort' else 0,
                             wait_slot=0,wait_holders=1)
-                    for p in children[begin:]: finished(p)
+                    for p in children[fixture_begin:]: finished(p)
                     if enabled and time.monotonic_ns()>=window['end_ns']: raise RuntimeError('truth outside window')
                     record=None; report=None
                     if enabled:
@@ -134,12 +159,19 @@ def run(overflow=False):
                         (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                         if not row.get('objects_absent'): raise RuntimeError('collector cleanup')
                     idle=observe(None)
+                    if joint:
+                        for p in ordinary: finished(p)
+                        joint_info.update(after=snapshot(root, roots),exit_codes=[p.returncode for p in ordinary])
                     state=dict(label=label,case=case,round=repeat,enabled=enabled,session_id=sid,logs=logs,jobs=jobs,
                         registered=registered,targets=targets,active_sources=active,idle_sources=idle,
-                        exit_codes=[p.returncode for p in children[begin:]],
+                        exit_codes=[p.returncode for p in children[fixture_begin:]],
                         quality=report['quality']['status'] if report else None)
+                    if joint: state['joint']=joint_info
                     states.append(state); (out/(label+'-evidence.json')).write_text(json.dumps(state,indent=2))
                     (out/'partial.json').write_text(json.dumps(states,indent=2))
+                    if joint:
+                        verify_joint(plan['joint'],state,{name:(out/name).read_text() for name in joint_info['logs']},
+                                     record,plan['clock_ticks'])
                     if enabled and report['quality']['status']!='PASS': raise RuntimeError(report['quality'])
         (out/'result.json').write_text(json.dumps(dict(status='COLLECTED',states=states,source=source),indent=2))
     finally:
@@ -156,4 +188,5 @@ def run(overflow=False):
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(); p.add_argument('--overflow',action='store_true'); a=p.parse_args(); run(a.overflow)
+    p=argparse.ArgumentParser(); p.add_argument('--overflow',action='store_true')
+    p.add_argument('--joint',action='store_true'); a=p.parse_args(); run(a.overflow,a.joint)
