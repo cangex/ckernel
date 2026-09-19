@@ -52,5 +52,6 @@ class NetSource(unittest.TestCase):
         self.assertIn('if (!kern && sock->sk)',create)
         accept=source.split('struct file *do_accept(',1)[1].split('static int __sys_accept4_file(',1)[0]
         self.assertLess(accept.index('move_addr_to_user('),accept.index('CIS_CN_ACCEPTED'))
-        self.assertLess(accept.index('CIS_CN_ACCEPTED'),accept.index('return newfile;'))
+        self.assertLess(accept.index('CIS_CN_ACCEPTED'),accept.rindex('return newfile;'))
+        self.assertLess(accept.index('if (IS_ERR(newfile))'),accept.index('CIS_CN_ACCEPTED'))
         self.assertNotIn('CIS_CN_CREATED',accept)
