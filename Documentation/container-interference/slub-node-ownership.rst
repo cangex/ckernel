@@ -127,4 +127,60 @@ in task context alone is not labelled interrupt execution.
 
 This changes the representation of observed unsupported context, not a loss
 threshold.  It does not identify an IRQ's business owner or certify complete
-asynchronous coverage.  Updated build and runtime validation are required.
+asynchronous coverage.
+
+IRQ-exit reentry closure
+-----------------------
+
+Kernel ``039f34f5c`` and the first IRQ-barrier BPF program were not sufficient.
+The OLK verifier rejected a compiler-generated ``ctx+32`` alias; tools
+``9e8bc500b`` first copy metadata into volatile scalars and preserve the unknown
+actor even if a barrier becomes the prefix-ending record.  The failed ordinary
+and fixture logs remain separate; neither reached an accepted capture.
+
+The ordinary workload then passed two captures but rejected the third with
+four actual recursion events.  A separate diagnostic boot reproduced four
+softirq events on the same node inside an outer WAIT callback (kind 4, phase 2,
+preempt count 0x107/0x108).  This is not an irrelevant drop to be excused.
+Serials ``83b718547b85a02b1ffec5d41bca822ded4a0ab8b71433325060aca7abd4515e``
+and ``2b774f3891ec076c3e3d4bd44160fdc74b3e9265585a136a4d43340857bd0c60``
+are retained with FAIL status.
+
+Kernel ``06c07b5de`` protects only the SLUB observation callback with local
+IRQ save/restore.  It does not hold IRQs off across the subsequent native lock
+attempt or extend protection across the native lock hold.  Existing IRQ state
+is restored.  NMI and actual synchronous recursion remain fail-closed.  This
+guard can delay local interrupt handling and is an explicit observer cost.
+When the dedicated debug option is enabled, per-CPU callback-body time and
+boot high-water duration are exported, with another 24 bytes per possible CPU
+in the diagnostic structure.  These debug times exclude entry, accounting
+updates and restore; they are NOT hard IRQ-off or scheduler-latency bounds.
+
+The ARM64 Image and modules build passed.  Frozen Image SHA256:
+``699b82175d47344d59f61bc7e239561ba8bb2bde4f94350bee26c9b17f01cdb6``.
+Tools ``2d5dd8b1e`` ran separate debug and normal cohorts, each with three
+SLUB captures and three OFF states.  The debug cohort has zero recursion
+deltas; per-state callback-body totals were 3.30107, 3.18902 and 3.49654ms,
+with observed boot maximum 13.83us.  Its manifest marks performance ineligible.
+Debug serial: ``7e523287c39ca951f7d0b546fad116f94511907525bb5cbcc53a305090b14089``.
+
+Normal serial ``ca3011e715dd6e3a1799ba00a36a78f6b8f23439e6c5edbbe9a9b2043aae1be8``
+passed all three captures, exact collector scope, source-off and cleanup checks.
+The four ordinary container workers completed 36,000 operations with no errors
+or timeouts.  Maximum combined-process CAPTURING CPU was 11.57826ms, below the
+unchanged 40ms gate, and RSS was 33,660,928 bytes.  This is not full observer
+CPU/memory or tail-latency certification; ordinary quiet node locks receive
+no synthetic positive ownership credit.
+
+The fresh controlled fixture cohort on the guarded kernel completed all
+36 states/18 captures: 15/15 fully observable positive relations, private-node
+negatives, holder switches, and actual same-address retirement/recreation in
+three rounds.  Three known overlaps with an unobserved acquisition correctly
+remain unknown.  Its maximum CAPTURING CPU is 11.84978ms and RSS 38,813,696 bytes.
+Serial: ``5464b29147d9b48cc9333f3036cfb2639b7262e4fde6188a5878de9372c72507``.
+This remains scoped node-lock validation, not completion of X3 or X7.
+
+Unified ownership explanations now require the same collector inventory and
+terminal-scope audit as specialist reports.  Missing scope cannot default to
+PASS, and stale or wrong-resource inventory cannot produce an E2 edge.  This
+strengthens offline verification without changing or deleting raw cohorts.
