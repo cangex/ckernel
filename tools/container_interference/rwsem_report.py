@@ -116,13 +116,18 @@ def reconstruct(rows, known, stacks):
 
 def analyze(record, raw):
     if record.get('collector')!='rwsem': raise ValueError('rwsem collector required')
-    base=explain(record,raw); scope=audit(record,raw); rows=[]; stacks={}; defects=[]
+    base=explain(record,raw); scope=audit(record,raw); rows=[]; stacks={}; defects=[]; readback=[]
+    selected=record.get('selected_objects')
+    if selected is not None and (not isinstance(selected,list) or not 1<=len(selected)<=8 or
+        any(type(v) is not int or not 0<v<2**64 or v%8 for v in selected) or len(set(selected))!=len(selected)):
+        defects.append('rwsem_selection_schema'); selected=[]
     known={(r['id'],r['generation']) for r in record.get('owner_identities',{}).values()}
     known.update((r['id'],r['generation']) for r in record.get('root_identities',{}).values())
     required={'protocol','sample_time_ns','object','init_ns','phase','actor_tid','actor_start',
               'actor_id','actor_generation','cpu','skipped','stack_id'}
     for line in raw.splitlines():
         item=json.loads(line); d=fields(item.get('detail',''))
+        if item.get('kind')=='rwsem_selection': readback.append(d)
         if item.get('kind')=='stack_symbols' and ' leaf_to_root=' in item.get('detail',''):
             stacks[d['stack_id']]=item['detail'].split(' leaf_to_root=',1)[1].split('>')
         if item.get('kind')!='RWSEM': continue
@@ -132,7 +137,10 @@ def analyze(record, raw):
                 not within_window(record,d['sample_time_ns'],d['sample_time_ns'])):
             defects.append('rwsem_schema_or_window'); continue
         if len(rows)>=65536: defects.append('rwsem_capacity'); break
+        if selected is not None and d['object'] not in selected: defects.append('rwsem_unselected_object'); continue
         rows.append(d)
+    if selected is not None and readback!=[dict(index=i,count=len(selected),object=v,readback=1) for i,v in enumerate(selected)]:
+        defects.append('rwsem_selection_readback')
     maps=scope['counters'].get('owner_map_updates',{})
     if any(maps.get(k) for k in ('watch_failed','attempt_failed')): defects.append('rwsem_watch_or_event_capacity')
     objects=[]
@@ -142,7 +150,7 @@ def analyze(record, raw):
     quality=base['quality']
     if defects: quality=dict(quality,status='FAIL',defects=quality['defects']+defects)
     return dict(schema='cis-rwsem-report-v1',quality=quality,scope_audit=scope,objects=objects,
-        source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),
+        source=base['source'],selected_objects=selected,raw_sha256=hashlib.sha256(raw).hexdigest(),
         analysis_source_sha256=dict(base['analysis_source_sha256'],**{'rwsem_report.py':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}),
         limits=['only supported public non-RT rwsem APIs; no arbitrary semaphore or RT claim',
             'E2 requires an observed initialization in this capture; static/pre-window objects remain E1',

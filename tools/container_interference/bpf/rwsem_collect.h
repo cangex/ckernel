@@ -12,6 +12,7 @@ int rwsem_state(struct bpf_raw_tracepoint_args *ctx)
 
 	COUNT(s, received);
 	if (!object || phase < 1 || phase > 16 || !synchronous_context()) return 0;
+	if (!bpf_map_lookup_elem(&rwsem_selected, &object)) return 0;
 	watch = bpf_map_lookup_elem(&rwsem_watched, &object);
 	if (!watch) {
 		struct cis_watch initial = {};

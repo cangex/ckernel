@@ -118,7 +118,8 @@ def run(expiry=False, fault=False, crashes=False):
         daemon = start_daemon(); targets = add_targets()
         if crashes:
             for name in collector_manifest.COLLECTORS:
-                sid=request('start',collector=name,targets=targets,nonce='kill'+name)['session_id']
+                sid=request('start',collector=name,targets=targets,nonce='kill'+name,
+                            **({'objects':[8]} if name=='rwsem' else {}))['session_id']
                 row=window(sid);inject(row['worker_pid'],signal.SIGKILL,sid,'worker')
                 full=finish(sid);assert full['result']=='FAILED'
                 note('worker_kill_'+name,session=sid)
@@ -168,7 +169,8 @@ def run(expiry=False, fault=False, crashes=False):
                  real_verifier_absent=True, injected_verifier_failed=True)
         else:
             for name in collector_manifest.COLLECTORS:
-                sid = request('start', collector=name, targets=targets, nonce='load'+name)['session_id']
+                sid = request('start', collector=name, targets=targets, nonce='load'+name,
+                              **({'objects':[8]} if name=='rwsem' else {}))['session_id']
                 window(sid)
                 active=observe(name)
                 row = finish(sid)

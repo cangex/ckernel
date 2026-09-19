@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "include/cis.h"
 #include "include/cis_recursion_snapshot.h"
+#include "include/cis_object_selection.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -52,13 +53,19 @@ int main(int argc,char **argv)
 	uint64_t prepared_cpu=0,capture_cpu=0,stop_cpu=0;
 	uint64_t recursion_skipped=0;
 	int recursion_started=0,recursion_valid=0;
-	int i,targets=0,err=0,stop_error=0,capture_error=0,channel,window,parent=getppid();
-	if(!ctx || argc<9 || argc>8+CIS_MAX_ROOTS) return 2;
+	int i,roots_begin=8,targets=0,err=0,stop_error=0,capture_error=0,channel,window,parent=getppid();
+	if(!ctx || argc<9 || argc>9+CIS_MAX_ROOTS) return 2;
 	channel=atoi(argv[1]); ctx->output_fd=atoi(argv[2]);
 	ctx->session_id=strtoull(argv[3],NULL,10); window=atoi(argv[5]);
 	ctx->session_collector=!strcmp(argv[4],"ip")?1:!strcmp(argv[4],"owner")?2:
 		!strcmp(argv[4],"sched")?3:!strcmp(argv[4],"reclaim")?4:!strcmp(argv[4],"sync")?5:!strcmp(argv[4],"fd")?6:!strcmp(argv[4],"counter")?7:!strcmp(argv[4],"allocator")?8:!strcmp(argv[4],"net")?9:!strcmp(argv[4],"block")?10:!strcmp(argv[4],"rwsem")?11:0;
 	if(!ctx->session_id || !ctx->session_collector || window<100 || window>10000) return 2;
+	if(ctx->session_collector==11) {
+		int n=cis_parse_objects(argv[8],ctx->selected_objects);
+		if(n<1) return 2;
+		ctx->selected_object_count=n; roots_begin=9;
+	}
+	if(argc<=roots_begin || argc>roots_begin+CIS_MAX_ROOTS) return 2;
 	ctx->output_limit=16ULL<<20; ctx->identity_only=1; ctx->psi_epoll=-1;
 	ctx->window_ms=window; ctx->ip_hz=1000; ctx->entry_rate_limit=200000;
 	ctx->max_diagnostics=2; ctx->memory_limit=64ULL<<20;
@@ -82,7 +89,7 @@ int main(int argc,char **argv)
 			cis_report(ctx,"fault_injection",NULL,detail);
 		}
 	}
-	for(i=8;i<argc;i++) {
+	for(i=roots_begin;i<argc;i++) {
 		unsigned long long id,gen; int fd,n=0; char role; struct cis_root *r;
 		if(sscanf(argv[i],"%c:%d:%llu:%llu%n",&role,&fd,&id,&gen,&n)!=4 || argv[i][n] ||
 		   !id || !gen || (role!='t' && role!='i') ||

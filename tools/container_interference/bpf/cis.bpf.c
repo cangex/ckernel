@@ -40,7 +40,8 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,struct cis_net_service_key); __type(value,struct cis_net_event); } net_service SEC(".maps");
 #endif
 #if CIS_PROFILE == 11
-struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,__u64); __type(value,struct cis_watch); } rwsem_watched SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u64); __type(value,struct cis_watch); } rwsem_watched SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u64); __type(value,__u8); } rwsem_selected SEC(".maps");
 #endif
 #if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 6
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");

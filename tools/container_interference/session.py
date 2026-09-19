@@ -125,7 +125,7 @@ def validate(request):
     op = request.get('op')
     fields = {'register': {'path'}, 'unregister': {'target'}, 'status': {'session'},
               'report': {'session'}, 'cancel': {'session'}, 'stop': set(), 'recover': set(),
-              'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject'},
+              'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject', 'objects'},
               'schedule_configure': {'plan'}, 'schedule_enable': set(),
               'schedule_pause': set(), 'schedule_status': {'offset'},
               'survey_epoch': set(), 'survey_report': {'target'},
@@ -136,6 +136,14 @@ def validate(request):
     if op == 'start':
         if request.get('collector') not in collector_manifest.COLLECTORS:
             raise ValueError('unsupported collector')
+        if request['collector']=='rwsem':
+            objects=request.get('objects')
+            if (not isinstance(objects,list) or not 1<=len(objects)<=8 or
+                any(type(v) is not int or not 0<v<2**64 or v%8 for v in objects) or
+                len(set(objects))!=len(objects)):
+                raise ValueError('rwsem requires 1..8 distinct aligned object addresses')
+        elif 'objects' in request:
+            raise ValueError('explicit object selection is supported only for rwsem')
         targets = request.get('targets')
         if (not isinstance(targets, list) or not 1 <= len(targets) <= 2
                 or not all(isinstance(t, str) and len(t) <= 48 for t in targets)
@@ -466,6 +474,7 @@ class Controller:
                       prototype_permit_sha256=getattr(self, 'prototype_digest', None),
                       performance_certification='NOT_ACCEPTED',
                       window_ms=request.get('window_ms', WINDOW_MS), targets=request['targets'],
+                      selected_objects=request.get('objects',[]),
                       inventory=None, receipt=None, cancellation_requested=False,
                       nonce_epoch=request.get('nonce_epoch'), retention_managed=bool(self.schedule),
                       survey_epoch=self.survey_epoch, scheduled=planned,
@@ -543,6 +552,8 @@ class Controller:
                        str(record['window_ms']), str(collector_manifest.object_path(self.args.bpf, request['collector'])),
                        request.get('inject', 'none') if request.get('inject', '').startswith(('fd_limit_', 'fail_')) or
                        request.get('inject') == 'after_prepare' else 'none']
+            if request['collector']=='rwsem':
+                command += ['o:'+','.join('%016x'%v for v in request['objects'])]
             command += ['%s:%d:%d:%d' % ('t' if root['session_target'] else 'i', root['fd'],
                                        root['id'], root['generation']) for root in roots]
             child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots]),

@@ -100,6 +100,15 @@ class RwsemReport(unittest.TestCase):
             rows.append(dict(session_id='7',kind=kind,detail=detail))
         run=lambda: analyze(r,'\n'.join(json.dumps(x) for x in rows).encode())
         self.assertEqual(run()['quality']['status'],'PASS')
+        r['selected_objects']=[8]
+        for item in rows:
+            if item['kind']=='RWSEM': item['detail']=item['detail'].replace('object=10','object=8')
+        self.assertEqual(run()['quality']['status'],'FAIL')
+        rows.append(dict(session_id='7',kind='rwsem_selection',detail='index=0 count=1 object=8 readback=1'))
+        self.assertEqual(run()['quality']['status'],'PASS')
+        r['selected_objects']=[16]
+        self.assertEqual(run()['quality']['status'],'FAIL')
+        r['selected_objects']=[8]
         rows.append(dict(session_id='7',kind='owner_map_updates',detail='watch_races=0 watch_failed=0 holder_failed=0 attempt_failed=1'))
         self.assertEqual(run()['quality']['status'],'FAIL'); self.assertFalse(run()['objects'])
 

@@ -31,11 +31,15 @@ static long fixture_ioctl(struct file *file, unsigned int command, unsigned long
 	bool held = false;
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN)) return -EPERM;
-	if (command != CIS_RWSEM_RESET && command != CIS_RWSEM_OPERATE) return -ENOTTY;
+	if (command != CIS_RWSEM_RESET && command != CIS_RWSEM_OPERATE && command != CIS_RWSEM_QUERY) return -ENOTTY;
 	if (copy_from_user(&r, (void __user *)arg, sizeof(r))) return -EFAULT;
 	if (!r.token || r.slot >= ARRAY_SIZE(slots) || r.wait_slot >= ARRAY_SIZE(slots) ||
 	    r.mode > 6 || r.hold_ms > 500 || r.wait_holders > 10) return -EINVAL;
 	s = &slots[r.slot];
+	if (command == CIS_RWSEM_QUERY) {
+		r.address = (unsigned long)&s->sem;
+		goto output;
+	}
 	mutex_lock(&control);
 	if (command == CIS_RWSEM_RESET) {
 		if (atomic_read(&s->users) || r.token <= s->token) result = -EBUSY;

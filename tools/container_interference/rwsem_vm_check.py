@@ -9,6 +9,7 @@ from session_check import extract
 from source_switches import validate
 from rwsem_report import analyze
 from rwsem_fixture_check import check as fixture
+from owner_report import fields
 
 CASES=('writeRead','writeWrite','readers','private','tryFailure','abort','nonOwner','preWindow','reuse','downgrade')
 
@@ -22,6 +23,8 @@ def check(serial, output):
         plan['rounds']!=3 or plan['eligible_min_overlap_ns']!=1_000_000 or plan['reader_limit']!=8 or
         plan['target_indices']!=[0,1] or plan['registered_roots']!=4): raise ValueError('unexpected frozen plan')
     output.mkdir(mode=0o700); errors=[]; states=[]
+    selected=[fields(files[prefix+'object-query-%d.log'%i])['object'] for i in (0,1)]
+    if plan.get('selected_objects')!=selected or len(set(selected))!=2: errors.append('object_selection')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_RWSEM_FIXTURE_UNLOAD=0' not in text.splitlines(): errors.append('guest_cleanup')
     if any(v in text for v in ('Oops:','Kernel panic','BUG: KASAN:','WARNING: CPU:')): errors.append('kernel_warning')
     if result['source']!=plan['source'] or any(plan['source'][k]!=permit['source'][k] for k in SOURCE_KEYS): errors.append('source_binding')
@@ -35,6 +38,7 @@ def check(serial, output):
         if e:
             sid=state['session_id']; record=value('records/'+sid+'.json')
             if record['collector']!='rwsem' or record['nonce']!=label.replace('-','') or record['targets']!=state['targets']: errors.append('capture_binding_'+label)
+            if record.get('selected_objects')!=selected: errors.append('selection_binding_'+label)
             if any(record.get(k)!=plan['source'][k] for k in SOURCE_KEYS): errors.append('record_source_'+label)
             report=analyze(record,(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode())
             if not record.get('objects_absent'): errors.append('collector_cleanup_'+label)

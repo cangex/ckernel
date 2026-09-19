@@ -20,12 +20,27 @@ without lockdep. Otherwise its historical alias to down_read/up_read would
 misidentify an anonymous reader as an ordinary task-owned read hold. It
 retains native lock semantics and does not add ownership enforcement.
 
-The collector opens at most 64 object watches from a registered target's
-initialization/acquire attempt; only watched objects emit downstream
-records. The source callback still runs at every enabled API hook, so entry
+The administrator selects one to eight object addresses from a preceding
+candidate or a known fixture. A ``start`` request for ``rwsem`` requires an
+``objects`` array of distinct aligned unsigned addresses. Addresses are
+comparison keys, never dereferenced by the collector. They do not certify
+lifetime: E2 still requires a real initialization in the current window.
+Selection is immutable for that session, installed and read back before
+arming; the record and raw stream retain it. Automatic routing does not
+invent an address set. Source addresses are administrator-only evidence.
+
+The collector opens at most eight watches for these selected addresses
+from a registered target's initialization/acquire attempt. Other objects
+are filtered before identity lookup, stack capture and event emission.
+The source callback still runs at every enabled API hook, so entry
 cost and source recursion must be measured, not hidden behind filtering.
 Each watch has at most 1024 emitted records. Capacity overflow rejects the
 capture's relationship evidence. No watch eviction hides address reuse.
+The initial broad-watch experiment lost records during target startup and
+reuse. That failure remains recorded; neither event budgets nor capacity
+were enlarged to relabel it a pass. Selected-object scope is explicit.
+Control-only tests may select the impossible kernel key 8 to verify clean
+loading/unloading; they never count as a positive lock coverage test.
 
 E2 requires initialization observed in this capture. Static or pre-window
 objects may yield E1 intervals but no lifetime-certified holder relation.

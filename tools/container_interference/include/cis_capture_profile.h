@@ -63,7 +63,7 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 	if (profile == 10)
 		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"block_watched");
 	if (profile == 11)
-		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"rwsem_watched");
+		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"rwsem_watched") || !strcmp(name,"rwsem_selected");
 	if (profile == 4 || profile == 5 || profile == 7 || profile == 8)
 		return !strcmp(name, "targets") || !strcmp(name, "stacks") || !strcmp(name, "pending");
 	return (profile == 2 || profile == 6) && (!strcmp(name, "targets") || !strcmp(name, "stacks") ||

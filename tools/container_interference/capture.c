@@ -476,6 +476,19 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	if(bpf_object__load(c->object)) goto fail;
 	c->roots=mapfd(c,"roots"); c->targets=mapfd(c,"targets"); c->pending=mapfd(c,"pending");
 	c->stacks=mapfd(c,"stacks"); c->stats=mapfd(c,"stats");
+	if(ctx->session_collector==11) {
+		int fd=mapfd(c,"rwsem_selected");
+		__u8 selected=1, readback=0;
+		stage="rwsem_selection";
+		if(!ctx->selected_object_count || ctx->selected_object_count>8 || fd<0) goto fail;
+		for(i=0;i<(int)ctx->selected_object_count;i++) {
+			if(bpf_map_update_elem(fd,&ctx->selected_objects[i],&selected,BPF_NOEXIST) ||
+			   bpf_map_lookup_elem(fd,&ctx->selected_objects[i],&readback) || readback!=1) goto fail;
+			snprintf(detail,sizeof(detail),"index=%d count=%u object=0x%llx readback=1",
+				i,ctx->selected_object_count,(unsigned long long)ctx->selected_objects[i]);
+			cis_report(ctx,"rwsem_selection",NULL,detail);
+		}
+	}
 	c->possible_cpus=libbpf_num_possible_cpus();
 	if(c->possible_cpus<1 || c->possible_cpus>CIS_CPU_CAP) goto fail;
 	stage="cpu_stats";
