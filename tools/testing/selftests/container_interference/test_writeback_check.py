@@ -12,6 +12,7 @@ class WritebackTruth(unittest.TestCase):
         report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),requests=[
             dict(initial_dirtier=None,inode_owner=None,blocking_container=None,admission='bio_billing_root',
                  selected_container=[i+1,1],submitter=[0,0,100,1],submitter_kernel_thread=True,
+                 episode_interval_ns=[30,39],completions=[dict(bytes=262144 if shared else 131072,status=0)],
                  operation=1,devices=[[8,0 if shared else i]],terminal='data_completion',start_stack_leaf_to_root=['wb_workfn'])
             for i in range(1 if shared else 2)])
         return [ 'shared' if shared else 'private',window,logs,[30,40],[True,True],report,[dict(id=i+1,generation=1) for i in range(2)]]
@@ -29,6 +30,12 @@ class WritebackTruth(unittest.TestCase):
         for key,val in (('submitter',[1,1,100,1]),('initial_dirtier',[1,1]),('inode_owner',9),
                         ('blocking_container',[2,1]),('submitter_kernel_thread',False),('start_stack_leaf_to_root',[])):
             args=self.inputs(); args[5]['requests'][0][key]=val
+            self.assertEqual(check_case(*args)['status'],'FAIL')
+
+    def test_cannot_satisfy_coverage_with_old_wrong_or_partial_io(self):
+        for field,value in (('episode_interval_ns',[1,9]),('episode_interval_ns',[30,50]),
+                            ('completions',[dict(bytes=4096,status=0)]),('completions',[dict(bytes=131072,status=1)])):
+            args=self.inputs(); args[5]['requests'][0][field]=value
             self.assertEqual(check_case(*args)['status'],'FAIL')
 
     def test_truth_window_sharedness_and_durable_content(self):

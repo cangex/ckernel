@@ -26,7 +26,7 @@ def check_case(case, window, logs, sync_interval, verified, report=None, identit
         a,b=writers
         same=(a['major'],a['minor'],a['inode'])==(b['major'],b['minor'],b['inode'])
         if same!=(case=='shared'): errors.append('inode_truth')
-    background=[]; selected=set(); all_requests=[]
+    background=[]; selected=set(); all_requests=[]; billed_bytes={}
     if report is not None:
         if report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS': errors.append('capture_quality')
         expected={(v['id'],v['generation']) for v in identities}
@@ -43,11 +43,19 @@ def check_case(case, window, logs, sync_interval, verified, report=None, identit
                 background.append(req); selected.add(source)
                 if not any('wb_workfn' in f or 'writeback' in f for f in req['start_stack_leaf_to_root']):
                     errors.append('background_stack')
+                interval=req['episode_interval_ns']
+                if len(writers)!=2 or not min(v['begin_ns'] for v in writers)<=interval[0]<=interval[1]<=sync_interval[1]:
+                    errors.append('background_truth_interval')
+                if any(c['status'] for c in req['completions']): errors.append('background_io_error')
+                billed_bytes[source]=billed_bytes.get(source,0)+sum(c['bytes'] for c in req['completions'])
         if not background: errors.append('no_real_background_writeback')
         if case=='private' and selected!=expected: errors.append('private_billing_coverage')
+        if sum(billed_bytes.values())!=262144 or case=='private' and any(billed_bytes.get(k)!=131072 for k in expected):
+            errors.append('buffered_data_byte_coverage')
         # Two writers of the shared inode need not appear as two blkcg owners.
         # That native writeback choice is exactly why we never infer dirtier.
     return dict(status='FAIL' if errors else 'PASS',errors=errors,writers=writers,
         background_requests=len(background),requests=len(all_requests),selected_billing_roots=[list(v) for v in sorted(selected)],
+        billed_completed_bytes=[dict(container=list(k),bytes=v) for k,v in sorted(billed_bytes.items())],
         dirtying_actor_link='UNOBSERVED',inode_request_link='UNOBSERVED',blocking_container=None,
         scope='buffered writes and native background bio billing, not per-inode or causal attribution')
