@@ -71,6 +71,8 @@ def episode(rows):
         elif phase==6:
             terminal=now; uncertainty['merged_into_unobserved_survivor']+=1
             if issued is not None: problems['merge_while_issued']+=1
+            if queued is not None:
+                queue_intervals.append([queued,now]); queued=None
         elif phase==7:
             remapped=True; uncertainty['remapped_request']+=1
     if len(devices)>1 or len(queues)>1: uncertainty['route_changed']+=1
@@ -150,6 +152,14 @@ def analyze(record,raw):
     if excluded: quality.update(status='FAIL',defects=quality['defects']+list(excluded))
     if quality['status']!='PASS' or scope['status']!='PASS':
         requests=[]; tags=[]; provenance['issue_sources']=[]; provenance['merge_transfers']=[]
+    else:
+        victims={tuple(link['victim']):link for link in provenance['merge_transfers']
+                 if link['state']=='OBSERVED_TRANSFER'}
+        for req in requests:
+            link=victims.get((req['request'],req['episode_ns']))
+            if link:
+                req['merge_survivor']=link['survivor']
+                req['uncertainty'].pop('merged_into_unobserved_survivor',None)
     return dict(schema='cis-block-report-v1',boot_id=record.get('boot_id'),session_id=record.get('session_id'),
         quality=quality,scope_audit=scope,requests=requests,tag_waits=tags,provenance=provenance,
         tag_coverage='AVAILABLE' if 'block_tag' in record.get('inventory',{}).get('program_names',[]) else 'HISTORICAL_NOT_RECORDED',

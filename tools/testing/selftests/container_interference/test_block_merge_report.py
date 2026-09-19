@@ -112,3 +112,8 @@ class MergeReport(unittest.TestCase):
     def test_empty_flush_needs_no_bio_snapshot(self):
         self.check([self.h.row(10,1,remaining=0,bio=0),self.h.row(20,3,remaining=0,bio=0),
                     self.h.row(30,5,remaining=0,completed=0,bio=0)])
+
+    def test_merge_while_inflight_rejected(self):
+        rows=[self.h.row(10,1),self.h.row(15,3),self.meta('BLOCK_BIO',15)]
+        rows+=self.appended()[1:]
+        self.check(rows,'FAIL')

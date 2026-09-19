@@ -86,7 +86,7 @@ static blk_status_t cis_queue_rq(struct blk_mq_hw_ctx *hctx,
 	blk_mq_start_request(rq);
 	if (!cmd->requeued)
 		atomic64_inc(&requests);
-	if ((!blk_rq_bytes(rq) || blk_rq_bytes(rq) > (test_mode == 3 ? CIS_MERGE_MAX * 4096 : 4096)) ||
+	if ((test_mode == 3 ? (!blk_rq_bytes(rq) || blk_rq_bytes(rq) > CIS_MERGE_MAX * 4096) : blk_rq_bytes(rq) != 4096) ||
 	    offset > CIS_BYTES - blk_rq_bytes(rq) ||
 	    (req_op(rq) != REQ_OP_READ && req_op(rq) != REQ_OP_WRITE)) {
 		atomic64_inc(&errors);

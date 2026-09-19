@@ -52,7 +52,8 @@ def analyze_provenance(record, raw, episodes):
                     row['bytes'] > row['remaining']):
                 errors['bio_snapshot_schema'] += 1; continue
             snapshots[(key, row['sample_time_ns'])].append(row)
-    result = []; transfers = []; linked_victims = set()
+    result = []; transfers = []; linked_victims = set(); by_survivor = defaultdict(list)
+    for row in links: by_survivor[(row['request'],row['episode_ns'])].append(row)
     for (key, now), rows in sorted(snapshots.items()):
         rows.sort(key=lambda r: r['index'])
         issue = [r for r in episodes[key] if r['phase'] == 3 and r['sample_time_ns'] == now]
@@ -77,14 +78,14 @@ def analyze_provenance(record, raw, episodes):
             source_semantics='bio_blkcg_at_issue_not_exclusive_owner', blocking_container=None))
     if supported:
         for key, rows in episodes.items():
-            ledger = None; route_unknown = False
-            merged = [r for r in links if (r['request'], r['episode_ns']) == key]
+            ledger = None; route_unknown = False; issued = False
+            merged = by_survivor[key]
             events = [(r['sample_time_ns'], 0, r) for r in rows]
             events += [(r['sample_time_ns'], 1, r) for r in merged]
             if len({t for t, _, _ in events}) != len(events): errors['ambiguous_merge_order'] += 1
             for now, is_link, row in sorted(events, key=lambda r: (r[0], r[1])):
                 if is_link:
-                    if (ledger is None or row['queue'] != rows[0]['queue'] or
+                    if (ledger is None or issued or row['queue'] != rows[0]['queue'] or
                             not route_unknown and ledger != row['before_bytes']):
                         errors['merge_byte_ledger'] += 1
                     ledger = row['before_bytes'] + row['added_bytes']
@@ -107,10 +108,12 @@ def analyze_provenance(record, raw, episodes):
                 phase = row['phase']
                 if phase == 1: ledger = row['remaining']
                 elif phase == 7: route_unknown = True
+                elif phase == 4: issued = False
                 elif phase in (3, 5, 6):
                     if not route_unknown and row['remaining'] != ledger: errors['request_byte_ledger'] += 1
                     if phase == 3 and row['remaining'] and (key, now) not in snapshots:
                         errors['missing_issue_bios'] += 1
+                    if phase == 3: issued = True
                     if phase == 5: ledger = row['remaining'] - row['completed']
                     if phase == 6 or phase == 5 and not ledger: ledger = None
     return dict(coverage='BOUNDED_ISSUE_SNAPSHOT' if supported else 'HISTORICAL_NOT_RECORDED',
