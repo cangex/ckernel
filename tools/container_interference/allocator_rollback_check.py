@@ -22,6 +22,8 @@ def check_case(case,window,logs,report=None,identities=None,require_releases=Tru
         if len(pids)!=1 or not pids[0] or [r.get('index') for r in rows]!=list(range(4)):
             errors.append('truth_count_'+str(actor)); continue
         if [r.get('action') for r in rows]!=[1,2,2,3]: errors.append('truth_actions_'+str(actor))
+        if any(a.get('end_ns',0)>b.get('begin_ns',0) for a,b in zip(rows,rows[1:])):
+            errors.append('truth_order_'+str(actor))
         addresses={r.get('cache_address') for r in rows}
         if len(addresses)!=1 or None in addresses or 0 in addresses: errors.append('cache_identity_'+str(actor))
         caches.append(addresses)
@@ -42,12 +44,14 @@ def check_case(case,window,logs,report=None,identities=None,require_releases=Tru
             if index in (1,2):
                 populated=[o for o in objects if o]
                 if (len(set(populated))!=len(populated) or r.get('populated')!=len(populated) or
+                        objects!=populated+[0]*(4-len(populated)) or
                         (armed and (r.get('returned')!=0 or not 0<len(populated)<4)) or
                         (not armed and (r.get('returned')!=4 or len(populated)!=4))):
                     errors.append('truth_result_%d_%d'%(actor,index))
             elif (r.get('returned') or r.get('populated') or not objects[0] or
                   index==0 and (not objects[1] or objects[0]==objects[1]) or
-                  index==3 and objects[0]!=rows[0].get('object0')):
+                  index==0 and any(objects[2:]) or
+                  index==3 and (objects[0]!=rows[0].get('object0') or any(objects[1:]))):
                 errors.append('truth_seed_%d_%d'%(actor,index))
             if report is None or actor: continue
             group=[c for c in calls if r['begin_ns']<=c['interval_ns'][0]<c['interval_ns'][1]<=r['end_ns']]
@@ -56,6 +60,10 @@ def check_case(case,window,logs,report=None,identities=None,require_releases=Tru
             matched.extend(group)
             if index==0:
                 if sorted(c['object_address'] for c in group)!=sorted(objects[:2]): errors.append('seed_objects')
+                if any(c['cache_address']!=r['cache_address'] or c['sample_shift']!=0 or
+                       c['operation']!='single' or c['requested']!=1 or c['returned_count']!=1 or
+                       c['rolled_back_count'] or c['result']['status']!='RETURNED' for c in group):
+                    errors.append('seed_source')
                 continue
             if not group: continue
             c=group[0]; expected=set(o for o in objects if o)

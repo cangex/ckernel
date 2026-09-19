@@ -25,7 +25,7 @@ class RollbackTruth(unittest.TestCase):
                            call_ns=r['begin_ns']+1+j*5,cache_address=100,sample_shift=0,
                            object_address=objects[j] if index==0 else None,
                            operation='single' if index==0 else 'bulk',requested=1 if index==0 else 4,
-                           returned_count=r['returned'],rolled_back_count=1 if armed else 0,
+                           returned_count=1 if index==0 else r['returned'],rolled_back_count=1 if armed else 0,
                            object_samples=[dict(object=o) for o in objects if o],
                            result=dict(status='FAILED' if armed else 'RETURNED',
                                        failure_region='bulk_rollback' if armed else None,cause='UNKNOWN' if armed else None),
@@ -84,6 +84,16 @@ class RollbackTruth(unittest.TestCase):
 
     def test_missing_returned_object(self):
         rows,report=self.example(); report['calls'][3]['object_samples'].pop()
+        self.assertEqual(self.verify(rows,report)['status'],'FAIL')
+
+    def test_nonprefix_and_overlapping_truth(self):
+        rows,report=self.example(); rows[0][1]['object0']=0; rows[0][1]['object1']=11
+        self.assertEqual(self.verify(rows,report)['status'],'FAIL')
+        rows,report=self.example(); rows[0][1]['begin_ns']=1001
+        self.assertEqual(self.verify(rows,report)['status'],'FAIL')
+
+    def test_incorrect_seed_denominator(self):
+        rows,report=self.example(); report['calls'][0]['requested']=4
         self.assertEqual(self.verify(rows,report)['status'],'FAIL')
 
     def test_frozen_opposite_order(self):

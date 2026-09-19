@@ -4,6 +4,11 @@ from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown
 
 
 class CoverageTests(unittest.TestCase):
+    def test_partial_rollback_does_not_replace_prehook_failure(self):
+        self.assertEqual(VERIFIERS['allocator_rollback'],('allocator_vm_check','allocator',dict(rollback=True)))
+        self.assertEqual(VERIFIERS['allocator_failure'],('allocator_vm_check','allocator',dict(failure=True)))
+        self.assertTrue(CONTRACT['allocator']['pending'])
+
     def test_evidence_is_nonempty_bounded_and_cannot_choose_arbitrary_code(self):
         valid=dict(schema='cis-coverage-input-v1',cohorts=[dict(name='block-native',verifier='block',serial='evidence.log',sha256='0'*64)])
         self.assertEqual(len(validate_index(valid)),1)
