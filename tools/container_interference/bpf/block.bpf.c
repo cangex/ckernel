@@ -176,16 +176,16 @@ static __always_inline int block_event(void *ctx, struct request *rq,
 		if (context) return 0;
 		identity(task, &executor);
 		head_origin(BPF_CORE_READ(rq, bio), &e);
-		id = executor; e.admission = 1;
+		id = executor; e.base.reserved = 1;
 		if (!allowed(&id, CIS_DIAG_BLOCK, now)) {
 			/* Billing ancestry admits async work, but never renames its
 			 * submitter to the billed container or to an inferred dirtier. */
 			id.id = e.bio_owner_id; id.generation = e.bio_owner_generation;
 			if (!id.id || e.bio_origin_overdepth || !allowed(&id, CIS_DIAG_BLOCK, now)) return 0;
-			e.admission = 2;
+			e.base.reserved = 2;
 		}
-		e.submitter_id = executor.id; e.submitter_generation = executor.generation;
-		e.submitter_flags = BPF_CORE_READ(task, flags);
+		e.base.ip = executor.id; e.base.weight = executor.generation;
+		e.base.flags = BPF_CORE_READ(task, flags);
 		e.base.id = id.id; e.base.generation = id.generation;
 		e.base.time_ns = now; e.base.sequence_ns = now;
 		e.base.object = object; e.base.tid = bpf_get_current_pid_tgid();

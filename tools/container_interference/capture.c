@@ -177,8 +177,8 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 			v->operation,v->multi_bio,v->context,v->status,(unsigned long long)v->actor_tid,
 			(unsigned long long)v->actor_start,(unsigned long long)v->actor_id,(unsigned long long)v->actor_generation,
 			e->cpu,e->stack_id,(unsigned long long)v->bio_cgroup,(unsigned long long)v->bio_owner_id,
-			(unsigned long long)v->bio_owner_generation,v->bio_bytes,v->bio_origin_overdepth,v->admission,
-			(unsigned long long)v->submitter_id,(unsigned long long)v->submitter_generation,v->submitter_flags);
+			(unsigned long long)v->bio_owner_generation,v->bio_bytes,v->bio_origin_overdepth,e->reserved,
+			(unsigned long long)e->ip,(unsigned long long)e->weight,e->flags);
 		cis_report(ctx,"BLOCK",r,d);return;
 	}
 	if(size>=sizeof(struct cis_net_event) && size<=sizeof(struct cis_net_event)+7 && e->type==CIS_NET_EVENT) {

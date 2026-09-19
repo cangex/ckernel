@@ -89,11 +89,12 @@ struct cis_net_event {
 };
 struct cis_net_service_key { __u64 cookie, skb, tid, task_start; };
 struct cis_block_event {
+	/* BLOCK does not sample IP/weight: base.ip/weight hold the immutable
+	 * submitter id/generation, base.flags its task flags, base.reserved the
+	 * admission kind. Reuse avoids exceeding the BPF caller+callee stack. */
 	struct cis_event base;
 	__u64 queue, bio, submitter_start, actor_id, actor_generation, actor_tid, actor_start;
 	__u64 bio_cgroup, bio_owner_id, bio_owner_generation;
-	__u64 submitter_id, submitter_generation;
-	__u32 admission, submitter_flags;
 	__u32 bio_bytes, bio_origin_overdepth;
 	__u32 phase, dev_major, dev_minor, remaining, completed, operation, multi_bio, context, status, reserved;
 };
