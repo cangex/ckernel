@@ -27,6 +27,22 @@
 static DEFINE_PER_CPU(bool, cis_in_trace);
 static DEFINE_PER_CPU(unsigned long, cis_skipped);
 static DEFINE_PER_CPU(unsigned long, cis_gate_filtered);
+static DEFINE_PER_CPU(unsigned long, cis_rwsem_entries);
+static DEFINE_PER_CPU(unsigned long, cis_rwsem_filtered);
+
+static int cis_rwsem_audit_show(struct seq_file *m, void *unused)
+{
+	int cpu;
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+	seq_puts(m, "version=1\n");
+	for_each_possible_cpu(cpu)
+		seq_printf(m, "cpu=%d entries=%lu filtered=%lu\n", cpu,
+			READ_ONCE(per_cpu(cis_rwsem_entries, cpu)),
+			READ_ONCE(per_cpu(cis_rwsem_filtered, cpu)));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(cis_rwsem_audit);
 
 #ifdef CONFIG_BLOCK
 DECLARE_TRACEPOINT(block_io_start);
@@ -202,7 +218,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=9 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u\n",
+	seq_printf(m, "version=10 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -211,7 +227,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_rq_requeue), CIS_BLOCK_ON(block_rq_complete),
 		   CIS_BLOCK_ON(block_rq_merge), CIS_BLOCK_ON(block_rq_remap),
 		   trace_cis_rwsem_state_enabled(), trace_cis_slublock_state_enabled(),
-		   CIS_BLOCK_ON(block_tag_wait));
+		   CIS_BLOCK_ON(block_tag_wait), cis_rwsem_filter_active());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -230,6 +246,7 @@ static int __init cis_diag_init(void)
 {
 	debugfs_create_file("cis_recursion", 0400, NULL, NULL, &cis_diag_fops);
 	debugfs_create_file("cis_sources", 0400, NULL, NULL, &cis_sources_fops);
+	debugfs_create_file("cis_rwsem_audit", 0400, NULL, NULL, &cis_rwsem_audit_fops);
 #ifdef CONFIG_CIS_OBSERVE_COUNTER
 	debugfs_create_file("cis_counter_audit", 0400, NULL, NULL, &cis_counter_audit_fops);
 #endif
@@ -248,6 +265,12 @@ late_initcall(cis_diag_init);
 void __cis_rwsem_event(void *object, unsigned int phase)
 {
 	preempt_disable_notrace();
+	this_cpu_inc(cis_rwsem_entries);
+	if (!cis_rwsem_filter_allows(object)) {
+		this_cpu_inc(cis_rwsem_filtered);
+		preempt_enable_notrace();
+		return;
+	}
 	if (this_cpu_read(cis_in_trace) || in_interrupt()) {
 		this_cpu_inc(cis_skipped);
 		preempt_enable_notrace();

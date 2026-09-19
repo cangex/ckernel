@@ -17,6 +17,7 @@ from rwsem_report import analyze
 from owner_report import fields
 from joint_costs import snapshot
 from rwsem_joint import PLAN as JOINT_PLAN, roles as joint_roles, verify as verify_joint
+from rwsem_filter_control import run as filter_control
 
 CASES=('writeRead','writeWrite','readers','private','tryFailure','abort','nonOwner','preWindow','reuse','downgrade')
 
@@ -43,7 +44,8 @@ def run(overflow=False, joint=False):
         row=fields(query.stdout)
         if row['slot']!=slot or not row['object']: raise ValueError('fixture selection')
         selected.append(row['object'])
-    plan=dict(schema='cis-rwsem-vm-plan-v1',cases=cases,rounds=3,source=source,window_ms=2000,
+    filter_control(out, selected)
+    plan=dict(schema='cis-rwsem-vm-plan-v1',cases=cases,rounds=3,source=source,window_ms=2000,native_filter='exclusive-lease-v1',
         target_indices=[0,1],registered_roots=4,cpus=[0,1,2,3],hold_ms=200,extended_hold_ms=500,
         eligible_min_overlap_ns=1_000_000,reader_limit=8,selected_objects=selected,off_on_order='OFF_ON,ON_OFF,OFF_ON',
         scope='native public rwsem fixture only; no production or full-kernel coverage claim')

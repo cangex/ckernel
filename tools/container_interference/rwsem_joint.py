@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
 """Frozen ordinary-container population around independently bracketed rwsems."""
-from joint_costs import analyze as cost_analysis
+from joint_costs import analyze as cost_analysis, rwsem_audit_delta
 from joint_vm_check import workload
 
-PLAN = dict(schema='cis-rwsem-joint-v1', registered_roots=4,
+PLAN = dict(schema='cis-rwsem-joint-v2', registered_roots=4,
             targets_by_round=[[0,1],[2,3],[0,3]],
             ordinary_cpus=[0,0,1,1], ordinary_workloads=['file','file','vma','vma'],
             offered_per_actor=1500, period_ns=2_000_000, timeout_ns=100_000_000,
@@ -71,7 +71,16 @@ def verify(plan, state, logs, record, hz):
     if not info['before']['read_end_ns'] < info['start_ns'] < max(w['end_ns'] for w in work) < info['after']['time_ns']:
         raise ValueError('joint accounting boundary')
     resources = cost_analysis(info['before'], info['after'], hz)
+    source = rwsem_audit_delta(info['before']['rwsem_source_audit'],
+                              info['after']['rwsem_source_audit'])
+    if min(source['selected'], *(r['selected'] for r in source['per_cpu'])) < 0:
+        raise ValueError('inconsistent rwsem source audit bookends')
+    if state['enabled'] and (not source['selected'] or not source['filtered']):
+        raise ValueError('native rwsem filter not exercised')
+    if not state['enabled'] and source['entries']:
+        raise ValueError('rwsem source active in OFF case')
     return dict(workload=work, system_cost=resources,
+                native_source=source,
                 scope='fixture and ordinary operations plus controller; not exclusive observer CPU',
                 observer_kernel_cpu_complete=False, observer_memory_complete=False)
 

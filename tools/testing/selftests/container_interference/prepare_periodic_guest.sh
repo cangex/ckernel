@@ -33,6 +33,7 @@ cp "$source/tools/container_interference/"{session-worker,session-residue} "$des
 cp "$source/tools/container_interference/bpf/cis.bpf.o" "$dest/root/profile/"
 cp "$source/tools/container_interference/bpf/"{ip,owner,sched,reclaim,sync,fd,counter,allocator,net,block,rwsem,slub}.bpf.o "$dest/root/profile/"
 cp "$source/tools/testing/selftests/container_interference/periodic_vm.py" "$dest/root/profile/"
+cp "$source/tools/testing/selftests/container_interference/rwsem_filter_control.py" "$dest/root/profile/"
 cp "$source/tools/testing/selftests/container_interference/periodic_vm_init.sh" "$dest/root/init"
 cp "$source/tools/testing/selftests/container_interference/session_launch" "$dest/root/"
 cp "$source/tools/testing/selftests/container_interference/workload" "$dest/root/container-root/"

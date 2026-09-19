@@ -71,15 +71,18 @@ COLLECTORS = {
 
 
 LEGACY_BLOCK = deepcopy(COLLECTORS['block'])
+LEGACY_RWSEM = deepcopy(COLLECTORS['rwsem'])
+COLLECTORS['rwsem']['source_filter'] = 'manual 1..8 administrator-selected addresses; exclusive immutable kernel filter lease before BPF; all actors on selected objects remain visible; target init/attempt opens watches, 1024 events/object; observed init required for E2; eight-reader analysis; pre-window and non-owner use unknown'
 COLLECTORS['block']['programs'].append('block_tag')
 COLLECTORS['block']['maps'].append('tag_pending')
 COLLECTORS['block']['source_filter'] += '; 256 task-start keyed tag-wait episodes before request creation; no inferred tag holder'
 
 
-def contract(name, legacy_block=False):
+def contract(name, legacy_block=False, legacy_rwsem=False):
     if name not in COLLECTORS:
         raise ValueError('unsupported collector')
-    value = deepcopy(LEGACY_BLOCK if legacy_block and name=='block' else COLLECTORS[name])
+    value = deepcopy(LEGACY_BLOCK if legacy_block and name=='block' else
+                     LEGACY_RWSEM if legacy_rwsem and name=='rwsem' else COLLECTORS[name])
     value.update(schema=SCHEMA, name=name, event_abi=1, bundle=name+'.bpf.o',
                  configuration='fixed OLK ARM64 non-RT; runtime capability check required',
                  limits=dict(window_ms=2000, targets=2, registered_roots=4,
@@ -112,6 +115,8 @@ def validate_inventory(name, inventory):
 def validate_record_inventory(record):
     """Historical reads only; live admission always requires the current maps."""
     name=record['collector']; expected=contract(name); inventory=record.get('inventory')
+    if name=='rwsem' and record.get('collector_contract_sha256')==digest(contract(name,legacy_rwsem=True)):
+        expected=contract(name,legacy_rwsem=True)
     if name=='block' and isinstance(inventory,dict) and 'tag_pending' not in inventory.get('map_names',[]):
         expected=contract(name,legacy_block=True)
         if record.get('collector_contract_sha256')!=digest(expected):

@@ -11,6 +11,12 @@ enum cis_rwsem_phase {
 	CIS_RW_DOWNGRADE_BEGIN, CIS_RW_DOWNGRADE_END,
 	CIS_RW_READ_TRY, CIS_RW_WRITE_TRY, CIS_RW_TRY_FAILED,
 };
+#ifdef CONFIG_CIS_OBSERVE
+bool cis_rwsem_filter_active(void);
+bool cis_rwsem_filter_allows(void *object);
+int cis_rwsem_observe_register(void);
+void cis_rwsem_observe_unregister(void);
+#endif
 #if defined(CONFIG_CIS_OBSERVE) && !defined(CONFIG_PREEMPT_RT)
 #include <trace/events/cis.h>
 void __cis_rwsem_event(void *object, unsigned int phase);

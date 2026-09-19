@@ -5,7 +5,7 @@ import time
 
 
 def expected_fields(version, collector):
-    if version not in ('1', '2', '3', '4', '5', '6', '7', '8', '9'):
+    if version not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10'):
         raise ValueError('unsupported source-switch version')
     v = int(version)
     if v < {'counter':2, 'allocator':3, 'net':5, 'block':6, 'rwsem':7, 'slub':8}.get(collector, 1):
@@ -21,6 +21,7 @@ def expected_fields(version, collector):
     if v >= 7: result['rwsem'] = str(int(collector=='rwsem'))
     if v >= 8: result['slub'] = str(int(collector=='slub'))
     if v >= 9: result['block_tag'] = str(int(collector=='block'))
+    if v >= 10: result['rwsem_filter'] = str(int(collector=='rwsem'))
     return result
 
 

@@ -10,6 +10,8 @@ from pathlib import Path
 from collector_audit import audit
 from explain import explain, within_window
 from owner_report import fields
+from collector_manifest import contract
+from periodic_plan import digest
 
 MAX_READERS = 8
 
@@ -117,6 +119,8 @@ def reconstruct(rows, known, stacks):
 def analyze(record, raw):
     if record.get('collector')!='rwsem': raise ValueError('rwsem collector required')
     base=explain(record,raw); scope=audit(record,raw); rows=[]; stacks={}; defects=[]; readback=[]
+    source_readback=[]; source_closed=[]
+    native_filter=record.get('collector_contract_sha256')==digest(contract('rwsem'))
     selected=record.get('selected_objects')
     if selected is not None and (not isinstance(selected,list) or not 1<=len(selected)<=8 or
         any(type(v) is not int or not 0<v<2**64 or v%8 for v in selected) or len(set(selected))!=len(selected)):
@@ -128,6 +132,8 @@ def analyze(record, raw):
     for line in raw.splitlines():
         item=json.loads(line); d=fields(item.get('detail',''))
         if item.get('kind')=='rwsem_selection': readback.append(d)
+        if item.get('kind')=='rwsem_source_filter': source_readback.append(d)
+        if item.get('kind')=='rwsem_source_filter_closed': source_closed.append(d)
         if item.get('kind')=='stack_symbols' and ' leaf_to_root=' in item.get('detail',''):
             stacks[d['stack_id']]=item['detail'].split(' leaf_to_root=',1)[1].split('>')
         if item.get('kind')!='RWSEM': continue
@@ -141,6 +147,10 @@ def analyze(record, raw):
         rows.append(d)
     if selected is not None and readback!=[dict(index=i,count=len(selected),object=v,readback=1) for i,v in enumerate(selected)]:
         defects.append('rwsem_selection_readback')
+    if native_filter and (selected is None or
+        source_readback!=[dict(index=i,count=len(selected),object=v,readback=1,lease=1) for i,v in enumerate(selected)] or
+        source_closed!=[dict(lease=0,close_after_detach=1)]):
+        defects.append('rwsem_native_filter_lease')
     maps=scope['counters'].get('owner_map_updates',{})
     if any(maps.get(k) for k in ('watch_failed','attempt_failed')): defects.append('rwsem_watch_or_event_capacity')
     objects=[]

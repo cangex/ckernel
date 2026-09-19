@@ -18,8 +18,50 @@ def snapshot(root, roots):
         roots=[{name:(p/name).read_text() for name in CGROUP_FILES} for p in roots],
         management={name:(root/'management'/name).read_text() for name in CGROUP_FILES},
         kthreads=kernel_threads())
+    audit = Path('/sys/kernel/debug/cis_rwsem_audit')
+    if audit.exists():
+        result['rwsem_source_audit'] = audit.read_text()
     result['read_end_ns'] = time.monotonic_ns()
     return result
+
+
+def rwsem_audit(text):
+    lines = text.splitlines()
+    if not lines or lines[0] != 'version=1' or not 1 <= len(lines)-1 <= 4096:
+        raise ValueError('rwsem audit version or capacity')
+    result = {}
+    for line in lines[1:]:
+        fields = line.split()
+        if len(fields) != 3:
+            raise ValueError('rwsem audit fields')
+        row = {}
+        for word in fields:
+            key, value = word.split('=')
+            if key in row or not value.isascii() or not value.isdigit():
+                raise ValueError('rwsem audit counter')
+            row[key] = int(value)
+        if set(row) != {'cpu','entries','filtered'} or row['cpu'] in result:
+            raise ValueError('rwsem audit CPU')
+        result[row['cpu']] = row
+    return result
+
+
+def rwsem_audit_delta(before, after):
+    a, b = rwsem_audit(before), rwsem_audit(after)
+    if a.keys() != b.keys():
+        raise ValueError('rwsem audit topology changed')
+    rows = []
+    for cpu in sorted(a):
+        entries = b[cpu]['entries']-a[cpu]['entries']
+        filtered = b[cpu]['filtered']-a[cpu]['filtered']
+        if min(entries, filtered) < 0:
+            raise ValueError('rwsem audit counter regression')
+        rows.append(dict(cpu=cpu, entries=entries, filtered=filtered,
+                         selected=entries-filtered))
+    return dict(per_cpu=rows, entries=sum(r['entries'] for r in rows),
+                filtered=sum(r['filtered'] for r in rows),
+                selected=sum(r['selected'] for r in rows),
+                limits='sequential per-CPU bookends, not atomic or an exclusive CPU cost; selected may include later recursion rejection')
 
 
 def task_stat(text):

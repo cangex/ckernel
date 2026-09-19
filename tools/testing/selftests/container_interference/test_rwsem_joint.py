@@ -16,7 +16,8 @@ class RwsemJoint(unittest.TestCase):
               dict(log='holder',actor_index=mapping[0],token=1,arguments=dict(mode=1,hold=200)),
               dict(log='waiter',actor_index=mapping[1],token=1,arguments=dict(mode=0,wait_holders=1))]
         info=dict(logs=['a','b','c','d'],exit_codes=[0]*4,start_ns=1000,
-                  before=dict(time_ns=1,read_end_ns=500),after=dict(time_ns=4_000_000_000))
+                  before=dict(time_ns=1,read_end_ns=500,rwsem_source_audit='version=1\ncpu=0 entries=0 filtered=0\n'),
+                  after=dict(time_ns=4_000_000_000,rwsem_source_audit='version=1\ncpu=0 entries=1000 filtered=990\n'))
         state=dict(round=round_number,case='writeRead',enabled=True,registered=['A','B','C','D'],
                    targets=[['A','B','C','D'][i] for i in mapping[:2]],
                    jobs=jobs,logs=[j['log'] for j in jobs],joint=info)
@@ -33,8 +34,17 @@ class RwsemJoint(unittest.TestCase):
             r=verify(PLAN,state,logs,record,100)
             self.assertEqual(len(r['workload']),4)
             self.assertFalse(r['observer_kernel_cpu_complete'])
+            self.assertEqual(r['native_source']['selected'],10)
             self.assertEqual(roles(round_number)[:2],PLAN['targets_by_round'][round_number])
         self.assertEqual(mock.call_count,3)
+
+    @patch('rwsem_joint.cost_analysis',return_value={})
+    def test_source_counters_required_and_off_must_be_inactive(self,mock):
+        state,logs,record=self.sample(); state['enabled']=False
+        with self.assertRaisesRegex(ValueError,'active in OFF'): verify(PLAN,state,logs,None,100)
+        state,logs,record=self.sample()
+        state['joint']['after']['rwsem_source_audit']='version=1\ncpu=0 entries=10 filtered=0\n'
+        with self.assertRaisesRegex(ValueError,'not exercised'): verify(PLAN,state,logs,record,100)
 
     @patch('rwsem_joint.cost_analysis',return_value={})
     def test_missing_bystander_or_incomplete_window_rejected(self,mock):

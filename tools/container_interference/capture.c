@@ -40,7 +40,33 @@ struct capture {
 	struct cis_bpf_stats *cpu_stats;
 	int possible_cpus;
 	int quiesced, stop_error;
+	int rwsem_filter_fd;
 };
+
+static int prepare_rwsem_filter(struct capture *c)
+{
+	struct cis_context *ctx=c->ctx;
+	char wanted[256], actual[256], detail[128];
+	size_t length=0;
+	unsigned int i;
+	ssize_t got;
+	if(!ctx->selected_object_count || ctx->selected_object_count>8) return -EINVAL;
+	for(i=0;i<ctx->selected_object_count;i++)
+		length+=snprintf(wanted+length,sizeof(wanted)-length,"%s0x%llx",i?" ":"",
+			(unsigned long long)ctx->selected_objects[i]);
+	wanted[length++]='\n';
+	c->rwsem_filter_fd=open("/sys/kernel/debug/cis_rwsem_filter",O_RDWR|O_CLOEXEC);
+	if(c->rwsem_filter_fd<0) return -errno;
+	if(write(c->rwsem_filter_fd,wanted,length)!=(ssize_t)length) return -EIO;
+	got=read(c->rwsem_filter_fd,actual,sizeof(actual));
+	if(got!=(ssize_t)length || memcmp(actual,wanted,length)) return -EIO;
+	for(i=0;i<ctx->selected_object_count;i++) {
+		snprintf(detail,sizeof(detail),"index=%u count=%u object=0x%llx readback=1 lease=1",
+			i,ctx->selected_object_count,(unsigned long long)ctx->selected_objects[i]);
+		cis_report(ctx,"rwsem_source_filter",NULL,detail);
+	}
+	return 0;
+}
 
 static int mapfd(struct capture *c,const char *name)
 {
@@ -474,7 +500,7 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		cis_report(ctx,"capture_failure",NULL,"unsupported_page_size: kernel-memory budget not validated");
 		free(c); return -EOPNOTSUPP;
 	}
-	c->ctx=ctx; ctx->capture=c;
+	c->ctx=ctx; ctx->capture=c; c->rwsem_filter_fd=-1;
 	for(i=0;i<CIS_CPU_CAP;i++) c->perf_fds[i]=-1;
 	if(setrlimit(RLIMIT_MEMLOCK,&limit)) goto fail;
 	stage="object_open";
@@ -517,6 +543,7 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		int fd=mapfd(c,"rwsem_selected");
 		__u8 selected=1, readback=0;
 		stage="rwsem_selection";
+		if(prepare_rwsem_filter(c)) goto fail;
 		if(!ctx->selected_object_count || ctx->selected_object_count>8 || fd<0) goto fail;
 		for(i=0;i<(int)ctx->selected_object_count;i++) {
 			if(bpf_map_update_elem(fd,&ctx->selected_objects[i],&selected,BPF_NOEXIST) ||
@@ -952,6 +979,11 @@ int cis_capture_quiesce(struct cis_context *ctx)
 		int ret=bpf_link__destroy(c->diagnostic_links[i]);
 		if(ret) c->stop_error=ret;
 		c->diagnostic_links[i]=NULL;
+	}
+	if(c->rwsem_filter_fd>=0) {
+		if(close(c->rwsem_filter_fd)) c->stop_error=-errno;
+		c->rwsem_filter_fd=-1;
+		cis_report(ctx,"rwsem_source_filter_closed",NULL,"lease=0 close_after_detach=1");
 	}
 	c->quiesced=1;
 	return c->stop_error;

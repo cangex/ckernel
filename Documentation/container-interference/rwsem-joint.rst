@@ -37,3 +37,26 @@ This is a controlled kernel-API mechanism test under concurrent ordinary
 container operations. It does not establish how frequently real applications
 hit these locks, does not cover every mixed resource, and does not complete
 X7 by itself. Runtime receipt and evidence hashes must be added separately.
+Native source filter revision
+-----------------------------
+
+The first four-container run with tool commit efafc74a7 and kernel 63df60de9
+aborted on ENTRY_RATE_LIMIT: 735326 callbacks, eight emitted rows.  Filtering
+inside BPF did not avoid unselected rwsem callback entry.  This failed run is
+not a successful joint cohort and the entry-rate policy is unchanged.
+
+The new source uses a privileged, exclusive, immutable one-to-eight-address
+lease in debugfs.  A selected address is an equality key, never a dereference
+or a permission credential.  Trace attachment requires the lease; detach then
+close releases it.  Process death closes the FD and RCU protects in-flight
+readers.  A new lease cannot be installed while an old trace attachment remains.
+The native hot path performs bounded comparisons and per-CPU accounting before
+BPF, without a global per-event lock or atomic update.  This still has a native
+entry cost; per-CPU entries and filtered counts are retained separately from
+BPF callbacks and do not measure CPU time.
+
+Joint plan v2 requires these audit bookends and lease-control results, including
+malformed selections, exclusive open, immutable selection, close and killed
+owner cleanup.  Historical rwsem receipts remain readable under their original
+contract, but cannot satisfy the new joint plan.  Runtime status is determined
+from new evidence, not inferred from this implementation description.

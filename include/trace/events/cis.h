@@ -14,6 +14,8 @@ int cis_fd_observe_register(void);
 void cis_fd_observe_unregister(void);
 int cis_slub_observe_register(void);
 void cis_slub_observe_unregister(void);
+int cis_rwsem_observe_register(void);
+void cis_rwsem_observe_unregister(void);
 DECLARE_EVENT_CLASS(cis_net_class,
 	TP_PROTO(const struct cis_net_sample *sample),
 	TP_ARGS(sample),
@@ -145,7 +147,7 @@ TRACE_EVENT_FN(cis_slublock_state,
 		__entry->flags, __entry->skipped),
 	cis_slub_observe_register, cis_slub_observe_unregister
 );
-TRACE_EVENT(cis_rwsem_state,
+TRACE_EVENT_FN(cis_rwsem_state,
 	TP_PROTO(void *object, unsigned int phase, unsigned long skipped),
 	TP_ARGS(object, phase, skipped),
 	TP_STRUCT__entry(
@@ -158,7 +160,8 @@ TRACE_EVENT(cis_rwsem_state,
 		__entry->skipped = skipped;
 	),
 	TP_printk("object=%p phase=%u skipped=%lu",
-		__entry->object, __entry->phase, __entry->skipped)
+		__entry->object, __entry->phase, __entry->skipped),
+	cis_rwsem_observe_register, cis_rwsem_observe_unregister
 );
 #endif
 #include <trace/define_trace.h>

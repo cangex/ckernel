@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0
 import argparse
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -30,6 +31,23 @@ def check(serial, output, joint=False):
     output.mkdir(mode=0o700); errors=[]; states=[]
     selected=[fields(files[prefix+'object-query-%d.log'%i])['object'] for i in (0,1)]
     if plan.get('selected_objects')!=selected or len(set(selected))!=2: errors.append('object_selection')
+    if plan.get('native_filter') == 'exclusive-lease-v1':
+        controls=value('filter-control.json')['cases']
+        rejected={'exclusive_open':errno.EBUSY,'immutable':errno.EBUSY,'child_exclusive_open':errno.EBUSY}
+        rejected.update({k:errno.EINVAL for k in ('whitespace','zero','unaligned','duplicate','too_many','nul','oversize','malformed')})
+        expected=set(rejected)|{'exact_readback','close_clears_selection','killed_owner_clears_selection','reopen_after_kill'}
+        if len(controls)!=len(expected) or {c['case'] for c in controls}!=expected:
+            errors.append('native_filter_control_population')
+        for control in controls:
+            if control.get('status')!='PASS': errors.append('native_filter_control_failure')
+            case=control['case']
+            if case in rejected and control.get('errno')!=rejected[case]: errors.append('native_filter_errno_'+case)
+            if case=='exact_readback' and control.get('objects')!=selected: errors.append('native_filter_readback')
+            if case in ('close_clears_selection','killed_owner_clears_selection'):
+                validate(control['sources'],None,0,2**64-1)
+            if case=='killed_owner_clears_selection' and control.get('exit_code')!=-9: errors.append('native_filter_kill')
+    elif joint:
+        errors.append('native_filter_control_missing')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_RWSEM_FIXTURE_UNLOAD=0' not in text.splitlines(): errors.append('guest_cleanup')
     if any(v in text for v in ('Oops:','Kernel panic','BUG: KASAN:','WARNING: CPU:')): errors.append('kernel_warning')
     if result['source']!=plan['source'] or any(plan['source'][k]!=permit['source'][k] for k in SOURCE_KEYS): errors.append('source_binding')
