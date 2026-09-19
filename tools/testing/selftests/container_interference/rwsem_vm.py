@@ -96,7 +96,7 @@ def run(overflow=False):
                         reset_slots(); holder=start('holder',0,mode=1,hold=500); time.sleep(.08)
                         if holder.poll() is not None: raise RuntimeError('pre-window holder absent')
                     if enabled:
-                        sid=request('start',collector='rwsem',targets=targets,nonce=label,window_ms=2000)['session_id']
+                        sid=request('start',collector='rwsem',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
                         window=wait(sid,'window')['window']; active=observe('rwsem')
                     else: active=observe(None)
                     if case!='preWindow': reset_slots()

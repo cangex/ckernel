@@ -34,7 +34,7 @@ def check(serial, output):
         logs={name:files[prefix+name] for name in state['logs']}; report=None; record=None
         if e:
             sid=state['session_id']; record=value('records/'+sid+'.json')
-            if record['collector']!='rwsem' or record['nonce']!=label or record['targets']!=state['targets']: errors.append('capture_binding_'+label)
+            if record['collector']!='rwsem' or record['nonce']!=label.replace('-','') or record['targets']!=state['targets']: errors.append('capture_binding_'+label)
             if any(record.get(k)!=plan['source'][k] for k in SOURCE_KEYS): errors.append('record_source_'+label)
             report=analyze(record,(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode())
             if not record.get('objects_absent'): errors.append('collector_cleanup_'+label)
