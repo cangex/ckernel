@@ -22,6 +22,16 @@ def encode(rows):
 
 
 class UnifiedReport(unittest.TestCase):
+    def test_background_billing_is_visible_without_fabricated_dirtier(self):
+        f=test_block_report.BlockReport()
+        result=analyze(f.record(),encode(f.async_rows(submitter_start=0,actor_start=0)))
+        self.assertEqual(result['quality']['status'],'PASS',result)
+        r=result['relations'][0]
+        self.assertEqual(r['affected_actor'][:2],[0,0]); self.assertFalse(r['participants'])
+        self.assertEqual(r['details']['selected_container'],[1,1])
+        self.assertIsNone(r['details']['initial_dirtier']); self.assertIsNone(r['details']['inode_owner'])
+        self.assertIn('按bio计费容器',markdown(result)); self.assertIn('启动代次未知',markdown(result))
+
     def test_block_sources_are_not_misreported_as_holders(self):
         f=test_block_merge_report.MergeReport(); f.setUp()
         result=analyze(f.record(),encode(f.appended()))

@@ -54,7 +54,8 @@ disks. It never formats a host block device. The guest mounts those disks;
 each registered container writes 128KiB through normal buffered pwrite. The
 unregistered manager invokes syncfs, which causes real wb_workfn background
 submission. An OFF/block, private/shared, three-round alternating schedule
-is frozen before execution. Private uses different files/devices; shared uses
+is frozen before execution. Two virtual devices may still share the host
+backend; they are not evidence of physical isolation. Private uses different files/devices; shared uses
 disjoint pages of the same inode. No synthetic Profile event is generated.
 
 Workload logs independently record inode/device, bytes and time. After sync

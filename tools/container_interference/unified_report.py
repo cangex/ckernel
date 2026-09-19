@@ -156,6 +156,8 @@ def markdown(report):
         if r['relation']=='block_request_episode':
             if r['details'].get('admission')=='bio_billing_root':
                 lines.append('  按bio计费容器 %s 纳入窗口；实际提交者保留为上述任务，不等于最初写文件的容器，inode归属仍未知。'%r['details']['selected_container'])
+            if r['details'].get('submitter_lifetime')=='start_epoch_unknown':
+                lines.append('  提交线程的启动代次未知，不凭TID跨请求拼接线程生命周期。')
             snapshots=r['details'].get('issue_bio_sources',[])
             for snap in snapshots[:4]:
                 lines.append('  下发时剩余 %d 字节；bio计费来源 %s；未知 %d 字节。重排队快照不累加为新请求量。'%(
