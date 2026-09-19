@@ -37,7 +37,12 @@ int maple_context(struct bpf_raw_tracepoint_args *ctx)
 	saved = bpf_map_lookup_elem(&maple_pending, &key);
 	if (!saved) return 0;
 	e = *saved; bpf_map_delete_elem(&maple_pending, &key);
-	if (phase != 2 || !same_window(&e.base, CIS_DIAG_ALLOCATOR, now) ||
+	/* A real allocation may finish after the window. Retire its context and
+	 * expose truncation, rather than calling an expected boundary corruption. */
+	if (!same_window(&e.base, CIS_DIAG_ALLOCATOR, now)) {
+		COUNT(s, expired); return 0;
+	}
+	if (phase != 2 ||
 	    e.base.sequence_ns != BPF_CORE_READ(sample, begin_ns) ||
 	    e.base.object != (u64)BPF_CORE_READ(sample, tree) ||
 	    e.cache != (u64)BPF_CORE_READ(sample, cache) ||

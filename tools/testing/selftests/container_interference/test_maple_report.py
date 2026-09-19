@@ -97,3 +97,15 @@ class MapleReport(unittest.TestCase):
         rendered=markdown(report)
         self.assertIn('Maple目标树',rendered)
         self.assertIn('树地址仅在本次申请内有效',rendered)
+
+    def test_window_boundary_is_not_identity_corruption(self):
+        root=Path(__file__).resolve().parents[4]
+        text=(root/'tools/container_interference/bpf/maple.bpf.h').read_text()
+        retirement=text.split('e = *saved; bpf_map_delete_elem(&maple_pending, &key);',1)[1]
+        boundary=retirement.split('if (!same_window(',1)[1].split('\n\t}',1)[0]
+        self.assertIn('COUNT(s, expired); return 0;',boundary)
+        self.assertNotIn('COUNT(s, rejected)',boundary)
+        # Immutable-field mismatch still rejects; this is not a quality waiver.
+        mismatch=retirement.split('if (phase != 2 ||',1)[1].split('/* Unsampled',1)[0]
+        self.assertIn('e.base.object !=',mismatch)
+        self.assertIn('COUNT(s, rejected)',mismatch)
