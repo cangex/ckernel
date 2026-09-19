@@ -74,3 +74,59 @@ Its failure log remains unchanged. The fix explicitly recognizes and
 records that one launcher line, rejects duplicates or unknown text, and
 compares the module's host task ID with the launcher. It does not discard
 arbitrary errors or reclassify the failed cohort as successful.
+
+New-kernel joint and cleanup receipt
+------------------------------------
+
+``block-tag-joint-runtime-20260920/x7-joint-20260919-233153.log`` has
+SHA256 ``80437b464199742ddab7679883034cfdcd93731aa8d7415f57038f1a49bbb45c``.
+It pins the same kernel/tools as the tag fixture. Four container actors
+completed 198,000 operations over 33 OFF/specialist states, with zero
+errors or timeouts. All 30 captures replayed with accepted evidence
+quality. Maximum CAPTURING process CPU was 35.22407 ms, below the current
+40 ms policy without using the older one-off 40.60 ms exception. Maximum
+combined process RSS was 37,011,456 bytes. This is PASS_SCOPED, not X7
+completion or full observer-memory accounting.
+
+Largest descriptive P99 increase was 6.938470 ms, in round 1, owner
+collector, bystander actor 2. P99 remains record-only by authorization;
+the cause of this increase is NOT established. Do not label it hardware
+noise, claim tail-latency acceptance, or rerun until it disappears.
+The enclosing management cgroup used 11.685--930.491 ms per benchmark;
+this includes preparation, harness, snapshots and reporting, not only
+capture. Snapshot reads reached 48.73327 ms outside the capture interval.
+Whole-VM Slab, KernelStack and PageTables gauge deltas respectively range
+from -335872 to 2596864, -77824 to 81920, and -229376 to 245760 bytes.
+They include business and unrelated background effects and must not be
+summed with process RSS as if they were exclusive observer allocations.
+Full asynchronous kernel CPU/memory attribution remains unknown.
+
+New-kernel control checks passed 16 cases / 14 sessions, a forced-failure
+case / one session, and 16 crash-cleanup cases / 16 sessions. Their serial
+SHA256 values, in that order, are::
+
+  948a2c44c1fe5ee7c13d8d2914702e6ee9569ed842a0324dd14e3652dc776c4a
+  9c3d1cbfd1faea63465b07594dda37b3f42ce7132234e46a19fb403f186947a9
+  58d72354384ce6fd4a0a48e0809387338f1591b1aabddccea9a8691a07066c24
+
+The interrupted crash captures explicitly lack complete scope audits;
+they demonstrate cleanup, not complete diagnostic observations. No host
+kernel was replaced and no older evidence was deleted.
+
+The same new kernel also reran both real block lifecycle fixtures: 12
+OFF/ON states each for requeue and partial completion. Both replayed
+PASS, with 96 captured request episodes per fixture and unchanged byte,
+head-bio provenance and independent device-counter checks. Serial hashes::
+
+  aa16e0dbf4f41995c836cd104e8e5c7d0326822d761ba0a8e480a534671c4a42
+  0880b52fb05bf4543ee21ee79050f676274afedb19ecdecb705e874d1d21d04f
+
+The separate SLUB-selected-cache joint cohort passed six OFF/ON states,
+36,000 operations, zero errors/timeouts, and all three capture replays.
+Serial ``block-tag-slub-joint-runtime-20260920/x7-joint-20260919-234822.log``
+has SHA256
+``cd62a3e1c3a8e713a1aaf63c466a0eb2a96eb184af5306c41994029e21ce7190``.
+Maximum CAPTURING process CPU was 10.99435 ms and RSS was 31,399,936 bytes.
+Largest descriptive P99 increase was 0.25319 ms. This remains a scoped
+ordinary-operation cost check, not positive competition population truth,
+complete background attribution, or production tail-latency acceptance.
