@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 import unittest
-from coverage_matrix import validate_index,CONTRACT,markdown
+from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown
 
 
 class CoverageTests(unittest.TestCase):
@@ -19,3 +19,11 @@ class CoverageTests(unittest.TestCase):
         report=markdown(dict(rows=rows))
         self.assertIn('尚未完成',report)
         self.assertIn('原始日志哈希',report)
+
+    def test_rwsem_and_joint_are_distinct_scoped_evidence(self):
+        self.assertIn('rwsem',VERIFIERS)
+        self.assertIn('joint',VERIFIERS)
+        self.assertIn('集合不保证完整',CONTRACT['rwsem']['participants'])
+        self.assertIn('安静专项不算正例',CONTRACT['joint']['participants'])
+        self.assertTrue(CONTRACT['rwsem']['pending'])
+        self.assertTrue(CONTRACT['joint']['pending'])

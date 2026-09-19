@@ -11,7 +11,11 @@ from pathlib import Path
 CONTRACT={
     'sync': dict(name='泛型spinlock/rwsem线索',collector='sync',
         discovered='已观测慢路径等待、对象地址和调用栈',object='窗口内地址，生命周期未知',
-        participants='仅等待任务；不得推断持有者',pending=['rwsem单写者/有界读者集合闭环','完整对象生命周期']),
+        participants='仅等待任务；不得推断持有者',pending=['任意锁的完整对象生命周期；rwsem专项另列']),
+    'rwsem': dict(name='rwsem有界持有者专项',collector='rwsem',
+        discovered='公共非RT接口的尝试、获取、释放、降级和中止',object='本窗实际初始化事件与对象地址',
+        participants='已观察写者或至多8个读者；集合不保证完整',
+        pending=['窗口前对象仍为E1','non-owner使用和读者溢出不得提升归因','新内核联合成本与故障回归']),
     'fd': dict(name='FD表锁',collector='fd',discovered='已选定files_struct锁路径',
         object='对象地址、RETIRE及新watch边界',participants='观察到的持有/等待任务及容器',
         pending=['固定eligible分母的总体捕获率','密集路径的入口成本']),
@@ -33,6 +37,10 @@ CONTRACT={
     'routing': dict(name='有界专项调度',collector='controller',discovered='真实巡检候选到单槽专项',
         object='配置epoch、目标代次及候选来源会话',participants='按目标轮转，候选不是因果认定',
         pending=['四容器混合来源联合验收']),
+    'joint': dict(name='四容器普通应用联合成本',collector='joint',
+        discovered='OFF/IP/专项的固定轮次、角色切换与等到达率响应',object='逐容器操作窗口、实际采集对象与源码绑定',
+        participants='无完整应用真值时不伪造召回；安静专项不算正例',
+        pending=['新增采集器与新内核回归','各资源强制正反例仍须分别通过','完整后台与内核内存成本']),
     'control': dict(name='加载与清理',collector='controller',discovered='独立采集器加载、共享预算、停止与恢复',
         object='真实程序/map ID及源开关',participants='不作业务竞争归因',pending=['新版本故障矩阵回归'])}
 
@@ -43,7 +51,8 @@ VERIFIERS={
     'allocator_fixture':('allocator_vm_check','allocator',dict(fixture=True)),
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
     'block':('block_vm_check','block',{}), 'routing':('diagnosis_vm_check','routing',{}),
-    'control':('x0_check','control',{})}
+    'control':('x0_check','control',{}), 'rwsem':('rwsem_vm_check','rwsem',{}),
+    'joint':('joint_vm_check','joint',{})}
 
 
 def validate_index(index):
@@ -74,6 +83,8 @@ def replay(index,base,output):
         try:
             if key in ('routing','control'):
                 checked=implementation.check(data.decode())
+            elif key in ('rwsem','joint'):
+                checked=implementation.check(serial,output/row['name'])
             else: checked=implementation.verify(serial,output/row['name'],**options)
             # A logical-lock cohort cannot be relabelled as backlog coverage.
             labels=[r.get('label','') for r in checked.get('states',[])]
@@ -81,7 +92,7 @@ def replay(index,base,output):
                 raise ValueError('backlog cohort required')
             if key=='net' and labels and all(v.startswith('backlog-') for v in labels):
                 raise ValueError('logical ownership cohort required')
-            error=None; passed=checked.get('status')=='PASS' and not checked.get('errors') and not checked.get('defects')
+            error=None; passed=checked.get('status') in ('PASS','PASS_SCOPED') and not checked.get('errors') and not checked.get('defects')
         except (ValueError,KeyError,AssertionError) as exc:
             checked={}; error=type(exc).__name__+': '+str(exc); passed=False
         evidence.append(dict(name=row['name'],capability=key,status='PASS_SCOPED' if passed else 'FAIL',
@@ -94,8 +105,8 @@ def replay(index,base,output):
             cohort_status='FAIL' if any(e['status']=='FAIL' for e in cohort) else 'PASS_SCOPED' if cohort else 'UNVERIFIED',
             evidence=[e['name'] for e in cohort],causal='NOT_ESTABLISHED',production='NOT_ACCEPTED'))
     return dict(schema='cis-coverage-matrix-v1',status='INCOMPLETE',rows=matrix,evidence=evidence,
-        x7_complete=False,remaining_joint=['四容器配额与混合来源','无注入普通应用桥接','统一OFF/IP/专项成本矩阵',
-            '强制保护和故障反例'],
+        x7_complete=False,remaining_joint=['四容器混合来源的独立真值','新内核与新增专项的普通应用及成本回归',
+            '强制保护和故障反例','逐资源最低覆盖合同中的未通过项'],
         interpretation='PASS_SCOPED仅证明对应原始批次及支持范围；不继承为未来版本通过，不将unknown算PASS')
 
 
