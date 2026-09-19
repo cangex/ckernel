@@ -50,6 +50,15 @@ class SlubReport(unittest.TestCase):
         r = [row(1, 3, 1), row(2, 2, 2), row(4, 4, 1, skipped=1), row(6, 3, 2)]
         self.assertEqual(owner.analyze(r)['edges'][0]['level'], 'INCOMPLETE')
 
+    def test_explicit_interrupt_barrier_cannot_bridge_ownership(self):
+        r=[row(1,3,1),row(2,2,2),row(3,7,0,actor_id=0,actor_tid=0,actor_start=0),
+           row(4,4,1),row(5,3,2),row(6,4,2),row(10,3,3),
+           row(11,2,4),row(12,4,3),row(13,3,4)]
+        out=owner.analyze(r)
+        self.assertEqual([(e['waiter'][0],e['holder'][0]) for e in out['edges']],[(4,3)])
+        self.assertEqual(out['slub_context_barriers'],1)
+        self.assertFalse(out['loss_or_recursion_gap'])
+
 
 if __name__ == '__main__':
     unittest.main()

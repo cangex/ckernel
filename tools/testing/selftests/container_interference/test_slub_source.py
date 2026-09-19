@@ -44,5 +44,17 @@ class SlubSource(unittest.TestCase):
         self.assertIn('SEC("raw_tp/cis_slublock_state")', code)
         self.assertIn('CIS_PROFILE == 12 ? key.kind != 4', code)
 
+    def test_interrupt_boundary_does_not_name_current_or_reset_prefix(self):
+        source=(ROOT/'kernel/locking/cis_observe.c').read_text()
+        begin=source.index('void __cis_slub_event('); end=source.index('EXPORT_SYMBOL_GPL(__cis_slub_event)',begin)
+        body=source[begin:end]
+        self.assertIn('if (in_nmi())',body)
+        self.assertIn('if (in_hardirq() || in_serving_softirq())',body)
+        self.assertIn('phase = CIS_ESCAPE',body)
+        bpf=(ROOT/'tools/container_interference/bpf/cis.bpf.c').read_text()
+        self.assertIn('if(!(key.kind==4 && phase==7)) identity(task,&actor)',bpf)
+        self.assertIn('(phase==7 && key.kind!=4)',bpf)
+        self.assertIn('e.base.tid=(key.kind==4 && phase==7)?0:tid',bpf)
+
 
 if __name__ == '__main__': unittest.main()

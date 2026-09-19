@@ -674,12 +674,12 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		if(!s->owner_seen) {s->owner_seen=1;s->owner_skip_base=raw_skipped;}
 		s->owner_skipped=raw_skipped-s->owner_skip_base;
 	}
-	if(!synchronous_context()) return 0;
+	if(!synchronous_context() && !(key.kind==4 && phase==7)) return 0;
 	w=bpf_map_lookup_elem(&watched,&key);
 	if(w && !live_watch(w,now)) { bpf_map_delete_elem(&watched,&key); w=NULL; }
 	if(!w && phase!=2) return 0;
 	if(w && key.kind>=2 && w->events>64 && phase!=1 && phase!=8) return 0;
-	identity(task,&actor);
+	if(!(key.kind==4 && phase==7)) identity(task,&actor);
 	if(phase==2 && allowed(&actor,CIS_DIAG_OWNER,now)) {
 		struct cis_target *t=bpf_map_lookup_elem(&targets,&actor.id);
 		COUNT(s,owner_target_waits);
@@ -714,10 +714,10 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		}
 		e.base.id=w->id;e.base.generation=w->generation;e.base.sequence_ns=w->epoch;
 		e.base.time_ns=now;e.base.type=CIS_OWNER_EVENT;e.base.object=key.object;
-		e.base.cpu=bpf_get_smp_processor_id();e.base.tid=tid;e.base.stack_id=-1;
+		e.base.cpu=bpf_get_smp_processor_id();e.base.tid=(key.kind==4 && phase==7)?0:tid;e.base.stack_id=-1;
 		e.phase=phase;e.resource=key.kind;e.skipped=s?s->owner_skipped:1;
 		e.actor_id=actor.id;e.actor_generation=actor.generation;
-		e.actor_start=BPF_CORE_READ(task,start_boottime);
+		e.actor_start=(key.kind==4 && phase==7)?0:BPF_CORE_READ(task,start_boottime);
 		if(key.kind==4) e.base.ip=ctx->args[4];
 		else e.base.flags=ctx->args[4];
 		if(phase==2 || phase==3 || phase==12) {
@@ -758,7 +758,8 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		}
 		bpf_map_delete_elem(&holders,&key);
 	}
-	if(phase==1 || phase==7 || phase==8) bpf_map_delete_elem(&watched,&key);
+	/* An IRQ barrier must not reopen unlimited prefixes on this SLUB object. */
+	if(phase==1 || (phase==7 && key.kind!=4) || phase==8) bpf_map_delete_elem(&watched,&key);
 	return 0;
 }
 

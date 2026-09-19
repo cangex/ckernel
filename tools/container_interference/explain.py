@@ -82,6 +82,8 @@ def explain(record, raw):
             unknown.append(dict(reason='bounded_owner_prefix', count=owner['bounded_prefix_limits']))
         if owner.get('cache_identity_errors'):
             unknown.append(dict(reason='inconsistent_slub_cache_identity', count=owner['cache_identity_errors']))
+        if owner.get('slub_context_barriers'):
+            unknown.append(dict(reason='slub_interrupt_actor_unknown', count=owner['slub_context_barriers']))
     for event in events:
         if event.get('kind') in ('E1', 'incomplete'):
             item = classify(event)

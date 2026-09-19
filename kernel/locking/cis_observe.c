@@ -408,14 +408,17 @@ void __cis_slub_event(const char *name, void *cache, void *object,
 {
 	if (!name || strcmp(name, alloc_cache))
 		return;
-	/* Interrupt executor identity is not a container holder. Propagate a gap
-	 * instead of attributing asynchronous work to the interrupted task. */
-	if (in_interrupt()) {
+	/* An observed interrupt boundary is not lost data. Invalidate the
+	 * object's open intervals without naming the interrupted task as owner.
+	 * NMI/reentrant callbacks still report a genuine gap and fail closed. */
+	if (in_nmi()) {
 		preempt_disable_notrace();
 		this_cpu_inc(cis_skipped);
 		preempt_enable_notrace();
 		return;
 	}
+	if (in_hardirq() || in_serving_softirq())
+		phase = CIS_ESCAPE;
 	__cis_lock_event(object, CIS_SLUBLOCK, phase, NULL, (unsigned long)cache);
 }
 EXPORT_SYMBOL_GPL(__cis_slub_event);

@@ -152,6 +152,7 @@ def analyze(records):
             "lifecycle_boundaries": resets, "loss_or_recursion_gap": loss,
             "unsupported_resource_events": unsupported_resources,
             "cache_identity_errors": cache_identity_errors,
+            "slub_context_barriers": sum(e['resource']==4 and e['phase']==7 for es in groups.values() for e in es),
             "scope": "explicit non-RT mutex, lockref fallback, configured files_struct and boot-selected SLUB node-lock adapters; missing intervals unknown"}
 
 

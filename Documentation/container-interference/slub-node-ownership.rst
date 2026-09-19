@@ -106,3 +106,25 @@ a completed matrix.  Joint plan v3 uses separate, freshly booted common
 (30 captures) and SLUB (3 captures) cohorts with their own fixed OFF/ON pairs.
 It does not raise the permit limit, renew a running permit automatically, or
 reuse successful pieces of the failed batch to claim completion.
+
+Interrupt boundaries
+--------------------
+
+The first ordinary SLUB joint cohort (Image above, tools ``c20eb001a``) was
+rejected in all three captures: the source counted unsupported interrupt
+contexts as recursion loss.  Its 36,000 ordinary operations completed without
+timeouts, but this is NOT a complete observation result.  Preserve serial
+``5cdd91d551cc6dfc4930eb89a70ad1f5aecd06bdd09721621eefad08b120e2e8``.
+
+The updated source emits an explicit object ESCAPE barrier for hardirq or
+active softirq operations instead of attributing them to interrupted current.
+The BPF event clears actor/task identity and open ownership, while keeping the
+same bounded-prefix counter: repeated interrupts cannot reopen unlimited
+prefixes.  Offline joins cannot bridge the barrier.  Synchronous intervals
+whose acquisition and release are both observed can still be interpreted on
+either side.  NMI/reentrant loss still fails closed.  Disabling bottom halves
+in task context alone is not labelled interrupt execution.
+
+This changes the representation of observed unsupported context, not a loss
+threshold.  It does not identify an IRQ's business owner or certify complete
+asynchronous coverage.  Updated build and runtime validation are required.
