@@ -48,3 +48,35 @@ These are retrospective fixture-call results, not a new runtime result,
 population interference recall, or an application-wide loss estimate.
 All omissions remain reported. Full eligible contention-edge truth and
 dense-source observer acceptance are still unverified.
+
+Predeclared new-kernel receipt
+-----------------------------
+
+Kernel ``63df60de9`` and guest tools ``96095cd5b`` ran the unchanged basic
+and lifecycle workloads, with the independent population plan written
+before captures. Both cohorts passed raw re-verification, including the
+stricter per-task population checks added afterward. Serial files::
+
+  fd-population-basic-runtime-20260920/x1-fd-20260920-000234.log
+  85bd8ef2c40e87ee0ef7a4fd139779806eb5caeb91486da24dbce8cc39599ca6
+  fd-population-lifecycle-runtime-20260920/x1-fd-20260920-000456.log
+  f645c002b00da6ad95fb083f39bb6fa860a6a9e954884fefbda9856943cbbb29
+
+Nine basic and six lifecycle captures completed. Across three fixed
+rounds, shared-table thread calls each yielded 42 complete / 2 partial /
+20 absent out of 64 independent calls. Private tables yielded 32/32
+complete calls and no holder-waiter edges. Cross-container CLONE_FILES
+yielded 21 complete / 1 partial / 10 absent of 32 calls. Reuse yielded
+150 complete / 8 partial / 98 absent of 256, with six verified address
+retirements/reuses per round. All measured fixture edges were independently
+matched: 40 per shared-thread round, 20 per cross-container round and
+128 per reuse round. Native syscall operations still have no independently
+enumerated lock-call denominator. These numbers are not wait-recall rates.
+
+Maximum CAPTURING combined process CPU was 11.78443 ms (basic) and
+10.70294 ms (lifecycle), against the unchanged 40 ms policy. Peak process
+RSS was respectively 36,777,984 and 35,860,480 bytes. These do not include
+complete kernel/asynchronous memory or isolate all callback CPU costs.
+No runtime prefix was enlarged, no missed call was removed, and no
+percent-recall acceptance threshold was declared passed. Current limitations
+are now quantified rather than hidden behind matched-edge precision.
