@@ -1,9 +1,29 @@
 # SPDX-License-Identifier: GPL-2.0
 import unittest
-from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown
+import hashlib
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
+from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown,replay
 
 
 class CoverageTests(unittest.TestCase):
+    def test_capacity_protection_does_not_certify_logical_ownership(self):
+        checked=dict(status='PASS',states=[dict(label='capacity-net%d'%i,
+            result=dict(native_cookies=80,quality=dict(status='FAIL'))) for i in range(3)])
+        module=SimpleNamespace(__file__=__file__,verify=lambda *a,**k:checked)
+        with tempfile.TemporaryDirectory() as tmp,patch('coverage_matrix.importlib.import_module',return_value=module):
+            base=Path(tmp);(base/'serial.log').write_bytes(b'fixture')
+            row=dict(name='capacity',serial='serial.log',sha256=hashlib.sha256(b'fixture').hexdigest())
+            def check(kind,name):
+                index=dict(schema='cis-coverage-input-v1',cohorts=[dict(row,verifier=kind)])
+                return replay(index,base,base/name)['evidence'][0]['status']
+            self.assertEqual(check('net_capacity','guard'),'PASS_SCOPED')
+            self.assertEqual(check('net','not-owner'),'FAIL')
+            checked['states'][0]['result']['quality']['status']='PASS'
+            self.assertEqual(check('net_capacity','not-rejected'),'FAIL')
+
     def test_offline_evidence_capacity_is_not_live_admission_capacity(self):
         rows=[dict(name='case-%d'%i,verifier='block_merge',serial='evidence.log',sha256='0'*64) for i in range(64)]
         self.assertEqual(len(validate_index(dict(schema='cis-coverage-input-v1',cohorts=rows))),64)
