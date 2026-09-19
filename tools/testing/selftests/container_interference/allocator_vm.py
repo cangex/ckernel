@@ -18,7 +18,12 @@ from allocator_fixture_check import CASES, check_case, case_order
 ORDER=['off0','allocator0','allocator1','off1','off2','allocator2']
 
 
-def run(fixture=False,placement=False,failure=False,rollback=False):
+def run(fixture=False,placement=False,failure=False,rollback=False,maple=False):
+    if maple and any((fixture,placement,failure,rollback)): raise ValueError('separate Maple cohort')
+    if maple:
+        from maple_fixture_check import check_work
+    else:
+        from allocator_vm_check import check_work
     if sum((placement,failure,rollback))>1: raise ValueError('separate cohorts required')
     if placement or failure or rollback: fixture=True
     verify_case=check_case
@@ -31,10 +36,11 @@ def run(fixture=False,placement=False,failure=False,rollback=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     selection = [('alloc_shift','0'),('alloc_cache','cis_alloc_test')] if fixture else [('alloc_shift','6'),('alloc_cache','maple_node')]
+    if maple: selection=[('alloc_shift','0'),('alloc_cache','maple_node')]
     for name,value in selection:
         if Path('/sys/module/cis_observe/parameters/'+name).read_text().strip()!=value:
             raise ValueError('frozen source selection')
-    out=Path('/tmp/allocator-rollback-evidence' if rollback else '/tmp/allocator-failure-evidence' if failure else '/tmp/allocator-placement-evidence' if placement else '/tmp/allocator-fixture-evidence' if fixture else '/tmp/allocator-evidence'); out.mkdir(mode=0o700)
+    out=Path('/tmp/maple-evidence' if maple else '/tmp/allocator-rollback-evidence' if rollback else '/tmp/allocator-failure-evidence' if failure else '/tmp/allocator-placement-evidence' if placement else '/tmp/allocator-fixture-evidence' if fixture else '/tmp/allocator-evidence'); out.mkdir(mode=0o700)
     root=Path('/sys/fs/cgroup/cis-allocator'); root.mkdir()
     (root/'management').mkdir(); (root/'management/cgroup.procs').write_text(str(os.getpid()))
     (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
@@ -45,8 +51,12 @@ def run(fixture=False,placement=False,failure=False,rollback=False):
     source=source_manifest(args,env['boot_id']); permit=prototype_admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
     plan=dict(order=ORDER,operations=8,split_regions=128,roots=2,sample_shift=6,cache='maple_node',
+              maple_context=True,
               window_ms=2000,cpu=[0,1],management_cpu=7,memory_max_bytes=64<<20,
               scope='ordinary VMA split/merge bridge; no independent allocator-event recall or cost acceptance')
+    if maple:
+        plan.update(maple_fixture=True,sample_shift=0,operations=8,cycles=2,entries=32,
+            scope='private destination trees, native duplication, reinitialization and migrated/RCU release')
     if fixture:
         plan = dict(order=case_order(),cases=list(CASES),rounds=3,operations=4,roots=2,
             sample_shift=0,cache='cis_alloc_test',release_tracking=True,window_ms=2000,cpu=[0,1],free_migration_cpu=[2,3],
@@ -148,6 +158,7 @@ def run(fixture=False,placement=False,failure=False,rollback=False):
                 if placement: command=['/allocator_placement_workload',str(start),str(nodes(case)[i])]
                 if failure: command=['/allocator_failure_workload',case,str(start),str(i)]
                 if rollback: command=['/allocator_rollback_workload',case,str(start),str(i)]
+                if maple: command=['/maple_workload',str(start),str(i)]
                 child=subprocess.Popen(['/session_launch',str(p),str(i),*command],stdout=handle,stderr=handle)
                 children.append(child); running.append(child)
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()
@@ -158,7 +169,7 @@ def run(fixture=False,placement=False,failure=False,rollback=False):
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 report=analyze(record,(out/'records'/(sid+'.jsonl')).read_bytes())
                 identities = [record['root_identities'][t] for t in targets]
-                result=verify_case(case,window,logs,report,identities,require_releases=True) if fixture else check_work(window,logs,report,identities)
+                result=verify_case(case,window,logs,report,identities,require_releases=True) if fixture else check_work(window,logs,report,identities,**({} if maple else {'require_maple':True}))
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else:

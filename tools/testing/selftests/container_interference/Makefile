@@ -12,6 +12,7 @@ TEST_GEN_PROGS += slub_workload
 TEST_GEN_PROGS += tag_workload
 TEST_GEN_PROGS += block_merge_workload
 TEST_GEN_PROGS += writeback_workload
+TEST_GEN_PROGS += maple_workload
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
