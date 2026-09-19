@@ -10,6 +10,7 @@ TEST_GEN_PROGS += allocator_failure_workload
 TEST_GEN_PROGS += allocator_rollback_workload
 TEST_GEN_PROGS += slub_workload
 TEST_GEN_PROGS += tag_workload
+TEST_GEN_PROGS += block_merge_workload
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
@@ -26,6 +27,7 @@ net_workload net_backlog_workload: net_fixture/uapi.h
 rwsem_workload: rwsem_fixture/uapi.h
 slub_workload: slub_fixture/uapi.h
 tag_workload: tag_fixture/abi.h
+block_merge_workload: block_fixture/merge_uapi.h
 run_tests: all
 	./logic_test
 	./budget_test

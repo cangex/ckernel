@@ -2,12 +2,12 @@
 import re
 
 CASES=('shared','private')
-FIXTURES=('requeue','partial')
+FIXTURES=('requeue','partial','merge')
 COUNTERS=('requests','requeues','partials','completions','errors')
 
 
 def check_counters(mode,before,after):
-    if mode not in FIXTURES or set(before)!=set(COUNTERS) or set(after)!=set(COUNTERS):
+    if mode not in ('requeue','partial') or set(before)!=set(COUNTERS) or set(after)!=set(COUNTERS):
         raise ValueError('fixture counter schema')
     if any(type(v) is not int or v<0 for row in (before,after) for v in row.values()):
         raise ValueError('fixture counter type')

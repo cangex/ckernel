@@ -14,6 +14,7 @@ from session import source_manifest
 from source_switches import observe
 from block_report import analyze
 from block_fixture_check import case_order,check_case,check_counters,COUNTERS,FIXTURES
+import block_merge_check
 
 
 def run(fixture=None):
@@ -39,6 +40,9 @@ def run(fixture=None):
             scope='disposable memory device request lifecycle; not production device contention')
         selected=int(Path('/sys/module/cis_block_fixture/parameters/test_mode').read_text())
         if selected!=FIXTURES.index(fixture)+1: raise ValueError('fixture module configuration')
+    if fixture=='merge':
+        plan.update(order=block_merge_check.case_order(),direct=False,operations_per_actor=None,
+                    mechanism='native submit_bio with plug; independent driver request truth',cases=block_merge_check.CASES)
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     fds=[]
     for path in plan['devices']:
@@ -83,7 +87,7 @@ def run(fixture=None):
         targets=[request('register',path=str(p))['target'] for p in roots]
         for label in plan['order']:
             case=label.split('-')[0]; collecting='-block' in label; sid=None
-            selected=[fds[0],fds[0] if case=='shared' else fds[1]]
+            selected=[fds[0],fds[0] if case=='shared' or fixture=='merge' else fds[1]]
             if collecting:
                 sid=request('start',collector='block',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
                 window=wait(sid,'window')['window']; active=observe('block')
@@ -93,7 +97,11 @@ def run(fixture=None):
             before=snapshot(); running=[]
             for i,p in enumerate(roots):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle); fd=selected[i]
-                child=subprocess.Popen(['/session_launch',str(p),str(i),'/block_workload',str(fd),str(i),str(start)],
+                command=['/session_launch',str(p),str(i),'/block_workload',str(fd),str(i),str(start)]
+                if fixture=='merge':
+                    command[3]='/block_merge_workload'
+                    command += [str(v) for v in block_merge_check.CASES[case]]
+                child=subprocess.Popen(command,
                     stdout=handle,stderr=handle,pass_fds=(fd,))
                 children.append(child); running.append(child)
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()
@@ -107,8 +115,12 @@ def run(fixture=None):
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            result=check_case(case,window,logs,report,identities,verify_blkcg=True,fixture=fixture)
-            if fixture:
+            result=(block_merge_check.check_case(case,window,logs,report,identities) if fixture=='merge' else
+                    check_case(case,window,logs,report,identities,verify_blkcg=True,fixture=fixture))
+            if fixture=='merge':
+                result['fixture_counters']=block_merge_check.check_counters(before['fixture_counters'],after['fixture_counters'],result)
+                if result['fixture_counters']['status']!='PASS': result['status']='FAIL'
+            elif fixture:
                 result['fixture_counters']=check_counters(fixture,before['fixture_counters'],after['fixture_counters'])
                 if result['fixture_counters']['status']!='PASS': result['status']='FAIL'
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
