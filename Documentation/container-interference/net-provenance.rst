@@ -59,3 +59,16 @@ The maximum combined process CAPTURING CPU was 9.32107ms; process RSS peak
 34,152,448 bytes. These are not total source callback CPU, kernel memory,
 production tail-latency acceptance or population-wide attribution recall.
 The original 40ms capture gate was retained, without the old 40.60ms exception.
+
+Protocol-boundary follow-up
+---------------------------
+
+The earlier source selected family/protocol but did not check socket type.
+The new creation boundary exposes why IPPROTO_TCP alone is insufficient:
+an AF_INET SOCK_RAW Socket may also use protocol 6. The source now additionally
+requires SOCK_STREAM. This narrows the source to its already declared contract,
+not a workload or lock-algorithm change. The origin fixture adds real raw TCP
+and UDP creations per actor inside the window, obtains independent cookies,
+and rejects any corresponding TCP observation. No packet is sent by these
+negative sockets. This new boundary requires its own rebuilt-kernel run;
+the preceding origin cohort did not exercise these protocol negatives.

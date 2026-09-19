@@ -55,6 +55,25 @@ static int create_tcp(void)
 	return fd;
 }
 
+static int excluded_sockets(void)
+{
+	const int types[]={SOCK_RAW,SOCK_DGRAM};
+	const int protocols[]={IPPROTO_TCP,IPPROTO_UDP};
+	unsigned int i;
+	for(i=0;i<2;i++) {
+		uint64_t begin=now_ns(),end,cookie;
+		int fd=socket(AF_INET,types[i]|SOCK_CLOEXEC,protocols[i]);
+		end=now_ns();
+		if(fd<0) return -1;
+		if(socket_cookie(fd,&cookie)) { close(fd); return -1; }
+		printf("CIS_NET_EXCLUDED type=%d protocol=%d cookie=%llu begin_ns=%llu end_ns=%llu\n",
+			types[i],protocols[i],(unsigned long long)cookie,(unsigned long long)begin,(unsigned long long)end);
+		fflush(stdout);
+		if(close(fd)) return -1;
+	}
+	return 0;
+}
+
 static int accept_tcp(void)
 {
 	struct ifreq interface={0};
@@ -136,6 +155,7 @@ int main(int argc, char **argv)
 	swap = !strcmp(argv[4], "switch") || rights;
 	if (fd < 0 || actor > 1 || (strcmp(argv[4], "shared") && strcmp(argv[4], "private") && !swap)) return 2;
 	if (argc == 6 && (!rights || start<300000000ULL || until(start-300000000ULL))) return 5;
+	if (argc == 6 && excluded_sockets()) { perror("excluded sockets"); return 9; }
 	if(rights) { fd=transfer_socket(fd,actor,private_socket,!strcmp(argv[4],"rightsAccept")); if(fd<0) { perror("SCM_RIGHTS"); return 8; } }
 	if (getsockopt(fd, SOL_SOCKET, SO_COOKIE, &cookie, &length) || length != sizeof(cookie) || !cookie) return 3;
 	device = open("/dev/cis-net-test", O_RDWR | O_CLOEXEC);

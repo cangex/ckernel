@@ -33,6 +33,7 @@ class NetSource(unittest.TestCase):
         self.assertIn('cis_net_event(sk, NULL, CIS_CN_FAST_ACQUIRED)',source)
         native=(root/'kernel/locking/cis_observe.c').read_text().split('void __cis_net_event(',1)[1]
         self.assertIn('phase == CIS_CN_QUEUED || phase == CIS_CN_SERVICE_BEGIN',native)
+        self.assertIn('sk->sk_protocol != IPPROTO_TCP || sk->sk_type != SOCK_STREAM',native)
         self.assertNotIn('phase == CIS_CN_SERVICE_END)',native)
 
     def test_irq_actor_not_current_and_release_drops_observed_lifetime(self):

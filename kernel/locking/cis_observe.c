@@ -652,7 +652,7 @@ void __cis_net_event(struct sock *sk, struct sk_buff *skb, u32 phase)
 	preempt_disable();
 	this_cpu_inc(cis_net_entries);
 	if ((sk->sk_family != AF_INET && sk->sk_family != AF_INET6) ||
-	    sk->sk_protocol != IPPROTO_TCP)
+	    sk->sk_protocol != IPPROTO_TCP || sk->sk_type != SOCK_STREAM)
 		goto out;
 	this_cpu_inc(cis_net_eligible);
 	if (in_nmi() || this_cpu_read(cis_in_trace)) {

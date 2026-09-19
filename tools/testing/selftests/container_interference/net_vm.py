@@ -61,7 +61,8 @@ def run(backlog=False,rights=False,origin=False):
     if origin:
         plan.update(origin_validation=True,creator_attribution='native post-create task distinct from acceptor and transferred user',
             origin_case='rightsAccept transfers a passive accepted child, not the listening socket',
-            origin_prepare_before_lock_ms=300,lock_start_after_window_ms=500)
+            origin_prepare_before_lock_ms=300,lock_start_after_window_ms=500,
+            excluded_protocols=['raw_tcp','udp'])
         (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-net.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -131,7 +132,7 @@ def run(backlog=False,rights=False,origin=False):
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            result=check_case(case,window,logs,report,identities,require_origin=origin)
+            result=check_case(case,window,logs,report,identities,require_origin=origin,require_protocol_negative=origin)
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,source_before=source_before,source_after=snapshot(),exit_codes=codes,result=result)
             evidence['source_delta']=delta(evidence['source_before'],evidence['source_after'])

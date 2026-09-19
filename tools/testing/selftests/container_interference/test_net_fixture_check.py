@@ -94,3 +94,16 @@ class NetFixture(unittest.TestCase):
         args=self.fixture('shared')
         args[2]['sockets'][0]['creation_observation']=dict(actor=[1,1,100,1],time_ns=5,evidence='E2')
         self.assertIn('pre_window_origin_fabricated',check_case('shared',*args)['errors'])
+
+    def test_raw_tcp_is_not_a_tcp_stream_and_udp_is_excluded(self):
+        args=self.origin_fixture()
+        for actor,log in enumerate(args[1]):
+            for i,(kind,proto) in enumerate(((3,6),(2,17))):
+                log+='\nCIS_NET_EXCLUDED type=%d protocol=%d cookie=%d begin_ns=1 end_ns=9'%(kind,proto,100+actor*2+i)
+            args[1][actor]=log
+        result=check_case('rightsShared',*args,require_origin=True,require_protocol_negative=True)
+        self.assertEqual(result['status'],'PASS',result)
+        self.assertEqual(len(result['excluded_protocol_cookies']),4)
+        args[2]['sockets'].append(dict(cookie=100,waits=[],creation_observation=None,accept_observation=None))
+        self.assertIn('unsupported_socket_captured',
+            check_case('rightsShared',*args,require_origin=True,require_protocol_negative=True)['errors'])

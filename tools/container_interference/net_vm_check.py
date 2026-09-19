@@ -25,6 +25,8 @@ def verify(serial,output):
     if (cases==ORIGIN_CASES)!=(plan.get('origin_validation') is True): errors.append('origin_plan')
     if cases==ORIGIN_CASES and (plan.get('origin_prepare_before_lock_ms')!=300 or
                                plan.get('lock_start_after_window_ms')!=500): errors.append('origin_barrier_plan')
+    if 'excluded_protocols' in plan and plan['excluded_protocols']!=['raw_tcp','udp']:
+        errors.append('protocol_negative_plan')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_NET_FIXTURE_UNLOAD=0' not in text.splitlines():
         errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
@@ -50,7 +52,8 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        result=check_case(label.split('-')[0],ev['window'],logs,report,identities,require_origin=cases==ORIGIN_CASES)
+        result=check_case(label.split('-')[0],ev['window'],logs,report,identities,require_origin=cases==ORIGIN_CASES,
+                          require_protocol_negative='excluded_protocols' in plan)
         source=delta(ev['source_before'],ev['source_after'])
         if '-off' in label and any(source['totals'].values()): errors.append('off_not_quiet_'+label)
         if '-net' in label and (not source['totals']['selected'] or source['totals']['skipped']): errors.append('source_gap_'+label)

@@ -12,7 +12,7 @@ def case_order(cases=CASES):
             for mode in (('off','net') if r%2==0 else ('net','off'))]
 
 
-def check_case(case,window,logs,report=None,identities=None,require_origin=False):
+def check_case(case,window,logs,report=None,identities=None,require_origin=False,require_protocol_negative=False):
     if case=='backlog':
         from net_backlog_check import check_backlog
         return check_backlog(window,logs,report,identities)
@@ -55,6 +55,19 @@ def check_case(case,window,logs,report=None,identities=None,require_origin=False
             if any(not group or any(r['cookie']!=x.get('used_cookie') for r in group) for group,x in zip(truth,(a,b))):
                 errors.append('used_socket_not_transferred_selection')
     origin_matches=[]; origin_expected=0
+    excluded_cookies=[]
+    if require_protocol_negative:
+        for log in logs:
+            unsupported=[fields(line) for line in log.splitlines() if line.startswith('CIS_NET_EXCLUDED ')]
+            if [(r.get('type'),r.get('protocol')) for r in unsupported]!=[(3,6),(2,17)]:
+                errors.append('protocol_negative_truth')
+            for row in unsupported:
+                if (not row.get('cookie') or row['cookie'] in excluded_cookies or
+                    not window['start_ns']<=row.get('begin_ns',-1)<=row.get('end_ns',-1)<=window['end_ns']):
+                    errors.append('protocol_negative_identity_or_window')
+                excluded_cookies.append(row.get('cookie'))
+        if report is not None and any(s['cookie'] in excluded_cookies for s in report['sockets']):
+            errors.append('unsupported_socket_captured')
     if require_origin:
         origins=[[fields(line) for line in log.splitlines() if line.startswith('CIS_NET_ORIGIN ')] for log in logs]
         expected=[[1,1,2],[]] if case=='rightsAccept' else [[1],[1] if private else []]
@@ -111,5 +124,6 @@ def check_case(case,window,logs,report=None,identities=None,require_origin=False
                            for holder,waiter,_,h,w in eligible): errors.append('false_cross_container_relation')
     return dict(status='FAIL' if errors else 'PASS',errors=errors,eligible=len(eligible),captured=len(matches),
                 origin_expected=origin_expected,origin_captured=len(origin_matches),origin_matches=origin_matches,
+                excluded_protocol_cookies=excluded_cookies,
                 recall=len(matches)/len(eligible) if eligible and report is not None else None,
                 truth=truth,matches=matches,scope='bounded native TCP logical lock fixture, not production coverage')
