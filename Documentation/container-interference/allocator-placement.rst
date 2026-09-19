@@ -36,3 +36,23 @@ guarantees. No sampling algorithm or resource-management algorithm changes.
 Use allocator_vm_check.py --placement on the raw serial. A guest exit code
 alone does not establish placement or attribution correctness. Runtime
 results must be recorded separately from this test design.
+
+Runtime evidence, 20260919
+-------------------------
+
+The frozen kernel is 394341472bc161e537d8f103f1042a4b1cf80d88, using the Image,
+config and BTF digests in allocator-callback-evidence-20260919.rst. Tools and
+the separately rebuilt VM fixture are f431dc186. The cohort is
+``/root/cis-20260916-232524/evidence/allocator-placement-20260919`` and raw serial
+``x3-placement-20260919-115122.log`` has SHA256
+``3793f4409f6a142c36e6e9b19c281d21f3a577a740391a5de0623b263ac52279``.
+
+Independent replay passed all 18 states / 9 diagnostic captures. All 144
+eligible allocations and 144 release entries matched the independent truth,
+including requested node, physical page node and effective cpuset boundaries.
+Maximum combined-process CAPTURING CPU was 18.08263 ms; maximum combined RSS
+was 36,315,136 bytes. These are not complete kernel overhead measures.
+The unmodified lifetime cohort also replays successfully with this reader.
+
+This is PASS_SCOPED for allowed placement, not X3/X7 completion, hardware NUMA
+performance, concurrent cpuset updates, pressure or disallowed-node behavior.
