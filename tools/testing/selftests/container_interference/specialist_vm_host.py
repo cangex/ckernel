@@ -144,6 +144,6 @@ if __name__ == '__main__':
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
     parser.add_argument('--source-diagnostics', action='store_true',
                         help='bounded recursion troubleshooting; not a performance cohort')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x5-block','x6-diagnosis','x7-joint'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x5-block','x5-fixture','x6-diagnosis','x7-joint'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     raise SystemExit(run(parser.parse_args()))

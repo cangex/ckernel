@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from block_fixture_check import case_order,check_case
+from block_fixture_check import case_order,check_case,check_counters,FIXTURES
 from block_report import analyze
 from prototype_admission import SOURCE_KEYS
 from session_check import extract
@@ -16,11 +16,15 @@ def verify(serial,output):
     raw=serial.read_bytes(); text=raw.decode(); files=extract(text); prefix='/tmp/block-evidence/'
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
+    fixture=plan.get('fixture')
+    if fixture is not None and fixture not in FIXTURES: raise ValueError('fixture mode')
     output.mkdir(mode=0o700); errors=[]; states=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_BLOCK_DEVICE_UNLOAD=0' not in text.splitlines(): errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
     if (plan.get('order')!=case_order() or plan.get('rounds')!=3 or plan.get('operations_per_actor')!=8 or
             plan.get('device_bytes')!=16<<20 or plan.get('direct') is not True or plan.get('bytes_per_io')!=4096): errors.append('frozen_plan')
+    if plan.get('devices')!=(['/dev/cisblock0','/dev/cisblock1'] if fixture else ['/dev/vda','/dev/vdb']):
+        errors.append('device_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
     for label in case_order():
         ev=value(label+'-evidence.json'); logs=[files[prefix+label+'-%d.log'%i] for i in range(2)]
@@ -43,12 +47,15 @@ def verify(serial,output):
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
         result=check_case(label.split('-')[0],ev['window'],logs,report,identities,
-            verify_blkcg=plan.get('verify_head_bio_blkcg',False))
+            verify_blkcg=plan.get('verify_head_bio_blkcg',False),fixture=fixture)
+        if fixture:
+            result['fixture_counters']=check_counters(fixture,ev['before']['fixture_counters'],ev['after']['fixture_counters'])
+            if result['fixture_counters']['status']!='PASS': errors.append('fixture_counters_'+label)
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
         serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native direct I/O request lifecycle; no unique blocker inference',
-        performance_certification='NOT_ACCEPTED')
+        fixture=fixture,performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result
 
 

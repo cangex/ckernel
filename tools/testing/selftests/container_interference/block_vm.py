@@ -13,10 +13,11 @@ import prototype_admission
 from session import source_manifest
 from source_switches import observe
 from block_report import analyze
-from block_fixture_check import case_order,check_case
+from block_fixture_check import case_order,check_case,check_counters,COUNTERS,FIXTURES
 
 
-def run():
+def run(fixture=None):
+    if fixture is not None and fixture not in FIXTURES: raise ValueError('fixture mode')
     os.umask(0o077); os.sched_setaffinity(0,{7})
     if not Path('/cis-disposable-vm').exists(): raise PermissionError('disposable VM only')
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
@@ -33,6 +34,11 @@ def run():
     plan=dict(order=case_order(),rounds=3,operations_per_actor=8,window_ms=2000,cpu=[0,1],management_cpu=7,
         devices=['/dev/vda','/dev/vdb'],device_bytes=16<<20,direct=True,bytes_per_io=4096,verify_head_bio_blkcg=True,
         scope='two disposable virtual disks, independent offsets; shared device is not a proven blocker')
+    if fixture:
+        plan.update(fixture=fixture,devices=['/dev/cisblock0','/dev/cisblock1'],
+            scope='disposable memory device request lifecycle; not production device contention')
+        selected=int(Path('/sys/module/cis_block_fixture/parameters/test_mode').read_text())
+        if selected!=FIXTURES.index(fixture)+1: raise ValueError('fixture module configuration')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     fds=[]
     for path in plan['devices']:
@@ -63,8 +69,11 @@ def run():
         raise TimeoutError(sid)
 
     def snapshot():
-        return dict(time_ns=time.monotonic_ns(),proc_stat=Path('/proc/stat').read_text(),memory=Path('/proc/meminfo').read_text(),
+        result=dict(time_ns=time.monotonic_ns(),proc_stat=Path('/proc/stat').read_text(),memory=Path('/proc/meminfo').read_text(),
             roots=[{name:(p/name).read_text() for name in ('cpu.stat','memory.current','memory.peak','memory.events')} for p in roots])
+        if fixture:
+            result['fixture_counters']={k:int((Path('/sys/module/cis_block_fixture/parameters')/k).read_text()) for k in COUNTERS}
+        return result
 
     try:
         deadline=time.monotonic()+10
@@ -98,7 +107,10 @@ def run():
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            result=check_case(case,window,logs,report,identities,verify_blkcg=True)
+            result=check_case(case,window,logs,report,identities,verify_blkcg=True,fixture=fixture)
+            if fixture:
+                result['fixture_counters']=check_counters(fixture,before['fixture_counters'],after['fixture_counters'])
+                if result['fixture_counters']['status']!='PASS': result['status']='FAIL'
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,exit_codes=codes,result=result)
             (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2)); results.append(evidence)
@@ -118,4 +130,7 @@ def run():
         requests.close(); log.close()
 
 
-if __name__=='__main__': run()
+if __name__=='__main__':
+    import argparse
+    parser=argparse.ArgumentParser(); parser.add_argument('--fixture',choices=FIXTURES)
+    run(parser.parse_args().fixture)

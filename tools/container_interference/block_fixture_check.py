@@ -2,6 +2,19 @@
 import re
 
 CASES=('shared','private')
+FIXTURES=('requeue','partial')
+COUNTERS=('requests','requeues','partials','completions','errors')
+
+
+def check_counters(mode,before,after):
+    if mode not in FIXTURES or set(before)!=set(COUNTERS) or set(after)!=set(COUNTERS):
+        raise ValueError('fixture counter schema')
+    if any(type(v) is not int or v<0 for row in (before,after) for v in row.values()):
+        raise ValueError('fixture counter type')
+    delta={key:after[key]-before[key] for key in COUNTERS}
+    expected=dict(requests=16,requeues=16 if mode=='requeue' else 0,
+        partials=16 if mode=='partial' else 0,completions=16,errors=0)
+    return dict(status='PASS' if delta==expected else 'FAIL',delta=delta,expected=expected)
 
 
 def case_order():
@@ -9,7 +22,8 @@ def case_order():
             for case in CASES for mode in (('off','block') if round_%2 else ('block','off'))]
 
 
-def check_case(case,window,logs,report=None,identities=None,verify_blkcg=False):
+def check_case(case,window,logs,report=None,identities=None,verify_blkcg=False,fixture=None):
+    if fixture is not None and fixture not in FIXTURES: raise ValueError('fixture mode')
     errors=[]; actors=[]; devices=[]; operations=[]; associated=[]
     for role,text in enumerate(logs):
         pids=re.findall(r'CIS_SESSION_CONTAINER host_pid=(\d+)',text)
@@ -44,6 +58,13 @@ def check_case(case,window,logs,report=None,identities=None,verify_blkcg=False):
                     errors.append('request_call_pair_%d'%role)
                 else:
                     associated.append([matches[0]['request'],matches[0]['episode_ns']])
+                    if fixture:
+                        phases=[v['end'] for v in matches[0]['service_intervals']]
+                        sizes=[v['bytes'] for v in matches[0]['completions']]
+                        expected_phases=['requeue','data_completion'] if fixture=='requeue' else ['data_completion']
+                        expected_sizes=[2048,2048] if fixture=='partial' else [4096]
+                        if phases!=expected_phases or sizes!=expected_sizes:
+                            errors.append('fixture_request_phases_%d'%role)
                     if verify_blkcg and (not matches[0].get('head_bio_origins') or any(
                         origin['registered_container']!=[identity['id'],identity['generation']] or
                         origin['cgroup_id']!=identity['id'] or origin['bytes']!=4096 or origin['ancestor_overdepth']
