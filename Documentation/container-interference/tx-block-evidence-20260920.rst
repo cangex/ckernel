@@ -100,3 +100,33 @@ net_vm_check.py, block_vm_check.py, x0_check.py and joint_vm_check.py.
 The pinned 60-cohort development index retains one failed joint cohort. X7 is
 not complete. Remaining work includes mixed-source independent truth, wider
 negative coverage, unresolved asynchronous costs and the fresh Maple regression.
+
+Fresh expiry regression
+-----------------------
+
+Tools ec95c76ee and the unchanged immutable 7897796a3 Image passed Linux tests
+579+21+7, ordinary allocator six states, control 16 cases/14 sessions,
+crash/recovery 16 cases, and joint 33 states. The new joint serial SHA256 is
+7d7a69cdb299b0acfc0b7ded6698a6c8858b2e6e13f94432f360a81cc4a49fef.
+The ordinary allocator serial SHA256 is
+fc95764b3631e1090a1c0a003b58b5e78ec59ee6aae725508c4c2ee2001d36f1.
+Joint max CAPTURING process CPU was 27.933820ms, total process CPU through
+reporting 172.679110ms, combined RSS 38490112 bytes. Target paired P99 changes
+ranged from -474730 to +91140ns, bystander changes from -474790 to +358430ns;
+there were no workload timeouts. This fixed-offered-load run is not a saturated
+throughput comparison or a tail-latency pass gate.
+
+An allocator capture reported two expired boundaries without rejection. This
+supports correct truncation handling, but the aggregate counter does not uniquely
+identify the rejection in the previous failed cohort. That cohort is not altered.
+Guest perf reported interrupt-duration adaptation, lowering its maximum sample
+rate to 30000. These messages are retained. Passing the functional audit does not
+prove zero PMU disturbance or complete callback/background CPU accounting.
+
+The 61-cohort development ledger includes the earlier failure and the block
+lifecycle cohort. A separate 64-entry current index substitutes the new joint
+record and adds the three fresh regressions; the historical failed index and
+raw records remain available. The hard 64-entry reader limit is unchanged.
+Fresh evidence is under maple-expiry-ec95c76ee-20260920 on the host and
+maple-expiry-evidence-20260920 locally. X7 remains incomplete, especially for
+mixed-source independent truth, wider lifecycle negatives and cost uncertainty.
