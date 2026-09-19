@@ -97,3 +97,23 @@ class TagReport(unittest.TestCase):
                      [self.row(10,1,alloc_flags=1),self.row(20,4,alloc_flags=1)],
                      [self.row(10,1,actor_id=2),self.row(20,4)]):
             self.assertEqual(self.run_rows(rows)['quality']['status'],'FAIL')
+
+    def test_later_cgroup_change_is_not_reassigned_to_new_container(self):
+        report=self.run_rows([self.row(10,1),self.row(20,2),
+                              self.row(30,3,actor_id=2),self.row(40,4,actor_id=2)])
+        self.assertEqual(report['quality']['status'],'PASS',report)
+        tag=report['tag_waits'][0]
+        self.assertEqual(tag['container'],[1,1])
+        self.assertEqual(len(tag['identity_changes']),2)
+        self.assertIsNone(tag['blocking_container'])
+
+    def test_task_reuse_does_not_join_overlapping_lifetimes(self):
+        first=[self.row(10,1),self.row(40,4)]
+        overlap=[self.row(20,1,episode_ns=20),self.row(50,4,episode_ns=20)]
+        self.assertEqual(self.run_rows(first+overlap)['quality']['status'],'FAIL')
+        other=[self.row(20,1,episode_ns=20,task_start=2),self.row(50,4,episode_ns=20,task_start=2)]
+        self.assertEqual(self.run_rows(first+other)['quality']['status'],'FAIL')
+        reused=[self.row(50,1,episode_ns=50,task_start=2),self.row(60,4,episode_ns=50,task_start=2)]
+        result=self.run_rows(first+reused)
+        self.assertEqual(result['quality']['status'],'PASS',result)
+        self.assertEqual(len(result['tag_waits']),2)

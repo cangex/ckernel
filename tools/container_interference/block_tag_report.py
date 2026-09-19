@@ -101,7 +101,7 @@ def tag_episodes(record, raw):
         defects.update(bad)
         if bad:
             continue
-        lifetimes[key[:2]].append([key[2], terminal])
+        lifetimes[key[0]].append([key[2], terminal])
         results.append(dict(tid=key[0], task_start=key[1], episode_ns=key[2],
             container=list(first['owner']), queue=first['queue'], device=[first['dev_major'], first['dev_minor']],
             interval_ns=[key[2], terminal], sleep_intervals=sleeps,
