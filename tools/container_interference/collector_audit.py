@@ -3,14 +3,14 @@
 import json
 import re
 
-from collector_manifest import validate_inventory
+from collector_manifest import validate_record_inventory
 
 
 def audit(record, raw):
     if len(raw) > 16 << 20: raise ValueError('session audit input limit')
     contract = None
     errors = []
-    try: contract = validate_inventory(record['collector'], record.get('inventory'))
+    try: contract = validate_record_inventory(record)
     except (ValueError, KeyError) as error: errors.append(str(error))
     names = {'terminal_counters': ('received', 'emitted', 'rejected'),
              'terminal_coverage': ('lost', 'owner_skipped'),

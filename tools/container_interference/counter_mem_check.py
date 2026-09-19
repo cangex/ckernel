@@ -8,7 +8,7 @@ from pathlib import Path
 import statistics
 
 from session_check import extract
-from collector_manifest import validate_inventory
+from collector_manifest import validate_record_inventory
 from collector_audit import audit
 from counter_report import analyze
 from counter_bridge_check import check
@@ -82,7 +82,7 @@ def verify(serial, output):
             record=matching[0]; sid=str(record['session_id'])
             if record['window']!=ev['window'] or sid!=str(ev['session_id']): errors.append('window_binding_'+label)
             if any(record.get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('session_source_'+label)
-            validate_inventory('counter',record['inventory'])
+            validate_record_inventory(record)
             raw=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode()
             report=analyze(record,raw); scope=audit(record,raw)
             bridge=check(record,report,logs,[record['root_identities'][k] for k in ev['targets']])

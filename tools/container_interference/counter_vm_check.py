@@ -8,7 +8,7 @@ from pathlib import Path
 
 from session_check import extract
 from prototype_admission import SOURCE_KEYS
-from collector_manifest import validate_inventory
+from collector_manifest import validate_record_inventory
 from collector_audit import audit
 from counter_report import analyze
 from counter_check import check
@@ -58,7 +58,7 @@ def verify(serial, output):
         label=row['nonce']; sid=str(row['session_id'])
         if label not in expected or not sid.isascii() or not sid.isdigit(): raise ValueError('case identity')
         if any(row.get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('session_source_'+label)
-        validate_inventory('counter',row['inventory'])
+        validate_record_inventory(row)
         capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode()
         report=analyze(row,capture); scope=audit(row,capture)
         kind=label[:-1]; logs=[files[prefix+label+'-%d.log'%i] for i in range(2)]

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from collector_audit import audit as scope_audit
-from collector_manifest import validate_inventory
+from collector_manifest import validate_record_inventory
 from session_check import extract
 from prototype_admission import SOURCE_KEYS
 from source_switches import validate as validate_sources
@@ -96,7 +96,7 @@ def check(text):
             if len(rows) != 1 or rows[0].get('result') != 'COMPLETE' or rows[0].get('objects_absent') is not True:
                 defects.append('load_'+collector)
             else:
-                validate_inventory(collector, rows[0]['inventory'])
+                validate_record_inventory(rows[0])
                 if plan.get('source_switches'):
                     marker=next(item for item in checks if item['name']=='selective_load_'+collector)
                     validate_sources(marker['active_sources'],collector,rows[0]['window']['start_ns'],rows[0]['window']['end_ns'])
@@ -119,7 +119,7 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser(); parser.add_argument('serial'); parser.add_argument('output')
     args=parser.parse_args()
     if Path(args.serial).stat().st_size > 128 << 20: raise ValueError('serial input limit')
-    result=check(Path(args.serial).read_text())
+    result=check(Path(args.serial).read_bytes().decode())
     with Path(args.output).open('x') as stream: json.dump(result, stream, indent=2)
     print(json.dumps({key:result[key] for key in ('status','defects','expected_cases','sessions','scope_audit_complete')}))
     raise SystemExit(0 if result['status']=='PASS' else 1)

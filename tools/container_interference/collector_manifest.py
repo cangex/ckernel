@@ -95,6 +95,21 @@ def object_path(anchor, name):
 
 def validate_inventory(name, inventory):
     expected = contract(name)
+    return _validate_inventory(expected,inventory)
+
+
+def validate_record_inventory(record):
+    """Historical reads only; live admission always requires the current maps."""
+    name=record['collector']; expected=contract(name); inventory=record.get('inventory')
+    legacy=COMMON_MAPS+['targets','stacks','pending']
+    if (name=='counter' and isinstance(inventory,dict) and set(inventory.get('map_names',[]))==set(legacy)):
+        expected['maps']=legacy
+        if record.get('selected_objects') or record.get('collector_contract_sha256')!=digest(expected):
+            raise ValueError('unproven historical counter contract')
+    return _validate_inventory(expected,inventory)
+
+
+def _validate_inventory(expected, inventory):
     if not isinstance(inventory, dict) or inventory.get('schema') != 'cis-loaded-inventory-v1':
         raise ValueError('versioned loaded inventory required')
     if inventory.get('profile') != expected['profile']:
@@ -107,6 +122,6 @@ def validate_inventory(name, inventory):
                 or any(type(x) is not int or x <= 0 for x in ids) or len(ids) != len(set(ids))):
             raise ValueError('unexpected loaded ' + kind)
     cpus = inventory.get('ip_perf_cpus')
-    if type(cpus) is not int or not 0 <= cpus <= 512 or (cpus > 0) != (name == 'ip'):
+    if type(cpus) is not int or not 0 <= cpus <= 512 or (cpus > 0) != (expected['name'] == 'ip'):
         raise ValueError('unexpected PMU collector activity')
     return digest(expected)
