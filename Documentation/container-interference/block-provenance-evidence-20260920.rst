@@ -53,6 +53,23 @@ the capture-phase number is not an end-to-end observer CPU claim.  Native
 probe work charged to business tasks, asynchronous backend work and complete
 kernel memory remain outside a total-cost certification.
 
+Current-kernel ordinary-workload regression
+------------------------------------------
+
+The fixed four-container OFF/IP/ten-specialist cohort, using tools 64d7c474e,
+passed its scoped replay: 33 states, 198000 successful operations and no errors
+or timeouts.  Maximum combined CAPTURING process CPU was 26.806670 ms and peak
+combined RSS was 38150144 bytes.  Target and bystander P99 increases reached
+0.017260 ms and 0.189770 ms respectively.  The worst completed-throughput changes
+were -0.019556% and -0.031349% at the fixed offered load.  These are not saturated
+throughput or production latency acceptance.  Tail latency stays record-only;
+earlier cohorts' larger variations remain in the evidence index.
+
+The ordinary workload has no independent complete contention truth.  Quiet
+adapters do not gain positive coverage, and the rwsem/SLUB-specific joint truth
+cohorts remain separately identified rather than silently inherited by this
+new kernel.  Complete asynchronous CPU/memory accounting is still unresolved.
+
 Raw evidence
 ------------
 
@@ -69,6 +86,7 @@ block-provenance-partial-20260920 x5-fixture-20260920-014419.log
 block-provenance-requeue-20260920 x5-fixture-20260920-014541.log
 block-provenance-control-20260920 x0-control-20260920-014738.log
 block-provenance-crashes-20260920 x0-crashes-20260920-015216.log
+block-provenance-joint-20260920   x7-joint-20260920-015719.log
 =============================== =========================================
 
 Serial SHA256 values in the same order::
@@ -79,6 +97,7 @@ Serial SHA256 values in the same order::
   f4fe3f8e2b78e5fb6a9d62d7ac4e28cd40d07d5ad00647b71e9f0d456641b731
   dfeedc4e44b1bbb505a113b6bcd807fea6f702bbc0ecd6795a53a98a5f2e8cd6
   b59ece9d48efb60b78f18c2a024ccee2d27641720092cf206fbbf448d216bcb8
+  23113c9efa4934bf9c624a369adb237b71c0dc1798544af89f4968b1eed96db7
 
 Control and crash hashes, verifier hashes and per-cohort outcomes are also
 recorded in the external content-bound coverage index.  Reports expose bio
@@ -94,3 +113,6 @@ Buffered writeback dirtying provenance, split/cancel runtime negatives,
 high-rate overload, skb allocation/backend provenance, Maple tree identity,
 and the remaining joint truth/complete background-cost gaps remain explicit.
 No production, bare-metal NUMA, E3 causal, or total-memory acceptance follows.
+The local suite finished with 552 tests: 551 passed and one platform-specific
+skip.  The early diagnostic-link-count unit failure was fixed by extending the
+bounded program list from 28 to 29; the failed result was not treated as a pass.
