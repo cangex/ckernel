@@ -4,6 +4,13 @@ from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown
 
 
 class CoverageTests(unittest.TestCase):
+    def test_offline_evidence_capacity_is_not_live_admission_capacity(self):
+        rows=[dict(name='case-%d'%i,verifier='block_merge',serial='evidence.log',sha256='0'*64) for i in range(64)]
+        self.assertEqual(len(validate_index(dict(schema='cis-coverage-input-v1',cohorts=rows))),64)
+        with self.assertRaises(ValueError):
+            validate_index(dict(schema='cis-coverage-input-v1',cohorts=rows+[dict(rows[0],name='extra')]))
+        self.assertIn('不推断设备阻塞方',CONTRACT['block_merge']['participants'])
+
     def test_partial_rollback_does_not_replace_prehook_failure(self):
         self.assertEqual(VERIFIERS['allocator_rollback'],('allocator_vm_check','allocator',dict(rollback=True)))
         self.assertEqual(VERIFIERS['allocator_failure'],('allocator_vm_check','allocator',dict(failure=True)))

@@ -41,15 +41,15 @@ CONTRACT={
         pending=['skb分配来源和后端成本','clone/GSO/GRO来源变换']),
     'block': dict(name='块I/O',collector='block',discovered='直接I/O请求形成、排队、下发与完成',
         object='请求episode、设备/队列、head-bio blkcg',participants='初始提交者与bio归属；不推断唯一阻塞方',
-        pending=['tag等待由独立专项核验','真实重排队和部分完成已有专用设备正例；请求合并仍待验证','buffered writeback多源归属']),
+        pending=['tag等待由独立专项核验','重排队/部分完成及bio/request合并由独立专项核验，不代表任意设备','buffered writeback多源归属']),
     'block_tag': dict(name='块请求槽位等待',collector='block',discovered='原生tag慢分配、io_schedule及NOWAIT拒绝',
         object='调用episode、队列与本次bitmap地址',participants='等待任务；未推断占用槽位的请求或唯一阻塞容器',
         pending=['API fixture不代表真实设备负载覆盖','多硬件队列迁移与reserved池运行验证','槽位持有请求的完整生命周期']),
     'block_merge': dict(name='bio合并与字节来源',collector='block',
-        discovered='原生前向/后向合并、下发时有界bio列表和blkcg字节权重',
+        discovered='原生bio前向/后向合并、mq-deadline请求转移、下发时有界bio列表和blkcg字节权重',
         object='请求episode、合并转移和每次下发快照，最多8个bio',
         participants='请求提交者与bio计费来源分开，超限和未知来源保留，不推断设备阻塞方',
-        pending=['request-to-request合并仍缺运行正例','buffered writeback脏页来源','bio拆分及取消运行反例','高事件率与普通应用联合成本']),
+        pending=['合并真值仅限独立内存设备，非生产发生率','buffered writeback脏页来源','bio拆分及取消运行反例','高事件率与普通应用联合成本']),
     'routing': dict(name='有界专项调度',collector='controller',discovered='真实巡检候选到单槽专项',
         object='配置epoch、目标代次及候选来源会话',participants='按目标轮转，候选不是因果认定',
         pending=['四容器混合来源联合验收']),
@@ -115,7 +115,7 @@ def replay(index,base,output):
                 raise ValueError('backlog cohort required')
             if key=='net' and labels and all(v.startswith('backlog-') for v in labels):
                 raise ValueError('logical ownership cohort required')
-            if key=='block_merge' and checked.get('fixture')!='merge':
+            if key=='block_merge' and checked.get('fixture') not in ('merge','merge-scheduler'):
                 raise ValueError('native merge truth cohort required')
             error=None; passed=checked.get('status') in ('PASS','PASS_SCOPED') and not checked.get('errors') and not checked.get('defects')
         except (ValueError,KeyError,AssertionError) as exc:

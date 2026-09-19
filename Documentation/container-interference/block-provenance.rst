@@ -32,3 +32,27 @@ Bounded walks, output buffers and maps do not prove a total CPU or memory cost.
 Runtime overhead, cleanup and independent merge truth must be measured on the
 new kernel/tools before declaring the new coverage validated.  Buffered
 writeback and complete dirtying provenance are not provided by these records.
+
+Independent test devices
+------------------------
+
+Only the disposable VM may load cis_block_fixture.  Its merge modes submit real
+bios under a native plug, retaining pages/bios until endio.  Driver dispatch
+records request addresses, bio counts, bytes and timing independently of the
+Profile stream.  Data is read back from the private in-memory device and checked.
+
+Mode 3 checks two adjacent bios, reverse-order front merges, nonadjacent bios,
+and nine-bio overflow.  The last case must report one bio's bytes as unknown,
+not attribute them to the caller.  Mode 4 selects mq-deadline only on the two
+test devices and submits sectors in 0,2,1 block order.  The bridge closes the
+gap between two requests: one bio append plus one request-to-request transfer.
+The verifier requires both watched episodes, the victim's merge terminal, the
+survivor's driver dispatch and all completed bytes.  A nonadjacent control must
+remain separate.  Each cohort uses two registered container roots and three
+alternating OFF/ON pairs.  No cross-blkcg merge restriction is disabled.
+
+These tests do not establish production device saturation, writeback dirtying
+ownership, or a unique blocking tenant.  Queue and service intervals remain
+wall time.  The request source and fixture/tool commits are recorded separately
+from the immutable Image hash.  The offline evidence index may hold up to 64
+cohorts; this does not increase any live target, event, CPU or memory budget.
