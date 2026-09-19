@@ -60,7 +60,8 @@ def run(backlog=False,rights=False,origin=False):
         (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if origin:
         plan.update(origin_validation=True,creator_attribution='native post-create task distinct from acceptor and transferred user',
-            origin_case='rightsAccept transfers a passive accepted child, not the listening socket')
+            origin_case='rightsAccept transfers a passive accepted child, not the listening socket',
+            origin_prepare_before_lock_ms=300,lock_start_after_window_ms=500)
         (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-net.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -109,13 +110,14 @@ def run(backlog=False,rights=False,origin=False):
                 window=wait(sid,'window')['window']; active=observe('net')
             else:
                 now=time.monotonic_ns(); window=dict(start_ns=now,end_ns=now+2_000_000_000); active=observe(None)
-            start=max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000)
+            start=(max(window['start_ns']+500_000_000,time.monotonic_ns()+400_000_000) if origin else
+                   max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000))
             before=snapshot(); running=[]
             for i,p in enumerate(roots):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle)
                 fd=selected[i].fileno()
                 workload='/net_backlog_workload' if case=='backlog' else '/net_workload'
-                child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case],
+                child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case]+(['origin'] if origin else []),
                     stdout=handle,stderr=handle,pass_fds=(fd,))
                 children.append(child); running.append(child)
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()

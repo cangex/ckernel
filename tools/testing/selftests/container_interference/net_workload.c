@@ -127,13 +127,15 @@ int main(int argc, char **argv)
 	socklen_t length = sizeof(cookie);
 	unsigned int i, actor, swap, rights, private_socket;
 	int device, fd;
-	if (argc != 5) return 2;
+	if (argc != 5 && argc != 6) return 2;
+	if (argc == 6 && strcmp(argv[5],"origin")) return 2;
 	fd = atoi(argv[1]); actor = strtoul(argv[2], NULL, 10);
 	start = strtoull(argv[3], NULL, 10);
 	rights=!strcmp(argv[4],"rightsShared") || !strcmp(argv[4],"rightsPrivate") || !strcmp(argv[4],"rightsAccept");
 	private_socket=!strcmp(argv[4],"rightsPrivate");
 	swap = !strcmp(argv[4], "switch") || rights;
 	if (fd < 0 || actor > 1 || (strcmp(argv[4], "shared") && strcmp(argv[4], "private") && !swap)) return 2;
+	if (argc == 6 && (!rights || start<300000000ULL || until(start-300000000ULL))) return 5;
 	if(rights) { fd=transfer_socket(fd,actor,private_socket,!strcmp(argv[4],"rightsAccept")); if(fd<0) { perror("SCM_RIGHTS"); return 8; } }
 	if (getsockopt(fd, SOL_SOCKET, SO_COOKIE, &cookie, &length) || length != sizeof(cookie) || !cookie) return 3;
 	device = open("/dev/cis-net-test", O_RDWR | O_CLOEXEC);

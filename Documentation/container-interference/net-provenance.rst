@@ -32,3 +32,12 @@ creator. Existing pre-window inherited Socket fixtures remain regressions.
 The source still cannot infer packet origin, skb allocation provenance, all
 TCP locks or GSO/GRO data-buffer ownership from a Socket creator. Runtime
 acceptance of this extension is pending until build and scoped tests complete.
+
+The first ``x4-net-origin-20260919-213027.log`` cohort is retained as FAIL.
+Its controller publishes a future capture window during preparation; the
+old workload created the Socket immediately on startup and waited only before
+locking. Creation therefore preceded the actual window (1.380s vs 1.455s),
+and the observer correctly reported UNOBSERVED, while 4/4 later lock relations
+were captured. The new frozen origin fixture waits before creation, starting
+preparation 300ms before a lock schedule at least 500ms into the window. No
+timestamps, thresholds or observed records from the failed batch are changed.

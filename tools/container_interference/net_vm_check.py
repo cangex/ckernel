@@ -23,6 +23,8 @@ def verify(serial,output):
     if cases in (RIGHTS_CASES,ORIGIN_CASES) and plan.get('fd_transfer')!='real SCM_RIGHTS; rightsPrivate recipient creates a different TCP socket':
         errors.append('rights_plan')
     if (cases==ORIGIN_CASES)!=(plan.get('origin_validation') is True): errors.append('origin_plan')
+    if cases==ORIGIN_CASES and (plan.get('origin_prepare_before_lock_ms')!=300 or
+                               plan.get('lock_start_after_window_ms')!=500): errors.append('origin_barrier_plan')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_NET_FIXTURE_UNLOAD=0' not in text.splitlines():
         errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')

@@ -55,3 +55,12 @@ class NetSource(unittest.TestCase):
         self.assertLess(accept.index('CIS_CN_ACCEPTED'),accept.rindex('return newfile;'))
         self.assertLess(accept.index('if (IS_ERR(newfile))'),accept.index('CIS_CN_ACCEPTED'))
         self.assertNotIn('CIS_CN_CREATED',accept)
+
+    def test_origin_fixture_waits_inside_future_capture_window(self):
+        root=Path(__file__).resolve().parents[4]
+        workload=(root/'tools/testing/selftests/container_interference/net_workload.c').read_text()
+        body=workload.split('int main(',1)[1]
+        self.assertLess(body.index('until(start-300000000ULL)'),body.index('fd=transfer_socket('))
+        harness=(root/'tools/testing/selftests/container_interference/net_vm.py').read_text()
+        self.assertIn("window['start_ns']+500_000_000",harness)
+        self.assertIn("+(['origin'] if origin else [])",harness)
