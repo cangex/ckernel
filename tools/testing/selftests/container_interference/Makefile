@@ -7,6 +7,7 @@ TEST_GEN_PROGS := workload baseline identity fleet entry_workload entry_storm se
 TEST_GEN_PROGS_EXTENDED := logic_test budget_test metrics_test fast_test recursion_snapshot_test
 TEST_GEN_PROGS += allocator_placement_workload
 TEST_GEN_PROGS += allocator_failure_workload
+TEST_GEN_PROGS += allocator_rollback_workload
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
@@ -18,6 +19,7 @@ counter_workload: ../../../../include/uapi/linux/cis_counter_test.h
 allocator_fixture_workload: ../../../../include/uapi/linux/cis_alloc_test.h
 allocator_placement_workload: allocator_fixture/placement_uapi.h
 allocator_failure_workload: ../../../../include/uapi/linux/cis_alloc_test.h
+allocator_rollback_workload: allocator_fixture/rollback_uapi.h
 net_workload net_backlog_workload: net_fixture/uapi.h
 rwsem_workload: rwsem_fixture/uapi.h
 run_tests: all

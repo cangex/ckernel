@@ -46,18 +46,21 @@ def check_work(window,logs,report=None,identities=None):
                 recall=None,performance_certification='NOT_ACCEPTED')
 
 
-def verify(serial,output,fixture=False,placement=False,failure=False):
+def verify(serial,output,fixture=False,placement=False,failure=False,rollback=False):
     verify_case=check_case; cases=CASES; fixture_order=case_order
-    if placement and failure: raise ValueError('separate cohorts required')
+    if sum((placement,failure,rollback))>1: raise ValueError('separate cohorts required')
     if placement:
         fixture=True
         from allocator_placement_check import check_case as verify_case, CASES as cases, case_order as fixture_order, nodes
     if failure:
         fixture=True
         from allocator_failure_check import check_case as verify_case, CASES as cases, case_order as fixture_order, SETTINGS
+    if rollback:
+        fixture=True
+        from allocator_rollback_check import check_case as verify_case, CASES as cases, case_order as fixture_order, SETTINGS
     if serial.stat().st_size>128<<20: raise ValueError('serial capacity')
     raw=serial.read_bytes(); text=raw.decode(); files=extract(text)
-    prefix='/tmp/allocator-failure-evidence/' if failure else '/tmp/allocator-placement-evidence/' if placement else '/tmp/allocator-fixture-evidence/' if fixture else '/tmp/allocator-evidence/'
+    prefix='/tmp/allocator-rollback-evidence/' if rollback else '/tmp/allocator-failure-evidence/' if failure else '/tmp/allocator-placement-evidence/' if placement else '/tmp/allocator-fixture-evidence/' if fixture else '/tmp/allocator-evidence/'
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
@@ -66,12 +69,15 @@ def verify(serial,output,fixture=False,placement=False,failure=False):
     order=fixture_order() if fixture else ORDER
     if placement and (plan.get('placement') is not True or plan.get('topology')!={'0':'0-3','1':'4-7'}):
         errors.append('frozen_numa_topology')
-    if failure:
-        expected_fault=dict(settings=SETTINGS,caches=dict(cis_alloc_test='1',cis_alloc_private='0'))
-        if plan.get('failure') is not True or plan.get('fault_configuration')!=expected_fault: errors.append('frozen_failslab')
-        original=value('failslab-original.json'); restored=value('failslab-restored.json')
+    if failure or rollback:
+        expected_fault=dict(settings=SETTINGS,caches={} if rollback else dict(cis_alloc_test='1',cis_alloc_private='0'))
+        if plan.get('rollback' if rollback else 'failure') is not True or plan.get('fault_configuration')!=expected_fault: errors.append('frozen_fault')
+        fault_name='fail_page_alloc' if rollback else 'failslab'
+        original=value(fault_name+'-original.json'); restored=value(fault_name+'-restored.json')
         if original!=restored or original['settings']['probability']!='0' or any(v!='0' for v in original['caches'].values()):
             errors.append('failslab_restore')
+        if rollback and plan.get('geometry')!={k:dict(object_size='65536',objs_per_slab='1') for k in ('cis_alloc_test','cis_alloc_private')}:
+            errors.append('rollback_cache_geometry')
     if fixture:
         if (plan.get('order')!=order or plan.get('sample_shift')!=0 or plan.get('cache')!='cis_alloc_test' or
                 plan.get('operations')!=(8 if placement or failure else 4) or plan.get('cases')!=list(cases) or plan.get('rounds')!=3 or not plan.get('release_tracking')):
@@ -85,7 +91,7 @@ def verify(serial,output,fixture=False,placement=False,failure=False):
         if placement:
             expected=[dict(cpu=str(i),mems=str(n)) for i,n in enumerate(nodes(label.split('-')[0]))]
             if ev.get('placement_before')!=expected or ev.get('placement_after')!=expected: errors.append('cpuset_boundary_'+label)
-        if failure and (ev.get('fault_before')!=expected_fault or ev.get('fault_after')!=expected_fault):
+        if (failure or rollback) and (ev.get('fault_before')!=expected_fault or ev.get('fault_after')!=expected_fault):
             errors.append('failslab_boundary_'+label)
         report=None; identities=None
         if 'allocator' in label:
@@ -112,7 +118,7 @@ def verify(serial,output,fixture=False,placement=False,failure=False):
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result,source_audit=audit))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
-        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native failslab pre-hook fixture only' if failure else 'two-node allowed-placement fixture only' if placement else 'native allocator fixture only' if fixture else 'ordinary VMA bridge only',
+        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native page-allocation failure and partial bulk rollback fixture only' if rollback else 'native failslab pre-hook fixture only' if failure else 'two-node allowed-placement fixture only' if placement else 'native allocator fixture only' if fixture else 'ordinary VMA bridge only',
         x3_status='INCOMPLETE',performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result
 
@@ -122,6 +128,7 @@ if __name__=='__main__':
     p.add_argument('--fixture',action='store_true')
     p.add_argument('--placement',action='store_true')
     p.add_argument('--failure',action='store_true')
-    args=p.parse_args(); r=verify(args.serial,args.output,args.fixture,args.placement,args.failure)
+    p.add_argument('--rollback',action='store_true')
+    args=p.parse_args(); r=verify(args.serial,args.output,args.fixture,args.placement,args.failure,args.rollback)
     print(json.dumps(dict(status=r['status'],errors=r['errors'],states=len(r['states']))))
     raise SystemExit(r['status']!='PASS')

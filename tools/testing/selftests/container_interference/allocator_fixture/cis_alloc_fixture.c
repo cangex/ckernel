@@ -15,8 +15,11 @@
 #include <linux/user_namespace.h>
 #include <linux/cis_alloc_test.h>
 #include "placement_uapi.h"
+#include "rollback_uapi.h"
 
 static struct kmem_cache *caches[2];
+static bool rollback_mode;
+module_param(rollback_mode, bool, 0400);
 struct alloc_file {
 	struct mutex lock;
 	void *objects[CIS_AT_MAX];
@@ -24,6 +27,7 @@ struct alloc_file {
 	struct rcu_head rcu;
 	struct completion done;
 	bool deferred;
+	void *anchor;
 	u64 callback_begin_ns, callback_end_ns;
 	u32 callback_cpu, callback_context, callback_count;
 };
@@ -78,6 +82,8 @@ static int alloc_release(struct inode *inode, struct file *file)
 	if (state->deferred)
 		wait_for_completion(&state->done);
 	release_objects(state, false);
+	if (state->anchor)
+		kmem_cache_free(caches[state->cache], state->anchor);
 	kfree(state);
 	return 0;
 }
@@ -110,6 +116,63 @@ static long placement_ioctl(unsigned long arg)
 	return copy_to_user((void __user *)arg, &q, sizeof(q)) ? -EFAULT : 0;
 }
 
+static long rollback_ioctl(struct alloc_file *state, unsigned long arg)
+{
+	struct cis_alloc_rollback q;
+	void *warm;
+	long result = 0;
+	u32 i;
+
+	if (copy_from_user(&q, (void __user *)arg, sizeof(q)))
+		return -EFAULT;
+	if (q.version != 1 || q.reserved[0] || q.reserved[1] ||
+	    q.cache > 1 || q.action < 1 || q.action > 3)
+		return -EINVAL;
+	mutex_lock(&state->lock);
+	q.returned = q.populated = 0;
+	memset(q.objects, 0, sizeof(q.objects));
+	q.cpu = raw_smp_processor_id();
+	q.cache_address = (unsigned long)caches[q.cache];
+	q.begin_ns = ktime_get_ns();
+	if (q.action == 1) {
+		if (state->anchor || state->count) { result = -EBUSY; goto out; }
+		state->cache = q.cache;
+		/* Setup retains one live object and one real free slot. */
+		kmem_cache_shrink(caches[q.cache]);
+		state->anchor = kmem_cache_alloc(caches[q.cache], GFP_KERNEL);
+		warm = kmem_cache_alloc(caches[q.cache], GFP_KERNEL);
+		q.objects[0] = (unsigned long)state->anchor;
+		q.objects[1] = (unsigned long)warm;
+		if (warm) kmem_cache_free(caches[q.cache], warm);
+		if (!state->anchor || !warm) result = -ENOMEM;
+	} else if (!state->anchor || state->cache != q.cache || state->count) {
+		result = -EINVAL;
+	} else if (q.action == 2) {
+		memset(state->objects, 0, sizeof(state->objects));
+		q.returned = kmem_cache_alloc_bulk(caches[q.cache],
+			GFP_NOWAIT | __GFP_NOWARN | __GFP_NORETRY,
+			CIS_AR_COUNT, state->objects);
+		state->count = q.returned;
+		/* On rollback these are stale values, copied but never dereferenced.
+		 * The fixed OLK bulk implementation leaves the acquired prefix. */
+		for (i = 0; i < CIS_AR_COUNT; i++) {
+			q.objects[i] = (unsigned long)state->objects[i];
+			q.populated += !!state->objects[i];
+		}
+		if (state->count) release_objects(state, true);
+	} else {
+		q.objects[0] = (unsigned long)state->anchor;
+		kmem_cache_free(caches[q.cache], state->anchor);
+		state->anchor = NULL;
+		kmem_cache_shrink(caches[q.cache]);
+	}
+out:
+	q.end_ns = ktime_get_ns();
+	mutex_unlock(&state->lock);
+	if (copy_to_user((void __user *)arg, &q, sizeof(q))) return -EFAULT;
+	return result;
+}
+
 static long alloc_ioctl(struct file *file, unsigned int command, unsigned long arg)
 {
 	struct alloc_file *state = file->private_data;
@@ -118,6 +181,8 @@ static long alloc_ioctl(struct file *file, unsigned int command, unsigned long a
 	u32 i;
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
+	if (rollback_mode)
+		return command == CIS_ALLOC_ROLLBACK ? rollback_ioctl(state, arg) : -ENOTTY;
 	if (command == CIS_ALLOC_PLACEMENT)
 		return placement_ioctl(arg);
 	if (command != CIS_ALLOC_TEST_RUN)
@@ -221,10 +286,12 @@ static int __init alloc_init(void)
 {
 	int error;
 	/* The ctor prevents merging the two otherwise identical test caches. */
-	caches[0] = kmem_cache_create("cis_alloc_test", 256, 0, SLAB_ACCOUNT, alloc_ctor);
+	caches[0] = kmem_cache_create("cis_alloc_test", rollback_mode ? 65536 : 256,
+				    0, SLAB_ACCOUNT, alloc_ctor);
 	if (!caches[0])
 		return -ENOMEM;
-	caches[1] = kmem_cache_create("cis_alloc_private", 256, 0, SLAB_ACCOUNT, alloc_ctor);
+	caches[1] = kmem_cache_create("cis_alloc_private", rollback_mode ? 65536 : 256,
+				    0, SLAB_ACCOUNT, alloc_ctor);
 	if (!caches[1]) {
 		error = -ENOMEM;
 		goto destroy_first;
