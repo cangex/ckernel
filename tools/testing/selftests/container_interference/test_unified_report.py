@@ -4,6 +4,8 @@ import unittest
 import test_block_report
 import test_counter_report
 import test_net_report
+import test_collector_manifest
+from owner_test import event
 from unified_report import analyze,markdown
 
 
@@ -16,6 +18,21 @@ def encode(rows):
 
 
 class UnifiedReport(unittest.TestCase):
+    def test_owner_family_requires_exact_scope_and_inventory(self):
+        for collector,resource in (('owner',1),('fd',3),('slub',4)):
+            record=test_counter_report.CounterReport().record(); record['collector']=collector
+            record['inventory']=test_collector_manifest.CollectorContract().inventory(collector)
+            rows=[dict(event(t,phase,who,resource=resource,cache=4096),session_id='7')
+                  for t,phase,who in ((10,3,1),(20,2,2),(30,4,1),(40,3,2))]
+            good=analyze(record,encode(rows))
+            self.assertEqual(good['scope_audit']['status'],'PASS',good)
+            self.assertEqual(len(good['relations']),1,good)
+            incomplete=analyze(record,'\n'.join(json.dumps(r) for r in rows).encode())
+            self.assertEqual(incomplete['quality']['status'],'BLOCKED')
+            self.assertFalse(incomplete['relations'])
+            record['inventory']['program_names']=['wrong']
+            self.assertEqual(analyze(record,encode(rows))['quality']['status'],'FAIL')
+
     def test_counter_participants_never_become_lock_holders(self):
         fixture=test_counter_report.CounterReport()
         raw=encode(fixture.version2(fixture.call()+fixture.call(actor=2,start=30,leaf=101)))

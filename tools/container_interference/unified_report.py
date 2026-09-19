@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from explain import explain
+from collector_audit import audit
 
 MAX_RELATIONS=128
 
@@ -18,7 +19,10 @@ def analyze(record,raw):
     if collector in ('sync','counter','allocator','net','block','rwsem'):
         module=__import__(collector+'_report'); specialist=module.analyze(record,raw)
     quality=specialist['quality'] if specialist else base['quality']
-    scope=specialist.get('scope_audit',{}) if specialist else {}
+    scope=specialist['scope_audit'] if specialist else audit(record,raw)
+    if scope['status']!='PASS':
+        quality=dict(quality,status='FAIL' if 'FAIL' in (quality['status'],scope['status']) else 'BLOCKED',
+            defects=quality['defects']+['collector_scope_'+scope['status'].lower()])
 
     def add(kind,level,actor,resource,participants,interval,chain,unknown,**detail):
         nonlocal omitted
@@ -97,7 +101,8 @@ def analyze(record,raw):
         window=record.get('window'),quality=quality,scope_audit=scope,relations=relations,omitted_relations=omitted,
         raw_sha256=hashlib.sha256(raw).hexdigest(),source=base['source'],
         analysis_source_sha256=dict(specialist['analysis_source_sha256'] if specialist else base['analysis_source_sha256'],
-            **{'unified_report.py':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}),
+            **{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+               for name in ('unified_report.py','collector_audit.py','collector_manifest.py')}),
         specialist=specialist,base=base,total_interference_ns=None,performance_certification='NOT_ACCEPTED',
         timing=dict(periodic_wait_ns='NOT_INFERRED',specialist_queue_wait_ns=(record.get('scheduled') or {}).get('diagnosis',{}).get('queue_wait_ns'),
             explanation_lag_ns=base['explanation_lag_ns'],sample_age_at_specialist_admit_ns=(record.get('scheduled') or {}).get('diagnosis',{}).get('sample_age_ns')),
