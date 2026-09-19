@@ -7,13 +7,15 @@
 #include <linux/vmalloc.h>
 #include <linux/uaccess.h>
 #include <linux/completion.h>
+#include <linux/mutex.h>
 #include "merge_uapi.h"
+#include "lifecycle_uapi.h"
 
 #define CIS_BYTES (16U << 20)
 
 static unsigned int test_mode;
 module_param(test_mode, uint, 0444);
-MODULE_PARM_DESC(test_mode, "1=requeue, 2=partial, 3=plug bio merges, 4=scheduler request merges");
+MODULE_PARM_DESC(test_mode, "1=requeue, 2=partial, 3=plug bio merges, 4=scheduler request merges, 5=split/error/presubmit cancel");
 static bool disposable_vm;
 module_param(disposable_vm, bool, 0444);
 
@@ -29,10 +31,16 @@ module_param_cb(partials, &counter_ops, &partials, 0444);
 module_param_cb(completions, &counter_ops, &completions, 0444);
 module_param_cb(errors, &counter_ops, &errors, 0444);
 
+struct cis_lifecycle_job {
+	struct cis_lifecycle_test output;
+	struct completion done;
+};
 struct cis_disk {
 	struct blk_mq_tag_set tags;
 	struct gendisk *disk;
 	void *data;
+	struct mutex job_lock;
+	struct cis_lifecycle_job *active_job;
 };
 struct cis_cmd { bool requeued; };
 static struct cis_disk disks[2];
@@ -65,8 +73,22 @@ static blk_status_t cis_queue_rq(struct blk_mq_hw_ctx *hctx,
 	blk_status_t result = BLK_STS_OK;
 	struct cis_merge_truth *truth = NULL;
 	struct bio *bio;
+	struct cis_lifecycle_job *job = READ_ONCE(disk->active_job);
+	struct cis_lifecycle_truth *life = NULL;
 
-	if (test_mode >= 3 && rq->bio && rq->bio->bi_end_io == cis_bio_done) {
+	if (test_mode == 5 && job) {
+		unsigned int index = job->output.requests++;
+
+		if (index < CIS_LIFECYCLE_MAX) {
+			life = &job->output.truth[index];
+			life->request = (unsigned long)rq;
+			life->bio = (unsigned long)rq->bio;
+			life->begin_ns = ktime_get_ns();
+			life->sector = blk_rq_pos(rq);
+			life->bytes = blk_rq_bytes(rq);
+		} else atomic64_inc(&errors);
+	}
+	if ((test_mode == 3 || test_mode == 4) && rq->bio && rq->bio->bi_end_io == cis_bio_done) {
 		struct cis_merge_job *job = rq->bio->bi_private;
 		int index = atomic_inc_return(&job->issued) - 1;
 
@@ -99,6 +121,11 @@ static blk_status_t cis_queue_rq(struct blk_mq_hw_ctx *hctx,
 		blk_mq_requeue_request(rq, true);
 		return BLK_STS_OK;
 	}
+	if (test_mode == 5 && job && job->output.scenario == 3) {
+		atomic64_inc(&errors);
+		result = BLK_STS_IOERR;
+		goto complete;
+	}
 	/* Actors use disjoint sectors. This fixture asserts no device blocker. */
 	rq_for_each_segment(bvec, rq, iter) {
 		void *address = kmap_local_page(bvec.bv_page);
@@ -119,6 +146,7 @@ static blk_status_t cis_queue_rq(struct blk_mq_hw_ctx *hctx,
 	}
 complete:
 	if (truth) truth->end_ns = ktime_get_ns();
+	if (life) { life->end_ns = ktime_get_ns(); life->status = result; }
 	cmd->requeued = false;
 	atomic64_inc(&completions);
 	blk_mq_end_request(rq, result);
@@ -145,6 +173,79 @@ static unsigned int cis_block_index(struct cis_merge_test *test, unsigned int i)
 	return test->pattern == 1 ? i * 2 : test->pattern == 2 ? test->count - 1 - i : i;
 }
 
+static void cis_lifecycle_done(struct bio *bio)
+{
+	struct cis_lifecycle_job *job = bio->bi_private;
+
+	job->output.completed++;
+	job->output.io_errors += !!bio->bi_status;
+	complete(&job->done);
+}
+
+static int cis_lifecycle_ioctl(struct block_device *bdev, blk_mode_t mode,
+			      unsigned long arg)
+{
+	struct cis_disk *disk = bdev->bd_disk->private_data;
+	struct cis_lifecycle_job *job;
+	struct bio *bio = NULL;
+	struct page *pages[2] = {};
+	unsigned int i, n, scenario, role;
+	int error = -ENOMEM;
+
+	if (!(mode & BLK_OPEN_WRITE)) return -EPERM;
+	job = kzalloc(sizeof(*job), GFP_KERNEL);
+	if (!job) return -ENOMEM;
+	if (copy_from_user(&job->output, (void __user *)arg, sizeof(job->output))) {
+		error = -EFAULT; goto out;
+	}
+	scenario = job->output.scenario; role = job->output.role;
+	if (role > 1 || scenario > 3 || job->output.reserved[0] || job->output.reserved[1]) {
+		error = -EINVAL; goto out;
+	}
+	memset(&job->output, 0, sizeof(job->output));
+	job->output.role = role; job->output.scenario = scenario;
+	n = scenario ? 2 : 1;
+	job->output.bytes = n * 4096;
+	init_completion(&job->done);
+	bio = bio_alloc(bdev, n, REQ_OP_WRITE, GFP_KERNEL);
+	if (!bio) goto out;
+	for (i = 0; i < n; i++) {
+		pages[i] = alloc_page(GFP_KERNEL);
+		if (!pages[i]) goto out;
+		memset(page_address(pages[i]), 0x53 + role, 4096);
+		if (bio_add_page(bio, pages[i], 4096, 0) != 4096) goto out;
+	}
+	bio->bi_iter.bi_sector = (1 + role * 32) * 8;
+	bio->bi_private = job; bio->bi_end_io = cis_lifecycle_done;
+	job->output.original_bio = (unsigned long)bio;
+	/* Independent API truth; never calls observation hooks. Cancellation is
+	 * deliberately BEFORE submission and must create no request episode. */
+	mutex_lock(&disk->job_lock);
+	memset(disk->data + (1 + role * 32) * 4096, 0, n * 4096);
+	if (scenario == 2) {
+		job->output.canceled = 1;
+	} else {
+		WRITE_ONCE(disk->active_job, job);
+		submit_bio(bio);
+		wait_for_completion(&job->done);
+		WRITE_ONCE(disk->active_job, NULL);
+	}
+	job->output.verified = 1;
+	for (i = 0; i < n * 4096; i++) {
+		unsigned char expected = scenario >= 2 ? 0 : 0x53 + role;
+
+		if (((unsigned char *)disk->data)[(1 + role * 32) * 4096 + i] != expected)
+			job->output.verified = 0;
+	}
+	mutex_unlock(&disk->job_lock);
+	error = copy_to_user((void __user *)arg, &job->output, sizeof(job->output)) ? -EFAULT : 0;
+out:
+	if (bio) bio_put(bio);
+	for (i = 0; i < 2; i++) if (pages[i]) __free_page(pages[i]);
+	kfree(job);
+	return error;
+}
+
 static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 			   unsigned int command, unsigned long arg)
 {
@@ -156,7 +257,9 @@ static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 	unsigned int i, n, block;
 	int error = -ENOMEM;
 
-	if (test_mode < 3 || command != CIS_MERGE_RUN) return -ENOTTY;
+	if (test_mode == 5 && command == CIS_LIFECYCLE_RUN)
+		return cis_lifecycle_ioctl(bdev, mode, arg);
+	if ((test_mode != 3 && test_mode != 4) || command != CIS_MERGE_RUN) return -ENOTTY;
 	if (!(mode & BLK_OPEN_WRITE)) return -EPERM;
 	job = kzalloc(sizeof(*job), GFP_KERNEL);
 	if (!job) return -ENOMEM;
@@ -215,6 +318,7 @@ static int cis_add_disk(struct cis_disk *d, unsigned int index)
 	d->data = vzalloc(CIS_BYTES);
 	if (!d->data)
 		return -ENOMEM;
+	mutex_init(&d->job_lock);
 	d->tags.ops = &cis_mq_ops;
 	d->tags.nr_hw_queues = 1;
 	d->tags.queue_depth = 16;
@@ -239,9 +343,9 @@ static int cis_add_disk(struct cis_disk *d, unsigned int index)
 	d->disk->private_data = d;
 	snprintf(d->disk->disk_name, DISK_NAME_LEN, "cisblock%u", index);
 	blk_queue_logical_block_size(d->disk->queue, 512);
-	blk_queue_max_hw_sectors(d->disk->queue, test_mode >= 3 ? 128 : 8);
+	blk_queue_max_hw_sectors(d->disk->queue, (test_mode == 3 || test_mode == 4) ? 128 : 8);
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, d->disk->queue);
-	if (test_mode < 3) blk_queue_flag_set(QUEUE_FLAG_NOMERGES, d->disk->queue);
+	if (test_mode < 3 || test_mode == 5) blk_queue_flag_set(QUEUE_FLAG_NOMERGES, d->disk->queue);
 	set_capacity(d->disk, CIS_BYTES >> SECTOR_SHIFT);
 	error = add_disk(d->disk);
 	if (!error)
@@ -268,7 +372,7 @@ static int __init cis_init(void)
 {
 	int error;
 
-	if (!disposable_vm || (test_mode < 1 || test_mode > 4))
+	if (!disposable_vm || (test_mode < 1 || test_mode > 5))
 		return -EINVAL;
 	major = register_blkdev(0, "cisblock");
 	if (major < 0)

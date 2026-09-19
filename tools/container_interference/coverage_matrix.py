@@ -60,6 +60,11 @@ CONTRACT={
         object='请求episode、合并转移和每次下发快照，最多8个bio',
         participants='请求提交者与bio计费来源分开，超限和未知来源保留，不推断设备阻塞方',
         pending=['合并真值仅限独立内存设备，非生产发生率','buffered writeback脏页来源','bio拆分及取消运行反例','高事件率与普通应用联合成本']),
+    'block_lifecycle': dict(name='拆分请求、错误完成与提交前取消反例',collector='block',
+        discovered='原生bio按设备限制拆分后的请求及其完成状态、字节守恒',
+        object='请求episode；原始bio关系仅由独立fixture核验，不冒充生产采集能力',
+        participants='提交任务与bio计费身份；取消未提交时不得出现请求或阻塞关系',
+        pending=['尚未覆盖在途请求取消与任意叠加设备拆分','完整生产bio父子生命周期未知','固定设备错误不等于真实硬件故障覆盖']),
     'writeback': dict(name='缓冲写回计费与执行分离',collector='block',
         discovered='原生ext4后台提交的请求、bio计费容器与实际执行线程',
         object='请求episode和bio计费身份，不是完整inode生命周期',
@@ -94,6 +99,7 @@ VERIFIERS={
     'net_tx':('net_vm_check','net_tx',{}),
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
     'block_merge':('block_vm_check','block_merge',{}),
+    'block_lifecycle':('block_vm_check','block_lifecycle',{}),
     'writeback':('writeback_vm_check','writeback',{}),
     'writeback_inode':('writeback_vm_check','writeback_inode',{}),
     'routing':('diagnosis_vm_check','routing',{}),
@@ -146,6 +152,8 @@ def replay(index,base,output):
                     raise ValueError('send requester, cookie, bracket and release truth required')
             if key=='block_merge' and checked.get('fixture') not in ('merge','merge-scheduler'):
                 raise ValueError('native merge truth cohort required')
+            if key=='block_lifecycle' and checked.get('fixture')!='lifecycle':
+                raise ValueError('native split/error/presubmit cancellation truth required')
             if key=='writeback_inode':
                 states=checked.get('states',[])
                 selected=[v for v in states if '-block-' in v.get('label','')]

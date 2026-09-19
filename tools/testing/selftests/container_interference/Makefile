@@ -11,6 +11,7 @@ TEST_GEN_PROGS += allocator_rollback_workload
 TEST_GEN_PROGS += slub_workload
 TEST_GEN_PROGS += tag_workload
 TEST_GEN_PROGS += block_merge_workload
+TEST_GEN_PROGS += block_lifecycle_workload
 TEST_GEN_PROGS += writeback_workload
 TEST_GEN_PROGS += maple_workload
 .PHONY: all clean run_tests
@@ -30,6 +31,7 @@ rwsem_workload: rwsem_fixture/uapi.h
 slub_workload: slub_fixture/uapi.h
 tag_workload: tag_fixture/abi.h
 block_merge_workload: block_fixture/merge_uapi.h
+block_lifecycle_workload: block_fixture/lifecycle_uapi.h
 run_tests: all
 	./logic_test
 	./budget_test

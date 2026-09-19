@@ -47,4 +47,4 @@ class MergeTruth(unittest.TestCase):
                      'blk_mq_start_request(rq)','blk_mq_end_request(rq, result)'):
             self.assertIn(call,src)
         self.assertNotIn('trace_block',src)
-        self.assertIn('if (test_mode < 3) blk_queue_flag_set(QUEUE_FLAG_NOMERGES',src)
+        self.assertIn('if (test_mode < 3 || test_mode == 5) blk_queue_flag_set(QUEUE_FLAG_NOMERGES',src)

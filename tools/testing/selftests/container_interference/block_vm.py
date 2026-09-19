@@ -15,11 +15,13 @@ from source_switches import observe
 from block_report import analyze
 from block_fixture_check import case_order,check_case,check_counters,COUNTERS,FIXTURES
 import block_merge_check
+import block_lifecycle_check
 
 
 def run(fixture=None):
     if fixture is not None and fixture not in FIXTURES: raise ValueError('fixture mode')
     merging=fixture in ('merge','merge-scheduler'); scheduler=fixture=='merge-scheduler'
+    lifecycle=fixture=='lifecycle'
     merge_cases=block_merge_check.SCHEDULER_CASES if scheduler else block_merge_check.CASES
     os.umask(0o077); os.sched_setaffinity(0,{7})
     if not Path('/cis-disposable-vm').exists(): raise PermissionError('disposable VM only')
@@ -45,6 +47,10 @@ def run(fixture=None):
     if merging:
         plan.update(order=block_merge_check.case_order(scheduler),direct=False,operations_per_actor=None,
                     mechanism='native submit_bio with plug; independent driver request truth',cases=merge_cases)
+    if lifecycle:
+        plan.update(order=block_lifecycle_check.case_order(),direct=False,operations_per_actor=None,
+                    cases=block_lifecycle_check.CASES,queue_max_bytes=4096,
+                    mechanism='native 8KiB bio split at 4KiB device limit; independent driver truth; presubmit cancellation')
     if scheduler:
         for name in ('cisblock0','cisblock1'):
             path=Path('/sys/block')/name/'queue/scheduler'; path.write_text('mq-deadline')
@@ -108,6 +114,9 @@ def run(fixture=None):
                 if merging:
                     command[3]='/block_merge_workload'
                     command += [str(v) for v in merge_cases[case]]
+                if lifecycle:
+                    command[3]='/block_lifecycle_workload'
+                    command += [str(block_lifecycle_check.CASES[case])]
                 child=subprocess.Popen(command,
                     stdout=handle,stderr=handle,pass_fds=(fd,))
                 children.append(child); running.append(child)
@@ -122,9 +131,13 @@ def run(fixture=None):
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            result=(block_merge_check.check_case(case,window,logs,report,identities) if merging else
+            result=(block_lifecycle_check.check_case(case,window,logs,report,identities) if lifecycle else
+                    block_merge_check.check_case(case,window,logs,report,identities) if merging else
                     check_case(case,window,logs,report,identities,verify_blkcg=True,fixture=fixture))
-            if merging:
+            if lifecycle:
+                result['fixture_counters']=block_lifecycle_check.check_counters(case,before['fixture_counters'],after['fixture_counters'],result)
+                if result['fixture_counters']['status']!='PASS': result['status']='FAIL'
+            elif merging:
                 result['fixture_counters']=block_merge_check.check_counters(before['fixture_counters'],after['fixture_counters'],result)
                 if result['fixture_counters']['status']!='PASS': result['status']='FAIL'
             elif fixture:
