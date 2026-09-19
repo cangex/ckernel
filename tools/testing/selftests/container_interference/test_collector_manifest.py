@@ -47,14 +47,18 @@ class CollectorContract(unittest.TestCase):
         with self.assertRaises(ValueError): cm.contract('tcp')
 
     def test_network_historical_contracts_are_exact_and_replay_only(self):
-        for old in (cm.LEGACY_NET,cm.LEGACY_NET_USE_ONLY):
+        for old in (cm.LEGACY_NET_TX,cm.LEGACY_NET,cm.LEGACY_NET_USE_ONLY):
             c=cm.contract('net'); c.update(copy.deepcopy(old))
             inv=self.inventory('net')
             inv.update(map_names=c['maps'],maps=list(range(1,len(c['maps'])+1)),
                        program_names=c['programs'],programs=list(range(101,101+len(c['programs']))))
             r=dict(collector='net',inventory=inv,collector_contract_sha256=digest(c))
             self.assertEqual(cm.validate_record_inventory(r),digest(c))
-            with self.assertRaises(ValueError): cm.validate_inventory('net',inv)
+            if old==cm.LEGACY_NET_TX:
+                # Same loaded maps, different declared source population.
+                self.assertNotEqual(cm.validate_inventory('net',inv),digest(c))
+            else:
+                with self.assertRaises(ValueError): cm.validate_inventory('net',inv)
             with self.assertRaises(ValueError): cm.validate_record_inventory(dict(r,collector_contract_sha256='0'*64))
             if old==cm.LEGACY_NET_USE_ONLY:
                 self.assertEqual(digest(c),'04afe782d748307d8bbd97be9ac499652bea0b737730b508a1105e01930d05d3')

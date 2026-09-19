@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 import unittest
 from net_tx_admission_check import check, CASES
+from test_net_tx import report_from_episodes
 
 
 class TxAdmission(unittest.TestCase):
@@ -22,7 +23,7 @@ class TxAdmission(unittest.TestCase):
                         release_entry_ns=t+3 if rejected else 900,packet_payload_owner='UNKNOWN',
                         blocking_container=None,allocator_lock_holder=None))
             logs.append('\n'.join(lines))
-        report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),relationships=[],
+        report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),sockets=[],
                     tx=dict(status='PASS',episodes=episodes,excluded={},unknown={}))
         return [dict(start_ns=50,end_ns=1000),logs,
             dict(time_ns=40,tcp_mem='0 0 0' if case=='txadmission' else '100 200 300',limited=case=='txadmission'),
@@ -33,6 +34,13 @@ class TxAdmission(unittest.TestCase):
             args=self.fixture(case)
             self.assertEqual(check(case,*args)['status'],'PASS')
             self.assertEqual(check(case,*args[:4])['status'],'PASS')
+
+    def test_actual_report_schema_and_event_lifetimes(self):
+        for case in CASES:
+            args=self.fixture(case)
+            args[4]=report_from_episodes(args[4]['tx']['episodes'],args[0])
+            self.assertEqual(args[4]['quality']['status'],'PASS',args[4])
+            self.assertEqual(check(case,*args)['status'],'PASS',args[4])
 
     def test_rejected_header_must_be_freed_before_terminal(self):
         for change in (dict(release_entry_ns=None),dict(release_entry_ns=900),dict(outcome='BACKEND_ALLOCATION_FAILED'),
@@ -48,7 +56,7 @@ class TxAdmission(unittest.TestCase):
             if change=='missing': report['tx']['episodes'].pop()
             if change=='gap': report['quality']['status']='FAIL'
             if change=='release': report['tx']['episodes'][16]['release_entry_ns']=None
-            if change=='relationship': report['relationships']=[dict(holder=2)]
+            if change=='relationship': report['sockets']=[dict(waits=[dict(holder=2)])]
             self.assertEqual(check('txadmission',*args)['status'],'FAIL',change)
 
     def test_restore_barrier_cannot_be_invented_after_recovery(self):

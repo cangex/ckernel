@@ -38,6 +38,21 @@ remain unchanged.  Quality gaps or missing recovery lifetimes fail the
 cohort, rather than reducing its eligible denominator.  Kernel warnings and
 failed setup attempts are retained.
 
+The protocol-2 send adapter admits allocation beginnings in process context
+only. Source-audit version 4 counts IRQ-only beginnings as
+``tx_irq_filtered``; they never created an admitted requester or pending
+allocation lifetime. Real nested tracing still increments both
+``tx_nested_skipped`` and the rejecting recursion counters. Gaps in selected
+steps or releases remain rejecting. This is an explicit coverage boundary,
+not evidence that IRQ allocations have been attributed. Version-3 failed
+captures are retained with their original recursion failure, not relabelled
+using the new counters. Historical contract replay is hash-bound.
+
+The independent failure and admission checkers are also tested through the
+actual raw-event report parser, including its ``sockets[].waits`` schema.
+Earlier failed VM runs exposed a checker field mismatch; those incomplete
+cohorts cannot count as validation of the corrected checker.
+
 This is not coverage of the separate ``sk_wmem_schedule`` admission-reject
 branch, realistic memory pressure, receiving allocation or clone/GSO/GRO
 lineage.  Backend elapsed time includes scheduling and interrupt time;

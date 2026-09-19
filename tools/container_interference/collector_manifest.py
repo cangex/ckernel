@@ -78,6 +78,8 @@ LEGACY_NET_USE_ONLY['source_filter'] = 'boot-frozen native cookie selection; tar
 COLLECTORS['net']['programs'].append('net_tx')
 COLLECTORS['net']['maps'] += ['net_tx_live', 'net_tx_pending']
 COLLECTORS['net']['source_filter'] += '; protocol 2 entry-frozen TCP send requester and 256 original skb-header lifetimes; fclone backend clock after identity callback, memory admission and release executor separate; no packet payload origin, clone lineage or allocator lock holder inference'
+LEGACY_NET_TX = deepcopy(COLLECTORS['net'])
+COLLECTORS['net']['source_filter'] += '; TCP send allocation begins are process-context only; IRQ-only entries separately counted as outside scope; true recursion and admitted-lifetime gaps still reject quality'
 COLLECTORS['allocator']['programs'].append('maple_context')
 COLLECTORS['allocator']['maps'].append('maple_pending')
 COLLECTORS['allocator']['source_filter'] += '; 256 task-start keyed Maple allocation brackets join sampled backend calls to destination tree addresses; no lifetime across brackets or inferred tree owner'
@@ -134,8 +136,8 @@ def validate_inventory(name, inventory):
 def validate_record_inventory(record):
     """Historical reads only; live admission always requires the current maps."""
     name=record['collector']; expected=contract(name); inventory=record.get('inventory')
-    if name=='net' and isinstance(inventory,dict) and 'net_tx' not in inventory.get('program_names',[]):
-        for historical in (LEGACY_NET,LEGACY_NET_USE_ONLY):
+    if name=='net' and record.get('collector_contract_sha256')!=digest(expected) and record.get('collector_contract_sha256') is not None:
+        for historical in (LEGACY_NET_TX,LEGACY_NET,LEGACY_NET_USE_ONLY):
             candidate=contract(name)
             for key,value in historical.items(): candidate[key]=deepcopy(value)
             if record.get('collector_contract_sha256')==digest(candidate):

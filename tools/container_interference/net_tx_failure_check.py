@@ -51,7 +51,7 @@ def check(case, window, logs, report=None, identities=None):
                                  successful_sends=8-failed))
     if report is not None and (report['quality']['status'] != 'PASS' or report['scope_audit']['status'] != 'PASS'
                               or report['tx']['status'] != 'PASS' or report['tx']['excluded'] or report['tx']['unknown']
-                              or report['relationships'] or len(report['tx']['episodes']) != 16):
+                              or any(s['waits'] for s in report['sockets']) or len(report['tx']['episodes']) != 16):
         errors.append('quality_or_private_relationship')
     return dict(status='FAIL' if errors else 'PASS', errors=errors, participants=participants,
                 scope='native failslab TCP original header allocation, task isolation and unmarked recovery',

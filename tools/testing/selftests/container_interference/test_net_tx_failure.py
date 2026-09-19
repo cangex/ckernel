@@ -7,6 +7,7 @@ from unittest.mock import patch
 from net_tx_fault import NativeTxFault
 from allocator_failure_check import SETTINGS
 from net_tx_failure_check import check, CASES
+from test_net_tx import report_from_episodes
 
 
 class TxFailure(unittest.TestCase):
@@ -20,12 +21,12 @@ class TxFailure(unittest.TestCase):
                        returned=-1 if armed else 128,error=11 if armed else 0,received=0 if armed else 128,restored=1)
                 lines.append('CIS_NET_TX_FAILURE '+' '.join('%s=%s'%p for p in r.items()))
                 episodes.append(dict(requester=[actor+1,1,actor+101,1],cookie=actor+21,begin_ns=start+1,
-                    backend_interval_ns=[start+2,start+10],terminal_ns=start+12,
+                    backend_interval_ns=[start+2,start+10],terminal_ns=start+10 if armed else start+12,
                     outcome='BACKEND_ALLOCATION_FAILED' if armed else 'ADMITTED',
                     skb_address=0 if armed else actor*100+i+1,release_entry_ns=None if armed else start+40,
                     packet_payload_owner='UNKNOWN',blocking_container=None,allocator_lock_holder=None,backend_cpu_ns=None))
             logs.append('\n'.join(lines))
-        report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),relationships=[],
+        report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),sockets=[],
                     tx=dict(status='PASS',episodes=episodes,excluded={},unknown={}))
         return dict(start_ns=50,end_ns=1000),logs,report,[dict(id=1,generation=1),dict(id=2,generation=1)]
 
@@ -36,6 +37,13 @@ class TxFailure(unittest.TestCase):
             self.assertEqual(check(case,*args[:2])['status'],'PASS')
             self.assertEqual(sum(p['failed_sends'] for p in check(case,*args)['participants']),
                              8 if case=='txfailure' else 4)
+
+    def test_actual_report_schema_and_event_lifetimes(self):
+        for case in CASES:
+            window,logs,mock,ids=self.fixture(case)
+            report=report_from_episodes(mock['tx']['episodes'],window)
+            self.assertEqual(report['quality']['status'],'PASS',report)
+            self.assertEqual(check(case,window,logs,report,ids)['status'],'PASS',report)
 
     def test_no_fabricated_success_release_or_blocker(self):
         for changes in (dict(outcome='ADMITTED'),dict(skb_address=1),dict(release_entry_ns=140),
@@ -52,7 +60,7 @@ class TxFailure(unittest.TestCase):
             if change=='missing': report['tx']['episodes'].pop()
             if change=='duplicate': report['tx']['episodes'].append(copy.deepcopy(report['tx']['episodes'][0]))
             if change=='unclosed': report['tx']['episodes'][1]['release_entry_ns']=None
-            if change=='relationship': report['relationships']=[dict(holder=2)]
+            if change=='relationship': report['sockets']=[dict(waits=[dict(holder=2)])]
             self.assertEqual(check('txfailure',window,logs,report,ids)['status'],'FAIL',change)
 
     def test_actual_return_value_and_task_flag_required(self):

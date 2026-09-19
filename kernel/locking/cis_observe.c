@@ -700,7 +700,7 @@ static DEFINE_PER_CPU(unsigned long, cis_tx_selected);
 static DEFINE_PER_CPU(unsigned long, cis_tx_callbacks);
 static DEFINE_PER_CPU(unsigned long, cis_tx_callback_ns);
 static DEFINE_PER_CPU(unsigned long, cis_tx_callback_max_ns);
-static DEFINE_PER_CPU(unsigned long, cis_tx_irq_skipped);
+static DEFINE_PER_CPU(unsigned long, cis_tx_irq_filtered);
 static DEFINE_PER_CPU(unsigned long, cis_tx_nested_skipped);
 
 static int cis_net_audit_show(struct seq_file *m, void *unused)
@@ -709,18 +709,18 @@ static int cis_net_audit_show(struct seq_file *m, void *unused)
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-	seq_printf(m, "version=3 active=%u release_active=%u tx_active=%u shift=%u source_counter_bytes_per_cpu=%zu snapshot=non_atomic\n",
+	seq_printf(m, "version=4 active=%u release_active=%u tx_active=%u shift=%u source_counter_bytes_per_cpu=%zu snapshot=non_atomic\n",
 		trace_cis_net_state_enabled(), trace_cis_net_skb_release_enabled(),
 		trace_cis_net_tx_enabled(), min(net_shift, 16U), 12 * sizeof(unsigned long));
 	for_each_possible_cpu(cpu)
-		seq_printf(m, "cpu=%d entries=%lu eligible=%lu selected=%lu releases=%lu skipped=%lu tx_entries=%lu tx_selected=%lu tx_callbacks=%lu tx_callback_ns=%lu tx_callback_max_ns=%lu tx_irq_skipped=%lu tx_nested_skipped=%lu\n", cpu,
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu selected=%lu releases=%lu skipped=%lu tx_entries=%lu tx_selected=%lu tx_callbacks=%lu tx_callback_ns=%lu tx_callback_max_ns=%lu tx_irq_filtered=%lu tx_nested_skipped=%lu\n", cpu,
 			READ_ONCE(per_cpu(cis_net_entries, cpu)), READ_ONCE(per_cpu(cis_net_eligible, cpu)),
 			READ_ONCE(per_cpu(cis_net_selected, cpu)), READ_ONCE(per_cpu(cis_net_releases, cpu)),
 			READ_ONCE(per_cpu(cis_net_skipped, cpu)),
 			READ_ONCE(per_cpu(cis_tx_entries, cpu)), READ_ONCE(per_cpu(cis_tx_selected, cpu)),
 			READ_ONCE(per_cpu(cis_tx_callbacks, cpu)), READ_ONCE(per_cpu(cis_tx_callback_ns, cpu)),
 			READ_ONCE(per_cpu(cis_tx_callback_max_ns, cpu)),
-			READ_ONCE(per_cpu(cis_tx_irq_skipped, cpu)), READ_ONCE(per_cpu(cis_tx_nested_skipped, cpu)));
+			READ_ONCE(per_cpu(cis_tx_irq_filtered, cpu)), READ_ONCE(per_cpu(cis_tx_nested_skipped, cpu)));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_net_audit);
@@ -732,11 +732,14 @@ void __cis_net_tx_begin(struct cis_net_tx_sample *sample, struct sock *sk,
 
 	preempt_disable();
 	this_cpu_inc(cis_tx_entries);
-	if (in_interrupt() || this_cpu_read(cis_in_trace)) {
-		if (in_interrupt())
-			this_cpu_inc(cis_tx_irq_skipped);
-		else
-			this_cpu_inc(cis_tx_nested_skipped);
+	/* This adapter opens allocation episodes only in process context.  An
+	 * IRQ-only call has no admitted requester or pending lifetime to lose. */
+	if (in_interrupt()) {
+		this_cpu_inc(cis_tx_irq_filtered);
+		goto out;
+	}
+	if (this_cpu_read(cis_in_trace)) {
+		this_cpu_inc(cis_tx_nested_skipped);
 		this_cpu_inc(cis_net_skipped);
 		this_cpu_inc(cis_skipped);
 		goto out;

@@ -67,6 +67,31 @@ class NetSource(unittest.TestCase):
         self.assertIn('sk->sk_protocol != IPPROTO_TCP || sk->sk_type != SOCK_STREAM',native)
         self.assertNotIn('phase == CIS_CN_SERVICE_END)',native)
 
+    def test_process_only_tx_filter_never_erases_real_recursion(self):
+        rows=[]
+        for n in (0,1):
+            r=self.snapshot(n)
+            r['source_audit']=r['source_audit'].replace('version=1','version=4 tx_active=0').replace(
+                'source_counter_bytes_per_cpu=40','source_counter_bytes_per_cpu=96').replace(
+                'skipped=0','skipped=%d'%n).rstrip()+(
+                    ' tx_entries=%d tx_selected=%d tx_callbacks=%d tx_callback_ns=%d tx_callback_max_ns=20'
+                    ' tx_irq_filtered=%d tx_nested_skipped=%d\n'%(3*n,n,3*n,10*n,n,n))
+            rows.append(r)
+        result=delta(*rows)
+        self.assertEqual(result['totals']['tx_irq_filtered'],1)
+        self.assertEqual(result['totals']['tx_nested_skipped'],1)
+        self.assertEqual(result['totals']['skipped'],1)
+        rows[1]['source_audit']=rows[1]['source_audit'].replace(' skipped=1',' skipped=0')
+        with self.assertRaises(ValueError): delta(*rows)
+        source=(Path(__file__).resolve().parents[4]/'kernel/locking/cis_observe.c').read_text()
+        begin=source.split('void __cis_net_tx_begin(',1)[1].split('EXPORT_SYMBOL',1)[0]
+        irq=begin.split('if (in_interrupt()) {',1)[1].split('}',1)[0]
+        nested=begin.split('if (this_cpu_read(cis_in_trace)) {',1)[1].split('}',1)[0]
+        self.assertIn('cis_tx_irq_filtered',irq)
+        self.assertNotIn('cis_skipped',irq)
+        self.assertIn('cis_net_skipped',nested)
+        self.assertIn('cis_skipped',nested)
+
     def test_irq_actor_not_current_and_release_drops_observed_lifetime(self):
         root=Path(__file__).resolve().parents[4]
         text=(root/'tools/container_interference/bpf/cis.bpf.c').read_text()

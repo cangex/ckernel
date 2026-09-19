@@ -62,7 +62,7 @@ def check(case,window,logs,configuration,restored,report=None,identities=None):
                                  admission_rejected=rejected,recovery_sends=8))
     if report is not None and (report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS'
                               or report['tx']['status']!='PASS' or report['tx']['excluded'] or report['tx']['unknown']
-                              or report['relationships'] or len(report['tx']['episodes'])!=48): errors.append('capture_quality')
+                              or any(s['waits'] for s in report['sockets']) or len(report['tx']['episodes'])!=48): errors.append('capture_quality')
     return dict(status='FAIL' if errors else 'PASS',errors=errors,participants=participants,
                 scope='native repair-mode queue acceptance and budget rejection; no wire-delivery claim',
                 performance_certification='NOT_ACCEPTED')

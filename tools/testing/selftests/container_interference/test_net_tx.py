@@ -5,6 +5,24 @@ import test_net_report
 from net_backlog_check import check_tx
 
 
+def report_from_episodes(episodes, window):
+    """Exercise fixture checks against the actual event-to-report contract."""
+    rows=[]
+    for e in episodes:
+        who=e['requester'][0]
+        changes=dict(begin=e['begin_ns'],who=who,skb=e['skb_address'],
+                     alloc_ns=e['backend_interval_ns'][0],backend_ns=e['backend_interval_ns'][1])
+        if e['outcome']=='BACKEND_ALLOCATION_FAILED':
+            rows.append(NetTx().row(e['terminal_ns'],4,**changes))
+            continue
+        rows.append(NetTx().row(e['backend_interval_ns'][1],1,**changes))
+        rows.append(NetTx().row(e['terminal_ns'],
+            3 if e['outcome']=='MEMORY_ADMISSION_REJECTED' else 2,**changes))
+        rows.append(NetTx().row(e['release_entry_ns'],5,**changes))
+    record=test_net_report.NetReport().record(); record['window']=window
+    return test_net_report.NetReport().run_rows(rows,record)
+
+
 class NetTx(unittest.TestCase):
     def row(self,time,phase,begin=10,who=1,skb=77,**changes):
         d=dict(protocol=2,sample_time_ns=time,phase=phase,begin_ns=begin,alloc_ns=begin+1,backend_ns=begin+5,
