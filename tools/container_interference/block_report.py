@@ -93,6 +93,7 @@ def episode(rows):
     return dict(request=start['request'],episode_ns=start['episode_ns'],submitter=list(initial_submitter),
         selected_container=list(selection),admission='bio_billing_root' if start.get('admission')==2 else 'submitter_root',
         submitter_kernel_thread=bool(start['submitter_flags'] & 0x00200000) if start['protocol']==3 else None,
+        submitter_lifetime='start_epoch_unknown' if not start['submitter_start'] else 'observed_task_start',
         initial_dirtier=None,inode_owner=None,
         episode_interval_ns=[start['episode_ns'],terminal],terminal='merge_transfer' if rows[-1]['phase']==6 else
             'data_completion' if terminal is not None else 'UNOBSERVED',
@@ -121,7 +122,9 @@ def analyze(record,raw):
         if (not required<=d.keys() or any(type(d[k]) is not int or d[k]<0 for k in required-{'stack_id'})
                 or d['stack_id'] < -4095 or d['protocol'] not in (1,2,3) or not 1<=d['phase']<=7
                 or not 0<=d['context']<=3 or d['multi_bio'] not in (0,1)
-                or not all(d[k] for k in ('request','episode_ns','queue','submitter_tid','submitter_start'))):
+                or not all(d[k] for k in ('request','episode_ns','queue','submitter_tid')) or
+                not d['submitter_start'] and not (d['protocol']==3 and d['submitter_id']==0 and
+                    d['submitter_generation']==0 and d['submitter_flags'] & 0x00200000)):
             excluded['schema']+=1; continue
         if d['protocol']>=2 and (d['bio_origin_overdepth'] not in (0,1) or
                 (d['bio_owner_id'],d['bio_owner_generation'])!=(0,0) and
@@ -137,7 +140,8 @@ def analyze(record,raw):
                     (source==selection or (d['bio_owner_id'],d['bio_owner_generation'])!=selection)):
                 excluded['admission_identity']+=1; continue
         if ((d['id'],d['generation']) not in known or who[:2]!=(0,0) and who[:2] not in known
-                or d['context'] and any(who) or not d['context'] and not all(who[2:])
+                or d['context'] and any(who) or not d['context'] and (not who[2] or
+                    not who[3] and not (d['protocol']==3 and who[:2]==(0,0)))
                 or d['phase']==1 and (d['context'] or who!=submitter(d))):
             excluded['identity']+=1; continue
         if not within_window(record,d['episode_ns'],d['sample_time_ns']): excluded['outside_window']+=1; continue
@@ -191,6 +195,7 @@ def analyze(record,raw):
         performance_certification='NOT_ACCEPTED',limits=[
             'initial request submitter is not an exclusive owner of merged bios or writeback work',
             'bio billing-root admission preserves the real submitter; initial dirtier and inode owner are not inferred',
+            'early unregistered kernel tasks may have start epoch zero; their TID is not joined across request episodes',
             'device overlap identifies neither a holder nor a blocking container',
             'tag slowpath excludes immediate successes and does not identify slot holders; TAG_FOUND can still be rejected by inactive hctx',
             'tag io_schedule intervals include wakeup/scheduling and probe overhead, not exclusive device delay or spin cycles',

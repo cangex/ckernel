@@ -122,6 +122,7 @@ def analyze(record,raw):
                     head_bio_origins=f['head_bio_origins'],origin_coverage=f['origin_coverage'],
                     selected_container=f['selected_container'],admission=f['admission'],
                     submitter_kernel_thread=f['submitter_kernel_thread'],initial_dirtier=f['initial_dirtier'],inode_owner=f['inode_owner'],
+                    submitter_lifetime=f['submitter_lifetime'],
                     issue_bio_sources=bio_sources.get((f['request'],f['episode_ns']),[]),
                     merge_transfers=merge_transfers.get((f['request'],f['episode_ns']),[]),
                     uncertainty=f['uncertainty'],terminal=f['terminal'])

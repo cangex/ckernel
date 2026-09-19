@@ -155,6 +155,14 @@ class BlockReport(unittest.TestCase):
         self.assertEqual(r['requests'][0]['selected_container'],[1,1])
         self.assertFalse(r['requests'][0]['submitter_kernel_thread'])
 
+    def test_boot_kernel_thread_start_zero_is_unknown_not_business_identity(self):
+        r=self.run_rows(self.async_rows(submitter_start=0,actor_start=0))
+        self.assertEqual(r['quality']['status'],'PASS',r)
+        self.assertEqual(r['requests'][0]['submitter_lifetime'],'start_epoch_unknown')
+        for fields in (dict(submitter_flags=0),dict(submitter_id=1,submitter_generation=1)):
+            r=self.run_rows(self.async_rows(submitter_start=0,actor_start=0,**fields))
+            self.assertEqual(r['quality']['status'],'FAIL',r)
+
     def test_billing_unknown_stale_overdepth_or_wrong_selection_rejects(self):
         for changes in (dict(bio_owner_id=0,bio_owner_generation=0),dict(bio_owner_generation=8),
                         dict(bio_owner_id=2),dict(bio_origin_overdepth=1),dict(admission=4),
