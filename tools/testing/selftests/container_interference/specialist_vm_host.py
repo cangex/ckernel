@@ -79,12 +79,13 @@ def run(args):
                     '-object','memory-backend-ram,id=cisram1,size=2048M',
                     '-numa','node,nodeid=0,cpus=0-3,memdev=cisram0',
                     '-numa','node,nodeid=1,cpus=4-7,memdev=cisram1']
-    if args.label in ('x4-net','x4-backlog','x4-net-rights','x4-net-origin','x7-mixed','x4-net-capacity'):
+    if args.label in ('x4-net','x4-backlog','x4-net-rights','x4-net-origin','x7-mixed','x4-net-capacity','x4-net-txfailure'):
         command[-1] += ' cis_observe.net_shift=0'
     if args.label == 'x4-backlog': command[-1] += ' cis_net_test=backlog'
     if args.label == 'x4-net-rights': command[-1] += ' cis_net_test=rights'
     if args.label == 'x4-net-origin': command[-1] += ' cis_net_test=origin'
     if args.label == 'x4-net-capacity': command[-1] += ' cis_net_test=capacity'
+    if args.label == 'x4-net-txfailure': command[-1] += ' cis_net_test=txfailure'
     if args.label == 'x1-rwsem-overflow': command[-1] += ' cis_rwsem_test=overflow'
     if args.label == 'x7-rwsem-joint': command[-1] += ' cis_rwsem_test=joint'
     disks=[]
@@ -159,6 +160,6 @@ if __name__ == '__main__':
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
     parser.add_argument('--source-diagnostics', action='store_true',
                         help='bounded recursion troubleshooting; not a performance cohort')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-maple','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x4-net-capacity','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint','x7-mixed'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-maple','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x4-net-capacity','x4-net-txfailure','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint','x7-mixed'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     raise SystemExit(run(parser.parse_args()))

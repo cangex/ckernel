@@ -10,6 +10,7 @@ from net_source_audit import delta
 from prototype_admission import SOURCE_KEYS
 from session_check import extract
 from source_switches import validate
+from net_tx_failure_check import CASES as TX_FAILURE_CASES
 
 
 def verify(serial,output):
@@ -19,7 +20,16 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     cases=tuple(plan.get('cases',[]))
-    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,('backlog',),('capacity',)): raise ValueError('unsupported frozen case set')
+    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,TX_FAILURE_CASES,('backlog',),('capacity',)): raise ValueError('unsupported frozen case set')
+    txfailure=cases==TX_FAILURE_CASES
+    if txfailure:
+        from allocator_failure_check import SETTINGS
+        if (value('tx-failslab-original.json')!=value('tx-failslab-restored.json') or
+                value('tx-failslab-active.json')!=dict(settings=SETTINGS,cache='1') or
+                value('tx-failslab-original.json')['settings']['probability']!='0' or
+                value('tx-failslab-original.json')['cache']!='0' or
+                plan.get('send_bytes')!=128 or plan.get('operation_spacing_ms')!=100 or
+                plan.get('tx_failure_validation') is not True): errors.append('fault_plan_or_restoration')
     if cases==('capacity',) and any(plan.get(k)!=v for k,v in dict(capacity_per_actor=40,watch_capacity=64,post_detach_operations=40).items()):
         errors.append('capacity_plan')
     if cases in (RIGHTS_CASES,ORIGIN_CASES) and plan.get('fd_transfer')!='real SCM_RIGHTS; rightsPrivate recipient creates a different TCP socket':
@@ -33,7 +43,7 @@ def verify(serial,output):
         errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
     if (plan.get('order')!=case_order(cases) or plan.get('rounds')!=3 or
-            plan.get('net_shift')!=0 or plan.get('hold_ms')!=30 or plan.get('operations')!=4): errors.append('frozen_plan')
+            plan.get('net_shift')!=0 or plan.get('hold_ms')!=30 or plan.get('operations')!=(8 if txfailure else 4)): errors.append('frozen_plan')
     if cases==('backlog',) and (plan.get('unheld_drain_transfers')!=1 or plan.get('drain_offset_ms')!=450 or
                               plan.get('skb_release_not_bounded_by_recv_return') is not True): errors.append('drain_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
@@ -54,7 +64,10 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        if cases==('capacity',):
+        if txfailure:
+            from net_tx_failure_check import check as check_tx_failure
+            result=check_tx_failure(label.split('-')[0],ev['window'],logs,report,identities)
+        elif cases==('capacity',):
             from net_capacity_check import check as check_capacity
             result=check_capacity(ev['window'],logs,record if '-net' in label else None,
                 capture if '-net' in label else None,ev['idle_sources'])
@@ -70,7 +83,7 @@ def verify(serial,output):
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result,source_audit=source))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
-        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native TCP logical lock fixture only',
+        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native TCP send backend failure and recovery' if txfailure else 'native TCP logical lock fixture only',
         x4_status='INCOMPLETE',performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result
 

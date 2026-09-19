@@ -28,12 +28,16 @@ def tcp_pair():
         except BaseException: client.close(); raise
 
 
-def run(backlog=False,rights=False,origin=False,capacity=False):
+def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/net_shift').read_text().strip()!='0':
         raise ValueError('full-rate native cookie fixture selection required')
     out=Path('/tmp/net-evidence'); out.mkdir(mode=0o700)
+    fault=None
+    if txfailure:
+        from net_tx_fault import NativeTxFault
+        fault=NativeTxFault(out)
     root=Path('/sys/fs/cgroup/cis-net'); root.mkdir(); (root/'management').mkdir()
     (root/'management/cgroup.procs').write_text(str(os.getpid()))
     (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
@@ -45,11 +49,19 @@ def run(backlog=False,rights=False,origin=False,capacity=False):
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
     rights=rights or origin
     cases=('capacity',) if capacity else ORIGIN_CASES if origin else ('backlog',) if backlog else RIGHTS_CASES if rights else CASES
+    if txfailure:
+        from net_tx_failure_check import CASES as failure_cases
+        cases=failure_cases
     plan=dict(order=case_order(cases),cases=list(cases),rounds=3,operations=4,roots=2,net_shift=0,
         window_ms=2000,cpu=[0,1],management_cpu=7,memory_max_bytes=64<<20,
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
         scope='logical lock fixture with deliberate bounded sleep while held, not ordinary application cost acceptance')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    if txfailure:
+        plan.update(operations=8,send_bytes=128,operation_spacing_ms=100,tx_failure_validation=True,
+                    scope='native task/cache-filtered failslab, same-socket unmarked recovery and private normal actor',
+                    socket_namespace='inherited distinct VM loopback TCP pairs; no shared socket')
+        (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if capacity:
         plan.update(capacity_per_actor=40,watch_capacity=64,post_detach_operations=40,
                     scope='native Socket watch overflow must reject attribution, then resume same actors')
@@ -98,6 +110,7 @@ def run(backlog=False,rights=False,origin=False,capacity=False):
             roots=[{name:(p/name).read_text() for name in ('cpu.stat','memory.current','memory.peak','memory.events')} for p in roots])
 
     try:
+        if fault: fault.enable()
         deadline=time.monotonic()+10
         while not Path(endpoint).exists():
             if daemon.poll() is not None or time.monotonic()>deadline: raise RuntimeError('daemon readiness')
@@ -107,6 +120,10 @@ def run(backlog=False,rights=False,origin=False,capacity=False):
             case=label.split('-')[0]; collecting='-net' in label; sid=None
             client,server=socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET) if rights else tcp_pair()
             sockets.extend((client,server)); selected=[client,server] if rights else [server,server]
+            peers=[]
+            if txfailure:
+                other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server))
+                selected=[server,other_server]; peers=[client,other_client]
             if case=='backlog': selected=[server,client]
             if case=='private':
                 other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server)); selected[1]=other_server
@@ -128,9 +145,15 @@ def run(backlog=False,rights=False,origin=False,capacity=False):
                 handle=(out/(label+'-%d.log'%i)).open('x'); handles.append(handle)
                 fd=selected[i].fileno()
                 workload='/net_capacity_workload' if capacity else '/net_backlog_workload' if case=='backlog' else '/net_workload'
-                child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case]+(['origin'] if origin else []),
-                    stdout=handle,stderr=handle,pass_fds=(fd,))
+                extra=[]; passed=(fd,)
+                if txfailure:
+                    workload='/net_tx_failure_workload'; extra=[str(peers[i].fileno())]; passed=(fd,peers[i].fileno())
+                child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case]
+                    +(['origin'] if origin else [])+extra,stdout=handle,stderr=handle,pass_fds=passed)
                 children.append(child); running.append(child)
+            if txfailure:
+                for sock in sockets: sock.close()
+                sockets.clear()
             if capacity:
                 for channel in channels:
                     if channel.recv(1)!=b'R': raise ValueError('capacity fixture readiness')
@@ -149,7 +172,10 @@ def run(backlog=False,rights=False,origin=False,capacity=False):
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            if capacity:
+            if txfailure:
+                from net_tx_failure_check import check as check_tx_failure
+                result=check_tx_failure(case,window,logs,report,identities)
+            elif capacity:
                 from net_capacity_check import check as check_capacity
                 idle=capacity_idle
                 result=check_capacity(window,logs,record if sid else None,
@@ -182,6 +208,7 @@ def run(backlog=False,rights=False,origin=False,capacity=False):
         try: daemon.wait(timeout=15)
         except subprocess.TimeoutExpired: daemon.kill(); daemon.wait()
         requests.close(); log.close()
+        if fault: fault.restore()
 
 
 if __name__=='__main__':
@@ -190,4 +217,5 @@ if __name__=='__main__':
     group.add_argument('--backlog',action='store_true'); group.add_argument('--rights',action='store_true')
     group.add_argument('--origin',action='store_true')
     group.add_argument('--capacity',action='store_true')
-    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity)
+    group.add_argument('--txfailure',action='store_true')
+    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure)

@@ -18,6 +18,7 @@ if ! (insmod /cis_net_fixture.ko && /bin/busybox ifconfig lo up &&
     exit 91
 fi
 case " $(cat /proc/cmdline) " in
+    *" cis_net_test=txfailure "*) /usr/bin/python3 /profile/net_vm.py --txfailure ;;
     *" cis_net_test=capacity "*) /usr/bin/python3 /profile/net_vm.py --capacity ;;
     *" cis_net_test=origin "*) /usr/bin/python3 /profile/net_vm.py --origin ;;
     *" cis_net_test=backlog "*) /usr/bin/python3 /profile/net_vm.py --backlog ;;
