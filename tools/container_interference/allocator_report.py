@@ -20,6 +20,19 @@ PRIORITY = ['node_lock_acquire','node_lock_section','pre_hook','post_hook','new_
 MAX_CALLS = 1024
 
 
+def allocation_result(rows):
+    last=rows[-1]
+    if last['count']:
+        return dict(status='RETURNED',failure_region=None,cause=None)
+    if len(rows)==4 and [r['stage'] for r in rows]==[1,2,3,20] and not rows[2]['count']:
+        region='pre_allocation_hook'
+    elif any(r['stage']==18 for r in rows):
+        region='bulk_rollback'
+    else:
+        region='backend_or_post_hook'
+    return dict(status='FAILED',failure_region=region,cause='UNKNOWN')
+
+
 def stages(rows, begin, end):
     opened, intervals = {}, []
     for row in rows:
@@ -93,6 +106,7 @@ def analyze(record, raw):
             excluded['rollback']+=1; continue
         calls.append(dict(actor=list(key[:4]),call_ns=key[-1],evidence='E1',cache_address=first['cache'],
             operation='single' if first['operation']==1 else 'bulk',requested=first['requested'],
+            result=allocation_result(rows),
             returned_count=last['count'],rolled_back_count=rollbacks[0] if rollbacks else 0,
             object_address=last['object'] or None,requested_node=first['requested_node'],
             observed_nodes=sorted({r['observed_node'] for r in rows if r['observed_node']>=0}),
@@ -111,6 +125,8 @@ def analyze(record, raw):
         limits=['phase wall time includes observer and preemption, not atomic or spin cycles',
                 'exclusive partition avoids adding nested slow/partial/node-lock intervals twice',
                 'node_lock_acquire includes uncontended calls; no full lock owner/lifetime coverage',
+                'node_lock_section ends after unlock and is not a pure held interval or holder attribution',
+                'failure region identifies an observed control-flow boundary, not another container or a specific ENOMEM cause',
                 'same cache address is not proof of interference or a shared allocation owner',
                 'sampling is per CPU selected-cache entry, not unbiased population cost',
                 'release entry is not allocator completion or RCU grace-period duration',

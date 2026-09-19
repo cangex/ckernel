@@ -38,6 +38,15 @@ class AllocatorReport(unittest.TestCase):
     def test_failed_bulk_retains_prefix_rollback(self):
         c=self.run_rows(self.rows([1,2,3,4,5,18,15,16,20],bulk=True,fail=True))['calls'][0]
         self.assertEqual(c['returned_count'],0); self.assertEqual(c['rolled_back_count'],2)
+        self.assertEqual(c['result'],dict(status='FAILED',failure_region='bulk_rollback',cause='UNKNOWN'))
+
+    def test_failure_region_does_not_invent_root_cause(self):
+        c=self.run_rows(self.rows([1,2,3,20],fail=True))['calls'][0]
+        self.assertEqual(c['result'],dict(status='FAILED',failure_region='pre_allocation_hook',cause='UNKNOWN'))
+        c=self.run_rows(self.rows([1,2,3,4,13,14,5,15,16,20],fail=True))['calls'][0]
+        self.assertEqual(c['result'],dict(status='FAILED',failure_region='backend_or_post_hook',cause='UNKNOWN'))
+        c=self.run_rows(self.rows())['calls'][0]
+        self.assertEqual(c['result'],dict(status='RETURNED',failure_region=None,cause=None))
 
     def test_missing_ends_and_changed_resource_rejected(self):
         for sequence in ([1,2,20],[1,2,3,4,20],[1,2,3,12,20]):

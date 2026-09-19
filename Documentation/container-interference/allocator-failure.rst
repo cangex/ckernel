@@ -30,6 +30,13 @@ private-cache call is an explicit selection negative, not a lost selected
 event.  All selected calls, including failed ones, must be present for this
 small full-rate fixture to pass.  Raw source/capture quality checks still apply.
 
+The allocator report now labels a returned versus failed request.  Failed
+requests retain an observed region (pre_allocation_hook, bulk_rollback, or
+backend_or_post_hook) but a cause of UNKNOWN.  A four-event begin/pre/end
+path alone cannot distinguish fault injection, accounting rejection and
+other pre-hook failures.  Only the independent test configuration identifies
+failslab in this cohort.  Phase times still include observer execution.
+
 These are real native injected pre-hook failures, not natural memory pressure,
 memcg reclaim, physical exhaustion or partial-bulk rollback coverage.  Native
 pre-hook failure is not by itself evidence of a competing container or lock.
