@@ -9,6 +9,18 @@ from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown,replay
 
 
 class CoverageTests(unittest.TestCase):
+    def test_failed_sends_are_not_socket_ownership_or_success_only_evidence(self):
+        checked=dict(status='PASS',states=[dict(label='%s-net%d'%(case,i),
+            result=dict(participants=[dict(eligible=8,captured=8)]*2))
+            for case in ('txfailure','txunmarked') for i in range(3)])
+        module=SimpleNamespace(__file__=__file__,verify=lambda *a,**k:checked)
+        with tempfile.TemporaryDirectory() as tmp,patch('coverage_matrix.importlib.import_module',return_value=module):
+            base=Path(tmp);(base/'serial.log').write_bytes(b'fixture')
+            row=dict(name='txfailure',serial='serial.log',sha256=hashlib.sha256(b'fixture').hexdigest())
+            for kind,expected in (('net_tx_failure','PASS_SCOPED'),('net','FAIL'),('net_tx','FAIL')):
+                index=dict(schema='cis-coverage-input-v1',cohorts=[dict(row,verifier=kind)])
+                self.assertEqual(replay(index,base,base/kind)['evidence'][0]['status'],expected)
+
     def test_capacity_protection_does_not_certify_logical_ownership(self):
         checked=dict(status='PASS',states=[dict(label='capacity-net%d'%i,
             result=dict(native_cookies=80,quality=dict(status='FAIL'))) for i in range(3)])
