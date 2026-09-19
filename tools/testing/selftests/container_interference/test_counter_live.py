@@ -63,5 +63,15 @@ class CounterLive(unittest.TestCase):
         self.assertEqual(r['status'],'FAIL'); self.assertFalse(r['shared_objects'])
         self.assertTrue(all(v['evidence']=='UNACCEPTED' for v in r['objects']))
 
+    def test_aggregate_does_not_accept_pre_window_sample(self):
+        record,rows=self.input()
+        record['window']['start_ns']=1
+        for row in rows:
+            if row['kind']=='COUNTER' and 'object=200 ' in row['detail']:
+                row['detail']+=' call_ns=0'
+        result=self.run_rows(record,rows)
+        self.assertEqual(result['status'],'FAIL')
+        self.assertIn('sample_identity_or_window',result['defects'])
+
     def test_old_unspecified_capture_is_readable(self):
         self.assertEqual(analyze({},b'',{})['status'],'NOT_REQUESTED')

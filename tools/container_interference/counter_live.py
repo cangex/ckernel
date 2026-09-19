@@ -4,6 +4,7 @@ from collections import defaultdict
 import json
 
 from owner_report import fields
+from explain import within_window
 
 
 def analyze(record, raw, quality):
@@ -28,6 +29,12 @@ def analyze(record, raw, quality):
     for row in rows:
         d=fields(row.get('detail','')); kind=row.get('kind')
         if kind=='COUNTER' and d.get('object') in selected and 2<=d.get('stage',0)<=8:
+            required={'object_generation','operation','call_ns','sample_time_ns','sample_shift','pages','depth'}
+            if (not required<=d.keys() or (row.get('id'),row.get('generation')) not in known or
+                    not 1<=d['operation']<=6 or not 0<=d['object_generation']<2**63 or
+                    not 0<=d['sample_shift']<=16 or not 0<=d['depth']<64 or not 0<=d['pages']<2**64 or
+                    not within_window(record,d['call_ns'],d['sample_time_ns'])):
+                defects.append('sample_identity_or_window'); continue
             observed[d['object'],row['id'],row['generation'],d['operation']].append(d)
         if kind!='counter_sum': continue
         required={'protocol','object','object_generation','operation','first_ns','last_ns','sample_shift',
