@@ -104,6 +104,8 @@ def analyze(record,raw):
                         unexplained_elapsed_ns=f['unexplained_elapsed_ns'])
         elif collector=='block':
             bio_sources={}; merge_transfers={}
+            inode_contexts={tuple(r['request']):r['context'] for r in
+                specialist.get('writeback',{}).get('request_links',[])}
             for row in specialist.get('provenance',{}).get('issue_sources',[]):
                 bio_sources.setdefault((row['request'],row['episode_ns']),[]).append(row)
             for row in specialist.get('provenance',{}).get('merge_transfers',[]):
@@ -123,6 +125,7 @@ def analyze(record,raw):
                     selected_container=f['selected_container'],admission=f['admission'],
                     submitter_kernel_thread=f['submitter_kernel_thread'],initial_dirtier=f['initial_dirtier'],inode_owner=f['inode_owner'],
                     submitter_lifetime=f['submitter_lifetime'],
+                    inode_writeback_context=inode_contexts.get((f['request'],f['episode_ns'])),
                     issue_bio_sources=bio_sources.get((f['request'],f['episode_ns']),[]),
                     merge_transfers=merge_transfers.get((f['request'],f['episode_ns']),[]),
                     uncertainty=f['uncertainty'],terminal=f['terminal'])
@@ -155,7 +158,11 @@ def markdown(report):
         if r['chain_leaf_to_root']: lines.append('  调用栈（叶到根）：`%s`。'%' → '.join(r['chain_leaf_to_root']))
         if r['relation']=='block_request_episode':
             if r['details'].get('admission')=='bio_billing_root':
-                lines.append('  按bio计费容器 %s 纳入窗口；实际提交者保留为上述任务，不等于最初写文件的容器，inode归属仍未知。'%r['details']['selected_container'])
+                lines.append('  按bio计费容器 %s 纳入窗口；实际提交者保留为上述任务，不等于最初写文件的容器，独占inode归属仍未知。'%r['details']['selected_container'])
+            context=r['details'].get('inode_writeback_context')
+            if context:
+                lines.append('  已闭合的inode回写上下文：设备 %s，inode号 %s，执行线程 %s，回写memcg %s。它连接到本次请求提交，不证明全部合并bio都属于该inode，也不指定唯一脏化者。'%(
+                    context['device'],context['ino'],context['executor'],context['memcg']))
             if r['details'].get('submitter_lifetime')=='start_epoch_unknown':
                 lines.append('  提交线程的启动代次未知，不凭TID跨请求拼接线程生命周期。')
             snapshots=r['details'].get('issue_bio_sources',[])

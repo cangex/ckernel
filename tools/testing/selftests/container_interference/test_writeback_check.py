@@ -44,3 +44,26 @@ class WritebackTruth(unittest.TestCase):
             self.assertEqual(check_case(*args)['status'],'FAIL')
         args=self.inputs(); args[2][0]=args[2][0].replace('buffered=1','buffered=0')
         self.assertEqual(check_case(*args)['status'],'FAIL')
+
+    def bridge_inputs(self,shared=False):
+        args=self.inputs(shared); report=args[5]
+        contexts=[dict(request=[300+i,30],context=dict(exclusive_dirtier=None,blocking_container=None,
+            device=[8,0 if shared else i],ino=10 if shared else 10+i,executor=[0,0,100,1]))
+            for i in range(1 if shared else 2)]
+        for i,r in enumerate(report['requests']): r.update(request=300+i,episode_ns=30)
+        report['writeback']=dict(coverage='AVAILABLE',request_links=contexts,dirty_observations=[
+            dict(actor=[i+1,1,200+i,1],device=[8,0 if shared else i],ino=10 if shared else 10+i,time_ns=15)
+            for i in range(2)])
+        return args
+
+    def test_bridge_checks_independent_inode_and_both_dirtying_containers(self):
+        for shared in (False,True):
+            args=self.bridge_inputs(shared); r=check_case(*args)
+            self.assertEqual(r['status'],'PASS',r)
+            self.assertEqual(r['inode_request_link'],'CLOSED_NATIVE_CONTEXT')
+            self.assertEqual(len(r['dirty_transition_actors']),2)
+        for field,value in (('ino',999),('device',[8,99]),('executor',[1,1,100,1]),('exclusive_dirtier',[1,1])):
+            args=self.bridge_inputs(); args[5]['writeback']['request_links'][0]['context'][field]=value
+            self.assertEqual(check_case(*args)['status'],'FAIL')
+        args=self.bridge_inputs(True); args[5]['writeback']['dirty_observations'].pop()
+        self.assertEqual(check_case(*args)['status'],'FAIL')
