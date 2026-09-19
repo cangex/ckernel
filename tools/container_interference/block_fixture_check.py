@@ -67,7 +67,9 @@ def check_case(case,window,logs,report=None,identities=None,verify_blkcg=False,f
                             errors.append('fixture_request_phases_%d'%role)
                     if verify_blkcg and (not matches[0].get('head_bio_origins') or any(
                         origin['registered_container']!=[identity['id'],identity['generation']] or
-                        origin['cgroup_id']!=identity['id'] or origin['bytes']!=4096 or origin['ancestor_overdepth']
+                        origin['cgroup_id']!=identity['id'] or origin['ancestor_overdepth'] or
+                        origin['bytes']!=origin['request_remaining_bytes'] or
+                        origin['bytes'] not in ((4096,2048) if fixture=='partial' else (4096,))
                         for origin in matches[0]['head_bio_origins'])):
                         errors.append('head_bio_blkcg_%d'%role)
         if len(associated)!=len(report['requests']): errors.append('unexpected_request')

@@ -35,6 +35,7 @@ def episode(rows):
             origin=(row['bio_owner_id'],row['bio_owner_generation'])
             bio_origins.append(dict(time_ns=now,bio=row['bio'],cgroup_id=row['bio_cgroup'],
                 registered_container=list(origin) if all(origin) else None,bytes=row['bio_bytes'],
+                phase=phase,request_remaining_bytes=row['remaining'],
                 ancestor_overdepth=bool(row['bio_origin_overdepth'])))
             if not all(origin): uncertainty['head_bio_origin_unresolved']+=1
         if (row['id'],row['generation'],row['submitter_tid'],row['submitter_start'])!=submitter:

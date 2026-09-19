@@ -113,3 +113,16 @@ class BlockReport(unittest.TestCase):
         self.assertIsNone(unknown['requests'][0]['head_bio_origins'][0]['registered_container'])
         self.assertIn('head_bio_origin_unresolved',unknown['requests'][0]['uncertainty'])
         wrong=self.run_rows(rows(9)); self.assertEqual(wrong['quality']['status'],'FAIL'); self.assertFalse(wrong['requests'])
+
+    def test_partial_bio_origin_bytes_are_remaining_not_original(self):
+        rows=[]
+        for time,phase,left,completed in ((10,1,4096,0),(20,3,4096,0),
+                                          (30,5,4096,2048),(40,5,2048,2048)):
+            rows.append(self.row(time,phase,protocol=2,bio_cgroup=1,bio_owner_id=1,
+                bio_owner_generation=1,bio_bytes=left,bio_origin_overdepth=0,
+                remaining=left,completed=completed))
+        report=self.run_rows(rows)
+        self.assertEqual(report['quality']['status'],'PASS',report)
+        origins=report['requests'][0]['head_bio_origins']
+        self.assertEqual([v['bytes'] for v in origins],[4096,4096,4096,2048])
+        self.assertTrue(all(v['bytes']==v['request_remaining_bytes'] for v in origins))

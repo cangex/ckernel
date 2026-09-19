@@ -22,7 +22,8 @@ def verify(serial,output):
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_BLOCK_DEVICE_UNLOAD=0' not in text.splitlines(): errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
     if (plan.get('order')!=case_order() or plan.get('rounds')!=3 or plan.get('operations_per_actor')!=8 or
-            plan.get('device_bytes')!=16<<20 or plan.get('direct') is not True or plan.get('bytes_per_io')!=4096): errors.append('frozen_plan')
+            plan.get('device_bytes')!=16<<20 or plan.get('direct') is not True or plan.get('bytes_per_io')!=4096 or
+            plan.get('verify_head_bio_blkcg') is not True): errors.append('frozen_plan')
     if plan.get('devices')!=(['/dev/cisblock0','/dev/cisblock1'] if fixture else ['/dev/vda','/dev/vdb']):
         errors.append('device_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')

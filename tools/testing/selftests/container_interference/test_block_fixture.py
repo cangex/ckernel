@@ -76,10 +76,18 @@ class BlockFixture(unittest.TestCase):
                         devices=[[8,0]],operation=(1,0)[n%2],initial_bytes=4096,
                         service_intervals=[dict(end=end) for end in ends],
                         completions=[dict(bytes=size,status=0) for size in sizes],
+                        head_bio_origins=[dict(registered_container=[role+1,1],cgroup_id=role+1,
+                            bytes=left,request_remaining_bytes=left,ancestor_overdepth=False)
+                            for left in ([4096,2048] if mode=='partial' else [4096])],
                         uncertainty={},blocking_container=None))
             report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),requests=rows)
-            result=check_case('shared',dict(start_ns=0,end_ns=100),self.logs(),report,identities,fixture=mode)
+            result=check_case('shared',dict(start_ns=0,end_ns=100),self.logs(),report,identities,
+                fixture=mode,verify_blkcg=True)
             self.assertEqual(result['status'],'PASS',result)
+            rows[0]['head_bio_origins'][0]['bytes']=8192
+            self.assertEqual(check_case('shared',dict(start_ns=0,end_ns=100),self.logs(),report,identities,
+                fixture=mode,verify_blkcg=True)['status'],'FAIL')
+            rows[0]['head_bio_origins'][0]['bytes']=4096
             if mode=='requeue': rows[0]['service_intervals'].pop(0)
             else: rows[0]['completions']=[dict(bytes=4096,status=0)]
             self.assertEqual(check_case('shared',dict(start_ns=0,end_ns=100),self.logs(),report,identities,fixture=mode)['status'],'FAIL')
