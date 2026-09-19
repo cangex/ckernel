@@ -325,7 +325,7 @@ int alloc_release(struct bpf_raw_tracepoint_args *ctx)
 #if CIS_PROFILE == 7
 static __always_inline void counter_sum(struct cis_counter_event *e)
 {
-	__u32 *slot, key, stage, bin = 0;
+	__u32 *slot, key, bin = 0;
 	struct cis_counter_actor *actor;
 	struct cis_counter_sum *sum;
 	__u64 offset;
@@ -347,15 +347,17 @@ static __always_inline void counter_sum(struct cis_counter_event *e)
 	sum->last_ns=e->base.time_ns;
 	if (e->depth<sum->min_depth) sum->min_depth=e->depth;
 	if (e->depth>sum->max_depth) sum->max_depth=e->depth;
-	stage=e->stage-2;
 	/* Process-context source recursion guard serializes this CPU's value. */
-	sum->counts[stage]++;
-	if (~sum->pages[stage]<e->pages) sum->tainted=1;
-	else sum->pages[stage]+=e->pages;
+#pragma unroll
+	for (int i=0;i<7;i++) if (e->stage==i+2) {
+		sum->counts[i]++;
+		if (~sum->pages[i]<e->pages) sum->tainted=1;
+		else sum->pages[i]+=e->pages;
+	}
 	offset=e->base.time_ns-e->base.sequence_ns;
 #pragma unroll
 	for (int i=0;i<7;i++) if (offset >= (1000ULL << (2*i))) bin=i+1;
-	sum->offset_hist[bin]++;
+	sum->offset_hist[bin&7]++;
 }
 
 SEC("raw_tp/cis_counter_step")
