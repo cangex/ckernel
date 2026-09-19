@@ -36,7 +36,8 @@ def tag_episodes(record, raw):
             continue
         who = (item.get('id'), item.get('generation'))
         actor = (d['actor_id'], d['actor_generation'])
-        if who not in known or actor != (0, 0) and actor not in known:
+        if (who not in known or actor != (0, 0) and actor not in known
+                or d['phase'] in (1,5) and actor != who):
             defects['tag_identity'] += 1
             continue
         if not within_window(record, d['episode_ns'], d['sample_time_ns']):
@@ -55,6 +56,9 @@ def tag_episodes(record, raw):
         first = rows[0]
         if first['phase'] not in (1, 5) or first['sample_time_ns'] != key[2]:
             defects['tag_missing_start'] += 1
+            continue
+        if bool(first['alloc_flags'] & 1) != (first['phase']==5):
+            defects['tag_nowait_flags'] += 1
             continue
         terminal = None
         pending = None

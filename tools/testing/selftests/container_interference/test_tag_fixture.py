@@ -32,7 +32,7 @@ class TagFixtureTests(unittest.TestCase):
 
     def test_exact_call_join_and_actual_sleep(self):
         report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),requests=[],tag_waits=[
-            dict(tid=100,task_start=1,queue=999,container=[2,1],identity_changes=[],blocking_container=None,
+            dict(tid=(100<<32)|100,task_start=1,queue=999,container=[2,1],identity_changes=[],blocking_container=None,
                  request_allocation_success='NOT_ESTABLISHED',interval_ns=[40,90_000_000],outcome='TAG_FOUND',
                  sleep_intervals=[dict(interval_ns=[50,85_000_000])])])
         identities=[dict(id=1,generation=1),dict(id=2,generation=1)]

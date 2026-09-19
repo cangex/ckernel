@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import select
+import re
 import socket
 import subprocess
 import time
@@ -36,7 +37,8 @@ def run():
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
         '--worker',args.worker,'--residue',args.residue,'--bpf',args.bpf,'--admission-policy','prototype',
         '--prototype-permit',str(out/'permit.json'),'daemon'],stdout=log,stderr=log)
-    request_log=(out/'requests.jsonl').open('x'); children=[]; results=[]; buffers={}
+    request_log=(out/'requests.jsonl').open('x'); children=[]; results=[]; buffers={}; launchers={}
+    wire=(out/'actor-wire.jsonl').open('x')
 
     def request(op,**kw):
         req=dict(version=1,op=op,**kw); before=time.monotonic_ns()
@@ -57,15 +59,21 @@ def run():
 
     def line(child):
         fd=child.stdout.fileno(); end=time.monotonic()+5
-        data=buffers.get(fd,b'')
-        while b'\n' not in data:
-            if time.monotonic()>end: raise TimeoutError('fixture actor')
-            if not select.select([fd],[],[],.1)[0]: continue
-            chunk=os.read(fd,4096)
-            if not chunk: raise RuntimeError(('actor EOF',child.poll(),data))
-            data+=chunk
-        raw,rest=data.split(b'\n',1); buffers[fd]=rest
-        return json.loads(raw)
+        while True:
+            data=buffers.get(fd,b'')
+            while b'\n' not in data:
+                if time.monotonic()>end: raise TimeoutError('fixture actor')
+                if not select.select([fd],[],[],.1)[0]: continue
+                chunk=os.read(fd,4096)
+                if not chunk: raise RuntimeError(('actor EOF',child.poll(),data))
+                data+=chunk
+            raw,rest=data.split(b'\n',1); buffers[fd]=rest
+            wire.write(json.dumps(dict(launcher=child.pid,line=raw.decode()))+'\n'); wire.flush()
+            match=re.fullmatch(rb'CIS_SESSION_CONTAINER host_pid=(\d+)',raw)
+            if match:
+                if child.pid in launchers: raise ValueError('duplicate launcher pid')
+                launchers[child.pid]=int(match[1]); continue
+            return json.loads(raw)
 
     def command(child,op,disk=0,slot=0,nowait=0):
         child.stdin.write(('%d %d %d %d\n'%(op,disk,slot,nowait)).encode()); child.stdin.flush()
@@ -97,6 +105,7 @@ def run():
             def result(i):
                 row=line(running[i])
                 if row.get('event')!='result': raise ValueError('fixture result')
+                if row['tid']!=launchers.get(running[i].pid): raise ValueError('host task truth')
                 row['actor']=i; truth.append(row)
                 with (out/(label+'-truth.jsonl')).open('a') as f: f.write(json.dumps(row)+'\n')
                 return row
@@ -137,7 +146,7 @@ def run():
         if daemon.poll() is None: daemon.terminate()
         try: daemon.wait(timeout=15)
         except subprocess.TimeoutExpired: daemon.kill(); daemon.wait()
-        request_log.close(); log.close()
+        request_log.close(); wire.close(); log.close()
 
 
 if __name__=='__main__': run()

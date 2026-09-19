@@ -137,6 +137,9 @@ def analyze(record,raw):
             if any(a[1] is None or a[1]>=b[0] for a,b in zip(intervals,intervals[1:])):
                 excluded['request_address_reused_before_terminal']+=1
     tags,tag_defects=tag_episodes(record,raw)
+    for tag in tags:
+        tag['stack_leaf_to_root']=stacks.get(tag['stack_id'],[])
+        tag['stack_error']=tag['stack_id'] if tag['stack_id']<0 else None
     excluded.update(tag_defects)
     if tags and 'block_tag' not in record.get('inventory',{}).get('program_names',[]):
         excluded['tag_missing_producer']+=1

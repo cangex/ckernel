@@ -91,3 +91,9 @@ class TagReport(unittest.TestCase):
         self.assertNotIn('block_tag',expected_fields('8','block'))
         self.assertEqual(expected_fields('9','block')['block_tag'],'1')
         self.assertEqual(expected_fields('9',None)['block_tag'],'0')
+
+    def test_nowait_flags_and_initial_actor_must_match(self):
+        for rows in ([self.row(10,5,alloc_flags=0)],
+                     [self.row(10,1,alloc_flags=1),self.row(20,4,alloc_flags=1)],
+                     [self.row(10,1,actor_id=2),self.row(20,4)]):
+            self.assertEqual(self.run_rows(rows)['quality']['status'],'FAIL')

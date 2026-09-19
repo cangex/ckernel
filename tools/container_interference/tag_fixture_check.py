@@ -39,7 +39,7 @@ def check(evidence, report=None, identities=None):
         if len(tags)!=expected:
             errors.append('tag_population')
         for tag in tags:
-            if (tag['tid']!=call['tid'] or tag['task_start']!=call['task_start'] or tag['queue']!=call['queue']
+            if (tag['tid']!=((call['tid']<<32)|call['tid']) or tag['task_start']!=call['task_start'] or tag['queue']!=call['queue']
                     or tag['container']!=[identities[1]['id'],identities[1]['generation']]
                     or tag['identity_changes'] or tag['blocking_container'] is not None
                     or tag['request_allocation_success']!='NOT_ESTABLISHED'):

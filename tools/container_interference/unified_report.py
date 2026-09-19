@@ -103,6 +103,12 @@ def analyze(record,raw):
                         observed_holders=f['observed_holders'],mode=f['mode'],outcome=f['outcome'],
                         unexplained_elapsed_ns=f['unexplained_elapsed_ns'])
         elif collector=='block':
+            for f in specialist['tag_waits']:
+                add('block_tag_wait','E1',f['container']+[f['tid'],f['task_start']],
+                    dict(kind='tag_allocation_episode',queue=f['queue'],pools=f['pools'],episode_ns=f['episode_ns']),
+                    [],f['interval_ns'],f['stack_leaf_to_root'],
+                    ['slot holders unknown; elapsed sleep includes scheduler and probe cost; TAG_FOUND is not I/O success'],
+                    sleep_intervals=f['sleep_intervals'],outcome=f['outcome'],identity_changes=f['identity_changes'])
             for f in specialist['requests']:
                 add('block_request_episode','E2',f['submitter'],dict(kind='observed_request',address=f['request'],episode_ns=f['episode_ns']),
                     [],f['episode_interval_ns'],f['start_stack_leaf_to_root'],
@@ -130,7 +136,7 @@ def markdown(report):
     labels={'holder_waiter':'持有与等待','wait_interval_only':'锁等待，持有者未闭合','shared_updates':'共同更新同一计数器',
         'counter_operation':'计数更新/回滚','allocation_stages':'对象分配阶段','allocation_release_entry':'分配与释放入口',
         'socket_holder_waiter':'Socket逻辑锁等待','backlog_service_release':'backlog排队、服务与释放',
-        'block_request_episode':'块请求排队与服务','rwsem_holder_waiter':'读写锁已观察持有与等待'}
+        'block_request_episode':'块请求排队与服务','block_tag_wait':'块请求槽位等待','rwsem_holder_waiter':'读写锁已观察持有与等待'}
     lines=['# 容器周期Profile解释报告','','会话 `%s`，专项 `%s`，证据质量 **%s**。'%(report['session_id'],report['collector'],report['quality']['status']),
         '这是受限路径上的观察报告，不是总干扰率或生产性能认证。','','## 已观察关系']
     for r in report['relations'][:16]:
