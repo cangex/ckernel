@@ -46,5 +46,9 @@ class NativeOracle(unittest.TestCase):
         for bad in (line.replace('outcome=1','outcome=0'),line.replace('enter_ns=2000000','enter_ns=0'),line+'\n'+line):
             with self.assertRaises(ValueError): truth(bad)
 
+    def test_armed_receipt_does_not_mean_window_has_started(self):
+        args=list(self.evidence()); args[-1]=dict(start_ns=3_500_000,end_ns=20_000_000)
+        self.assertIn('truth_before_window',check(*args)['errors'])
+
 
 if __name__=='__main__': unittest.main()

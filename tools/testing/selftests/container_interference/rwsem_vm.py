@@ -106,6 +106,8 @@ def run(overflow=False):
                     if enabled:
                         sid=request('start',collector='rwsem',targets=targets,objects=selected,nonce=label.replace('-',''),window_ms=2000)['session_id']
                         window=wait(sid,'window')['window']; active=observe('rwsem')
+                        delay=(window['start_ns']+20_000_000-time.monotonic_ns())/1e9
+                        if delay>0: time.sleep(delay)
                     else: active=observe(None)
                     if case!='preWindow': reset_slots()
                     if case=='readers':

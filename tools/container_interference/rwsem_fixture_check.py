@@ -31,6 +31,8 @@ def check(report, jobs, logs, identities, case, window):
     if not report: return dict(status='FAIL' if errors else 'OFF_VALID',errors=errors,operations=len(operations))
     if report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS': errors.append('capture_quality')
     if any(r['end_ns']>window['end_ns'] for r in operations): errors.append('truth_outside_window')
+    if case!='preWindow' and any(r['enter_ns']<window['start_ns'] for r in operations+resets):
+        errors.append('truth_before_window')
     positive=case not in ('private','tryFailure','nonOwner','preWindow','overflow')
     expected=[]; eligible=[]
     for w in operations:
