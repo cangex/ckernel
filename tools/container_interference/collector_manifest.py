@@ -38,7 +38,7 @@ COLLECTORS = {
                  clock='monotonic_wall_ns', contexts=['synchronous_task'], object_kinds=['untyped_lock_address'],
                  source_filter='existing contention pairs; partial slowpath coverage, holder/lifetime unknown'),
     'counter': dict(profile=7, programs=['counter_step'],
-                    maps=COMMON_MAPS + ['targets', 'stacks', 'pending'], relation='counter_updates',
+                    maps=COMMON_MAPS + ['targets', 'stacks', 'pending', 'counter_selected', 'counter_actors', 'counter_sums'], relation='counter_updates',
                     clock='monotonic_wall_ns', contexts=['synchronous_task'],
                     object_kinds=['page_counter_usage', 'children_min_usage', 'children_low_usage'],
                     source_filter='independent sampled calls with first 64 steps; actual traversal, no synthetic ancestor walk; protocol 2 native init generation, legacy or zero generation unknown'),

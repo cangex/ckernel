@@ -10,6 +10,7 @@ from pathlib import Path
 from collector_audit import audit
 from explain import explain, within_window
 from owner_report import fields
+from counter_live import analyze as live_aggregate
 
 OPERATIONS = {1: 'cancel', 2: 'charge', 3: 'try_charge', 4: 'uncharge', 5: 'set_min', 6: 'set_low'}
 STAGES = {1: 'begin', 2: 'usage_add', 3: 'usage_sub', 4: 'limit_reverse',
@@ -133,7 +134,13 @@ def analyze(record, raw):
                    lifetime='INIT_GENERATION', same_live_object_proven=True, cacheline_contention='UNVERIFIED', holder=None)
               for (address, generation, field), actors in sorted(participants.items())
               if generation and len({a[:2] for a in actors}) > 1]
+    live=live_aggregate(record,raw,base['quality'])
+    if live['status']=='FAIL':
+        base['quality']=dict(base['quality'],status='FAIL',defects=base['quality']['defects']+['counter_live_aggregate'])
+        shared=[]; candidates=[]
+        for call in calls: call['evidence']='UNACCEPTED'
     return dict(schema='cis-counter-report-v1', quality=base['quality'], scope_audit=audit(record, raw),
+                live_aggregate=live,
                 object_scope=dict(boot_id=record.get('boot_id'),session_id=record.get('session_id')),
                 source=base['source'], raw_sha256=hashlib.sha256(raw).hexdigest(),
                 analysis_source_sha256=dict(base['analysis_source_sha256'], **{

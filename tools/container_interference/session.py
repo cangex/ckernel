@@ -136,14 +136,14 @@ def validate(request):
     if op == 'start':
         if request.get('collector') not in collector_manifest.COLLECTORS:
             raise ValueError('unsupported collector')
-        if request['collector']=='rwsem':
+        if request['collector']=='rwsem' or request['collector']=='counter' and 'objects' in request:
             objects=request.get('objects')
             if (not isinstance(objects,list) or not 1<=len(objects)<=8 or
                 any(type(v) is not int or not 0<v<2**64 or v%8 for v in objects) or
                 len(set(objects))!=len(objects)):
-                raise ValueError('rwsem requires 1..8 distinct aligned object addresses')
+                raise ValueError('object selection requires 1..8 distinct aligned object addresses')
         elif 'objects' in request:
-            raise ValueError('explicit object selection is supported only for rwsem')
+            raise ValueError('explicit object selection is supported only for rwsem/counter')
         targets = request.get('targets')
         if (not isinstance(targets, list) or not 1 <= len(targets) <= 2
                 or not all(isinstance(t, str) and len(t) <= 48 for t in targets)
@@ -552,7 +552,7 @@ class Controller:
                        str(record['window_ms']), str(collector_manifest.object_path(self.args.bpf, request['collector'])),
                        request.get('inject', 'none') if request.get('inject', '').startswith(('fd_limit_', 'fail_')) or
                        request.get('inject') == 'after_prepare' else 'none']
-            if request['collector']=='rwsem':
+            if request.get('objects'):
                 command += ['o:'+','.join('%016x'%v for v in request['objects'])]
             command += ['%s:%d:%d:%d' % ('t' if root['session_target'] else 'i', root['fd'],
                                        root['id'], root['generation']) for root in roots]

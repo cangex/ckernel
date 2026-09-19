@@ -57,6 +57,14 @@ struct cis_counter_event {
 	__s64 usage;
 	__u32 operation, stage, depth, ordinal, sample_shift, reserved;
 };
+#define CIS_COUNTER_BUCKETS 96 /* 8 selected objects x 2 targets x 6 operations */
+struct cis_counter_actor { __u64 generation; __u32 slot, reserved; };
+struct cis_counter_sum {
+	__u64 generation, first_ns, last_ns;
+	__u64 counts[7], pages[7]; /* stages 2..8; keep rollback separate */
+	__u64 offset_hist[8]; /* call-entry to this step, not atomic latency */
+	__u32 shift, tainted, min_depth, max_depth;
+};
 struct cis_alloc_event {
 	struct cis_event base;
 	__u64 cache, resource, task_start, gfp, requested, count;

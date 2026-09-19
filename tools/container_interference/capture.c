@@ -471,11 +471,33 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		if(bpf_program__set_autoload(p,cis_profile_program(ctx->session_collector,bpf_program__name(p)))) goto fail;
 	bpf_object__for_each_map(map,c->object)
 		if(bpf_map__set_autocreate(map,cis_profile_map(ctx->session_collector,bpf_map__name(map)))) goto fail;
+	if(ctx->session_collector==7) {
+		map=bpf_object__find_map_by_name(c->object,"counter_sums");
+		if(!map || bpf_map__set_max_entries(map,ctx->selected_object_count ? ctx->selected_object_count*12 : 1)) goto fail;
+	}
 	stage="object_load";
 	if(fault_at(ctx,stage,1)) goto fail;
 	if(bpf_object__load(c->object)) goto fail;
 	c->roots=mapfd(c,"roots"); c->targets=mapfd(c,"targets"); c->pending=mapfd(c,"pending");
 	c->stacks=mapfd(c,"stacks"); c->stats=mapfd(c,"stats");
+	if(ctx->session_collector==7 && ctx->selected_object_count) {
+		int fd=mapfd(c,"counter_selected"), actors=mapfd(c,"counter_actors");
+		__u32 slot, readback;
+		stage="counter_selection";
+		if(ctx->selected_object_count>8 || fd<0 || actors<0) goto fail;
+		for(slot=0;slot<ctx->selected_object_count;slot++) {
+			if(bpf_map_update_elem(fd,&ctx->selected_objects[slot],&slot,BPF_NOEXIST) ||
+			   bpf_map_lookup_elem(fd,&ctx->selected_objects[slot],&readback) || readback!=slot) goto fail;
+			snprintf(detail,sizeof(detail),"index=%u count=%u object=0x%llx readback=1",
+				slot,ctx->selected_object_count,(unsigned long long)ctx->selected_objects[slot]);
+			cis_report(ctx,"counter_selection",NULL,detail);
+		}
+		for(i=0,slot=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used && ctx->roots[i].session_target) {
+			struct cis_counter_actor actor={.generation=ctx->roots[i].generation,.slot=slot++}, actual;
+			if(slot>2 || bpf_map_update_elem(actors,&ctx->roots[i].id,&actor,BPF_NOEXIST) ||
+			   bpf_map_lookup_elem(actors,&ctx->roots[i].id,&actual) || memcmp(&actor,&actual,sizeof(actor))) goto fail;
+		}
+	}
 	if(ctx->session_collector==11) {
 		int fd=mapfd(c,"rwsem_selected");
 		__u8 selected=1, readback=0;
@@ -757,6 +779,60 @@ static void terminal_program_audit(struct capture *c)
 		ctx->errors++;
 }
 
+static void export_counter_sums(struct capture *c)
+{
+	struct cis_context *ctx=c->ctx;
+	struct cis_counter_sum *cpus;
+	struct cis_root *actors[2]={0};
+	unsigned int n=0,obj,actor,op;
+	int i,j,fd;
+	char detail[1180];
+	if(ctx->session_collector!=7 || !ctx->selected_object_count || !c->quiesced) return;
+	fd=mapfd(c,"counter_sums");
+	if(fd<0 || c->possible_cpus<1) return;
+	cpus=calloc(c->possible_cpus,sizeof(*cpus));
+	if(!cpus) {ctx->errors++; return;}
+	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used && ctx->roots[i].session_target && n<2) actors[n++]=&ctx->roots[i];
+	for(obj=0;obj<ctx->selected_object_count;obj++) for(actor=0;actor<n;actor++) for(op=0;op<6;op++) {
+		__u32 key=(obj*2+actor)*6+op;
+		struct cis_counter_sum total={0};
+		if(bpf_map_lookup_elem(fd,&key,cpus)) {ctx->errors++; continue;}
+		for(i=0;i<c->possible_cpus;i++) {
+			struct cis_counter_sum *v=&cpus[i];
+			if(!v->first_ns) continue;
+			if(!total.first_ns) {total.generation=v->generation;total.shift=v->shift;total.min_depth=v->min_depth;}
+			if(total.generation!=v->generation || total.shift!=v->shift) total.tainted=1;
+			total.tainted|=v->tainted;
+			if(!total.first_ns || v->first_ns<total.first_ns) total.first_ns=v->first_ns;
+			if(v->last_ns>total.last_ns) total.last_ns=v->last_ns;
+			if(v->min_depth<total.min_depth) total.min_depth=v->min_depth;
+			if(v->max_depth>total.max_depth) total.max_depth=v->max_depth;
+			for(j=0;j<7;j++) {
+				if(~total.counts[j]<v->counts[j] || ~total.pages[j]<v->pages[j]) total.tainted=1;
+				else {total.counts[j]+=v->counts[j];total.pages[j]+=v->pages[j];}
+			}
+			for(j=0;j<8;j++) total.offset_hist[j]+=v->offset_hist[j];
+		}
+		if(!total.first_ns) continue;
+		snprintf(detail,sizeof(detail),"protocol=1 object=0x%llx object_generation=%llu operation=%u first_ns=%llu last_ns=%llu sample_shift=%u tainted=%u min_depth=%u max_depth=%u producers_detached=1",
+			(unsigned long long)ctx->selected_objects[obj],(unsigned long long)total.generation,op+1,
+			(unsigned long long)total.first_ns,(unsigned long long)total.last_ns,total.shift,total.tainted,total.min_depth,total.max_depth);
+		for(j=0;j<7;j++) {
+			size_t len=strlen(detail);
+			snprintf(detail+len,sizeof(detail)-len," n%d=%llu q%d=%llu",j+2,(unsigned long long)total.counts[j],j+2,(unsigned long long)total.pages[j]);
+		}
+		for(j=0;j<8;j++) {
+			size_t len=strlen(detail);
+			snprintf(detail+len,sizeof(detail)-len," h%d=%llu",j,(unsigned long long)total.offset_hist[j]);
+		}
+		cis_report(ctx,"counter_sum",actors[actor],detail);
+	}
+	snprintf(detail,sizeof(detail),"objects=%u targets=%u buckets=%u possible_cpus=%d value_bytes=%zu producers_detached=1",
+		ctx->selected_object_count,n,ctx->selected_object_count*12,c->possible_cpus,sizeof(*cpus));
+	cis_report(ctx,"counter_sum_audit",NULL,detail);
+	free(cpus);
+}
+
 void cis_capture_stop(struct cis_context *ctx)
 {
 	struct capture *c=ctx->capture;
@@ -774,6 +850,7 @@ void cis_capture_stop(struct cis_context *ctx)
 	}
 	if(c->ring) perf_buffer__consume(c->ring);
 	terminal_program_audit(c);
+	export_counter_sums(c);
 	/* Keep immutable identities and watches until buffered records are interpreted. */
 	if(ctx->session_id && ctx->session_collector!=1 && c->object) for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used) {
 		struct cis_root *r=&ctx->roots[i];

@@ -60,7 +60,7 @@ int main(int argc,char **argv)
 	ctx->session_collector=!strcmp(argv[4],"ip")?1:!strcmp(argv[4],"owner")?2:
 		!strcmp(argv[4],"sched")?3:!strcmp(argv[4],"reclaim")?4:!strcmp(argv[4],"sync")?5:!strcmp(argv[4],"fd")?6:!strcmp(argv[4],"counter")?7:!strcmp(argv[4],"allocator")?8:!strcmp(argv[4],"net")?9:!strcmp(argv[4],"block")?10:!strcmp(argv[4],"rwsem")?11:0;
 	if(!ctx->session_id || !ctx->session_collector || window<100 || window>10000) return 2;
-	if(ctx->session_collector==11) {
+	if(ctx->session_collector==11 || (ctx->session_collector==7 && !strncmp(argv[8],"o:",2))) {
 		int n=cis_parse_objects(argv[8],ctx->selected_objects);
 		if(n<1) return 2;
 		ctx->selected_object_count=n; roots_begin=9;

@@ -18,7 +18,11 @@ if ! (mkdir -p /container-root/dev &&
     poweroff -f
     exit 91
 fi
-/usr/bin/python3 /profile/counter_vm.py
+if test -f /profile/counter-aggregate; then
+    /usr/bin/python3 /profile/counter_vm.py --aggregate
+else
+    /usr/bin/python3 /profile/counter_vm.py
+fi
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"
 find /tmp/counter-evidence -type f | sort | while read -r f; do

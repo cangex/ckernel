@@ -32,6 +32,15 @@ def verify(serial, output):
     if any(word in text for word in ('page_counter underflow:', 'BUG: KASAN:', 'Oops:', 'Kernel panic', 'WARNING: CPU:')):
         errors.append('kernel_warning_or_failure')
     lifetime=plan.get('lifetime_protocol')==2
+    aggregate=plan.get('live_aggregate') is True
+    if aggregate:
+        selected=[]
+        for slot in range(4):
+            before=[fields(line) for line in files[prefix+'selection-preflight%d.log'%slot].splitlines()
+                    if line.startswith('CIS_COUNTER_TRUTH ')]
+            if len(before)!=1 or before[0]['success']!=1: raise ValueError('aggregate selection preflight')
+            selected.extend([before[0]['leaf'],before[0]['parent']])
+        if plan.get('selected_objects')!=selected or len(set(selected))!=8: errors.append('aggregate_selection')
     planned=LIFETIME_CASES if lifetime else CASES
     if plan.get('cases')!=planned or plan.get('repetitions')!=3 or plan.get('sample_shift')!=0:
         errors.append('frozen_plan')
@@ -53,6 +62,12 @@ def verify(serial, output):
         capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode()
         report=analyze(row,capture); scope=audit(row,capture)
         kind=label[:-1]; logs=[files[prefix+label+'-%d.log'%i] for i in range(2)]
+        if aggregate:
+            live=report['live_aggregate']
+            if row.get('selected_objects')!=selected or live['status']!='PASS' or not live['objects']:
+                errors.append('live_aggregate_'+label)
+            if bool(live['shared_objects']) != (kind not in ('private','privateCpu','reuse')):
+                errors.append('live_participants_'+label)
         bounds=value(label+'-boundaries.json')
         truth=check(report,logs,kind not in ('private','privateCpu','reuse'),kind=='limitFailure',
                     [row['root_identities'][key] for key in bounds['targets']])
@@ -84,7 +99,8 @@ def verify(serial, output):
         validate(bounds['active_sources'],'counter',row['requested_ns'],row['window']['end_ns'])
         validate(bounds['idle_sources'],None,row['window']['end_ns'],2**64-1)
         if truth['status']!='PASS' or scope['status']!='PASS': errors.append('case_'+label)
-        cases.append(dict(label=label,truth=truth,scope=scope['status'],calls=len(report['calls']),source_audit=source_audit))
+        cases.append(dict(label=label,truth=truth,scope=scope['status'],calls=len(report['calls']),source_audit=source_audit,
+                          live_aggregate=report['live_aggregate']['status']))
         for suffix,result in (('record',row),('report',report),('truth',truth),('scope',scope)):
             (output/(sid+'.'+suffix+'.json')).write_text(json.dumps(result,indent=2))
         (output/(sid+'.jsonl')).write_bytes(capture)
@@ -94,7 +110,7 @@ def verify(serial, output):
                 x2_status='INCOMPLETE',performance_certification='NOT_ACCEPTED',
                 lifetime_cohort=lifetime,
                 pending=([] if lifetime else ['native counter lifetime and address reuse'])+
-                        ['bounded selected-ancestor aggregation','high-rate source audit',
+                        ([] if aggregate else ['bounded selected-ancestor aggregation'])+['high-rate source audit',
                          'complete cost and updated ordinary memcg bridge','conditional hardware evidence'])
     (output/'verification.json').write_text(json.dumps(result,indent=2))
     return result

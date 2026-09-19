@@ -43,6 +43,11 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,str
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u64); __type(value,struct cis_watch); } rwsem_watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u64); __type(value,__u8); } rwsem_selected SEC(".maps");
 #endif
+#if CIS_PROFILE == 7
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u64); __type(value,__u32); } counter_selected SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,2); __type(key,__u64); __type(value,struct cis_counter_actor); } counter_actors SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,CIS_COUNTER_BUCKETS); __type(key,__u32); __type(value,struct cis_counter_sum); } counter_sums SEC(".maps");
+#endif
 #if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 6
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,struct cis_object_key); __type(value,struct cis_watch); } watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_LRU_HASH); __uint(max_entries,128); __type(key,struct cis_object_key); __type(value,struct cis_owner_record); } holders SEC(".maps");
@@ -318,6 +323,41 @@ int alloc_release(struct bpf_raw_tracepoint_args *ctx)
 #endif
 
 #if CIS_PROFILE == 7
+static __always_inline void counter_sum(struct cis_counter_event *e)
+{
+	__u32 *slot, key, stage, bin = 0;
+	struct cis_counter_actor *actor;
+	struct cis_counter_sum *sum;
+	__u64 offset;
+	if (e->stage < 2 || e->stage > 8 || e->operation < 1 || e->operation > 6)
+		return;
+	slot = bpf_map_lookup_elem(&counter_selected, &e->base.object);
+	actor = bpf_map_lookup_elem(&counter_actors, &e->base.id);
+	if (!slot || *slot >= 8 || !actor || actor->slot >= 2 || actor->generation != e->base.generation)
+		return;
+	key = (*slot * 2 + actor->slot) * 6 + e->operation - 1;
+	sum = bpf_map_lookup_elem(&counter_sums, &key);
+	if (!sum) { struct cis_bpf_stats *s=statistics(); COUNT(s,rejected); return; }
+	if (!sum->first_ns) {
+		sum->generation=e->object_generation; sum->first_ns=e->base.time_ns;
+		sum->shift=e->sample_shift; sum->min_depth=e->depth;
+	}
+	if (!e->object_generation || sum->generation!=e->object_generation || sum->shift!=e->sample_shift)
+		sum->tainted=1;
+	sum->last_ns=e->base.time_ns;
+	if (e->depth<sum->min_depth) sum->min_depth=e->depth;
+	if (e->depth>sum->max_depth) sum->max_depth=e->depth;
+	stage=e->stage-2;
+	/* Process-context source recursion guard serializes this CPU's value. */
+	sum->counts[stage]++;
+	if (~sum->pages[stage]<e->pages) sum->tainted=1;
+	else sum->pages[stage]+=e->pages;
+	offset=e->base.time_ns-e->base.sequence_ns;
+#pragma unroll
+	for (int i=0;i<7;i++) if (offset >= (1000ULL << (2*i))) bin=i+1;
+	sum->offset_hist[bin]++;
+}
+
 SEC("raw_tp/cis_counter_step")
 int counter_step(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -365,6 +405,7 @@ int counter_step(struct bpf_raw_tracepoint_args *ctx)
 	e.usage = BPF_CORE_READ(sample, usage); e.operation = BPF_CORE_READ(sample, op);
 	e.depth = BPF_CORE_READ(sample, depth); e.ordinal = BPF_CORE_READ(sample, ordinal);
 	e.sample_shift = BPF_CORE_READ(sample, sample_shift);
+	counter_sum(&e);
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);
 	if (e.stage == 9) bpf_map_delete_elem(&pending, &key);

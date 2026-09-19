@@ -16,6 +16,10 @@ class ObjectSelection(unittest.TestCase):
             with self.assertRaises(ValueError): validate(dict(req,objects=value))
         with self.assertRaises(ValueError): validate({k:v for k,v in req.items() if k!='objects'})
         with self.assertRaises(ValueError): validate(dict(req,collector='ip'))
+        self.assertEqual(validate(dict(req,collector='counter'))['objects'],req['objects'])
+        plain={k:v for k,v in dict(req,collector='counter').items() if k!='objects'}
+        self.assertEqual(validate(plain),plain)
+        with self.assertRaises(ValueError): validate(dict(req,collector='counter',objects=[]))
 
     def test_canonical_worker_parser(self):
         include=Path(__file__).resolve().parents[3]/'container_interference/include'

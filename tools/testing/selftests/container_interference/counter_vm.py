@@ -14,11 +14,12 @@ from source_switches import observe
 from counter_report import analyze
 from counter_check import check
 from counter_source_audit import observe as counter_sources, delta
+from owner_report import fields
 
 CASES = ['sameLeaf', 'sameAncestor', 'private', 'limitFailure', 'frequency', 'migration', 'reuse', 'privateCpu']
 
 
-def run():
+def run(aggregate=False):
     os.umask(0o077); os.sched_setaffinity(0, {7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/counter_shift').read_text().strip()!='0':
@@ -35,6 +36,7 @@ def run():
               operations_per_worker=16,frequency_first_worker=8,
               lifetime_protocol=2,private_cpu=0,private_spin_ms=3,
               scope='X2 actual updates, rollback and reinitialization generation; not cache-line contention cause')
+    if aggregate: plan['live_aggregate']=True
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-counter.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -80,6 +82,19 @@ def run():
         for i in range(2):
             p=root/('root%d'%i); p.mkdir(); targets.append(request('register',path=str(p))['target'])
         observe(None)
+        selected=[]
+        if aggregate:
+            for slot in range(4):
+                preflight=subprocess.run(['/session_launch',str(root/'root0'),'0','/counter_workload',
+                    str(slot),'0','1','1','1',str(time.monotonic_ns()+10_000_000),'0'],
+                    capture_output=True,text=True,check=True)
+                (out/('selection-preflight%d.log'%slot)).write_text(preflight.stdout)
+                evidence=[fields(line) for line in preflight.stdout.splitlines() if line.startswith('CIS_COUNTER_TRUTH ')]
+                if len(evidence)!=1 or evidence[0]['success']!=1: raise ValueError('selection preflight')
+                selected.extend([evidence[0]['leaf'],evidence[0]['parent']])
+            if len(set(selected))!=8: raise ValueError('fixture object selection')
+            plan['selected_objects']=selected
+            (out/'plan.json').write_text(json.dumps(plan,indent=2))
         start=time.monotonic_ns()+300_000_000
         off=[launch('off','sameLeaf',i,start) for i in range(2)]
         for p in off: assert p.wait(timeout=10)==0
@@ -87,7 +102,8 @@ def run():
             for case in CASES:
                 label=case+str(repeat)
                 source_before=counter_sources()
-                sid=request('start',collector='counter',targets=targets,nonce=label,window_ms=2000)['session_id']
+                sid=request('start',collector='counter',targets=targets,nonce=label,window_ms=2000,
+                            **({'objects':selected} if aggregate else {}))['session_id']
                 window=wait(sid,'window')['window']; active=observe('counter')
                 start=max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000)
                 if case=='reuse':
@@ -106,6 +122,8 @@ def run():
                     source_before=source_before,source_after=source_after,source_delta=source_delta),indent=2))
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 report=analyze(record,(out/'records'/(sid+'.jsonl')).read_bytes())
+                if aggregate and (report['live_aggregate']['status']!='PASS' or not report['live_aggregate']['objects']):
+                    raise ValueError(('live aggregate',report['live_aggregate']))
                 truth=check(report,[(out/(label+'-%d.log'%i)).read_text() for i in range(2)],case not in ('private','privateCpu','reuse'),case=='limitFailure',
                             [record['root_identities'][key] for key in targets])
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
@@ -129,4 +147,7 @@ def run():
         requests.close(); log.close()
 
 
-if __name__=='__main__': run()
+if __name__=='__main__':
+    import argparse
+    parser=argparse.ArgumentParser(); parser.add_argument('--aggregate',action='store_true')
+    run(parser.parse_args().aggregate)
