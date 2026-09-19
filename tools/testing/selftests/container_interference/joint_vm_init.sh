@@ -11,7 +11,9 @@ mount -t debugfs none /sys/kernel/debug
 echo '+cpu +memory +pids +cpuset' > /sys/fs/cgroup/cgroup.subtree_control
 echo 1 > /proc/sys/kernel/sched_schedstats
 touch /cis-disposable-vm
-/usr/bin/python3 /profile/joint_vm.py
+group=common
+if test -f /profile/joint-slub; then group=slub; fi
+/usr/bin/python3 /profile/joint_vm.py --group "$group"
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"
 find /tmp/joint-evidence -type f | sort | while read -r f; do

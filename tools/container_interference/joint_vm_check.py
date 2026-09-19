@@ -18,9 +18,11 @@ JOINT_COLLECTORS_V1 = ('ip','owner','fd','sched','reclaim','sync','counter','all
 JOINT_COLLECTORS = JOINT_COLLECTORS_V1 + ('slub',)
 
 
-def cohort_collectors(schema):
+def cohort_collectors(schema, group=None):
     if schema == 'cis-x7-joint-plan-v1': return JOINT_COLLECTORS_V1
     if schema == 'cis-x7-joint-plan-v2': return JOINT_COLLECTORS
+    if schema == 'cis-x7-joint-plan-v3' and group == 'common': return JOINT_COLLECTORS_V1
+    if schema == 'cis-x7-joint-plan-v3' and group == 'slub': return ('slub',)
     raise ValueError('unknown joint cohort schema')
 
 
@@ -60,7 +62,7 @@ def check(serial,output):
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan=value('plan.json'); declared=value('result.json'); permit=value('permit.json')
     output.mkdir(mode=0o700); errors=[]; states=[]
-    collectors=cohort_collectors(plan['schema'])
+    collectors=cohort_collectors(plan['schema'],plan.get('group'))
     modes=['off']+list(collectors); order=[(r,m) for r in range(3) for m in (modes if r%2==0 else list(reversed(modes)))]
     if (plan['order']!=[list(v) for v in order] or
             plan['modes']!=modes or plan['cpus']!=[0,0,1,1] or plan['workloads']!=['file','file','vma','vma'] or

@@ -31,6 +31,7 @@ def check(events, jobs, logs, identities, case, window):
         r['identity']=[identities[job['actor_index']][k] for k in ('id','generation')]
         if r['command']==2: operations.append(r)
     if not operations: errors.append('no_operations')
+    if any(r['mode']!=(1 if case=='native' else 0) for r in operations): errors.append('case_operation_mismatch')
     if events is None:
         return dict(status='FAIL' if errors else 'OFF_VALID',errors=errors,operations=len(operations))
     if any(not window['start_ns']<=r['begin_ns']<=r['end_ns']<=window['end_ns'] for r in operations):
@@ -41,7 +42,12 @@ def check(events, jobs, logs, identities, case, window):
     caches={r['cache'] for r in operations}
     if not owner_rows or not any(e.get('resource')==4 and e.get('cache') in caches for e in owner_rows):
         errors.append('no_native_node_events')
-    expected=[]; eligible=[]; captured=set()
+    native_stacks=[e.get('detail','').split(' leaf_to_root=',1)[1].split('>')
+                   for e in events if e.get('kind')=='stack_symbols' and ' leaf_to_root=' in e.get('detail','')]
+    if case=='native':
+        if not any('__kmem_cache_do_shrink' in s for s in native_stacks): errors.append('native_shrink_bridge_missing')
+        if any('cis_slub_test_lock' in s for s in native_stacks): errors.append('synthetic_lock_in_native_bridge')
+    expected=[]; eligible=[]; captured=set(); matched_epochs={}
     for w in operations:
         if w['mode']: continue
         for h in operations:
@@ -68,6 +74,7 @@ def check(events, jobs, logs, identities, case, window):
         if list(edge['waiter'][:2])!=w['identity'] or list(edge['holder'][:2])!=h['identity']:
             errors.append('wrong_container'); continue
         captured.add(pair)
+        matched_epochs.setdefault(pair[2],set()).add(edge['epoch'])
     if case=='private' and report['edges']: errors.append('private_nodes_promoted')
     if case=='unseenHolder':
         if report['edges']: errors.append('unobserved_acquire_promoted')
@@ -77,10 +84,16 @@ def check(events, jobs, logs, identities, case, window):
     if positive and len(set(eligible)&captured)/max(1,len(set(eligible)))<.9: errors.append('eligible_recall')
     if case=='switch' and len({h['identity'][0] for _,_,h in expected})!=2: errors.append('holder_switch_missing')
     if case=='recreate' and len({r['token'] for r in operations})!=2: errors.append('recreation_missing')
+    if case=='recreate':
+        epochs=list(matched_epochs.values())
+        if report['lifecycle_boundaries']<1 or len(epochs)!=2 or epochs[0]&epochs[1]:
+            errors.append('recreation_lifetime_not_separated')
     reused=case=='recreate' and len({r['object'] for r in operations})<len({r['token'] for r in operations})
     return dict(status='FAIL' if errors else 'PASS',errors=sorted(set(errors)),operations=len(operations),
         eligible=len(set(eligible)),captured_eligible=len(set(eligible)&captured),edges=len(report['edges']),
         same_address_reuse_observed=reused,lifecycle_boundaries=report['lifecycle_boundaries'],
         unobserved_acquire_negative=(case=='unseenHolder'),
         ordinary_native_bridge=(case=='native'),native_holder_truth=(case!='native'),
+        native_caller_functions=sorted({f for s in native_stacks for f in s if f in
+            ('__kmem_cache_do_shrink','get_partial_node','__slab_free','__put_partials','deactivate_slab','flush_cpu_slab')}),
         scope='fixture overlaps >=100us; native bridge has no holder-recall credit; no causal or production claim')

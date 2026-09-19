@@ -3102,8 +3102,9 @@ config CIS_SLUB_TEST
 	default n
 	help
 	  Export a root-only test operation on the cis_slub_fixture cache's
-	  real node list lock. It may hold that lock with interrupts disabled
-	  for at most 5ms to produce independently timed diagnostic truth.
+	  real node list lock with a requested busy-hold budget up to 5ms.
+	  Interrupts are disabled; observation and VM descheduling can extend
+	  the measured hold interval. This is not a hard wall-time bound.
 	  Only enable in a dedicated disposable VM, never in production.
 
 config CIS_OBSERVE_NET

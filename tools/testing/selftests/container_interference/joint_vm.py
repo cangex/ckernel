@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0
 """Four active containers, mixed ordinary operations, bounded open-loop cost bridge."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -10,19 +11,19 @@ import time
 from types import SimpleNamespace
 
 import prototype_admission as admission
-from joint_vm_check import JOINT_COLLECTORS
+from joint_vm_check import cohort_collectors
 from owner_report import fields
 from session import source_manifest
 from source_switches import observe
 from unified_report import analyze
 
 
-def order():
-    modes=['off']+list(JOINT_COLLECTORS)
+def order(collectors):
+    modes=['off']+list(collectors)
     return [(r,m) for r in range(3) for m in (modes if r%2==0 else list(reversed(modes)))]
 
 
-def run():
+def run(group='common'):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=admission.environment(); admission.check_environment(env)
     out=Path('/tmp/joint-evidence'); out.mkdir(mode=0o700)
@@ -35,12 +36,13 @@ def run():
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
     source=source_manifest(args,env['boot_id']); permit=admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
-    plan=dict(schema='cis-x7-joint-plan-v2',source=source,order=order(),modes=['off']+list(JOINT_COLLECTORS),rounds=3,
+    collectors=cohort_collectors('cis-x7-joint-plan-v3',group)
+    plan=dict(schema='cis-x7-joint-plan-v3',group=group,source=source,order=order(collectors),modes=['off']+list(collectors),rounds=3,
         cpus=[0,0,1,1],workloads=['file','file','vma','vma'],management_cpu=7,
         offered_per_actor=1500,period_ns=2_000_000,timeout_ns=100_000_000,
         scope='native file and VMA operations, four active containers; no injected kernel delays',
         off='controller idle without attached probes, not absent-CIS baseline',
-        captures=3*len(JOINT_COLLECTORS),p99='record_only',throughput='completed at fixed offered rate, not saturation throughput',
+        captures=3*len(collectors),p99='record_only',throughput='completed at fixed offered rate, not saturation throughput',
         clock_ticks=os.sysconf('SC_CLK_TCK'),
         targets_by_round=[[0,2],[1,3],[0,3]],source_generation='same kernel and collector bundle per cohort')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
@@ -128,4 +130,6 @@ def run():
         audit.close(); log.close()
 
 
-if __name__=='__main__': run()
+if __name__=='__main__':
+    parser=argparse.ArgumentParser(); parser.add_argument('--group',choices=('common','slub'),default='common')
+    run(parser.parse_args().group)

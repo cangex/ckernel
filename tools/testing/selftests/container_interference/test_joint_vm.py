@@ -9,6 +9,10 @@ class JointValidation(unittest.TestCase):
         self.assertIn('slub',cohort_collectors('cis-x7-joint-plan-v2'))
         self.assertEqual(len(cohort_collectors('cis-x7-joint-plan-v2')),11)
         with self.assertRaises(ValueError): cohort_collectors('future')
+        for group in ('common','slub'):
+            self.assertLessEqual(3*len(cohort_collectors('cis-x7-joint-plan-v3',group)),32)
+        self.assertEqual(cohort_collectors('cis-x7-joint-plan-v3','slub'),('slub',))
+        with self.assertRaises(ValueError): cohort_collectors('cis-x7-joint-plan-v3','all')
 
     def log(self):
         values=list(range(1,1501))
