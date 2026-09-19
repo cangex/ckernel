@@ -15,10 +15,16 @@ REQUIRED = {'protocol','sample_time_ns','request','episode_ns','submitter_tid','
     'queue','bio','phase','dev_major','dev_minor','remaining','completed','operation','multi_bio',
     'context','status','actor_tid','actor_start','actor_id','actor_generation','cpu','stack_id'}
 ORIGIN={'bio_cgroup','bio_owner_id','bio_owner_generation','bio_bytes','bio_origin_overdepth'}
+ADMISSION={'admission','submitter_id','submitter_generation','submitter_flags'}
 
 
 def actor(row):
     return tuple(row[k] for k in ('actor_id','actor_generation','actor_tid','actor_start'))
+
+
+def submitter(row):
+    scope=(row['submitter_id'],row['submitter_generation']) if row['protocol']==3 else (row['id'],row['generation'])
+    return scope+(row['submitter_tid'],row['submitter_start'])
 
 
 def episode(rows):
@@ -27,21 +33,24 @@ def episode(rows):
     devices=set(); queues=set(); flags=set(); remapped=False; bio_origins=[]
     if start['phase']!=1 or start['sample_time_ns']!=start['episode_ns']:
         return None, {'missing_episode_start':1}
-    submitter=(start['id'],start['generation'],start['submitter_tid'],start['submitter_start'])
+    initial_submitter=submitter(start)
+    selection=(start['id'],start['generation'])
     for index,row in enumerate(rows):
         now=row['sample_time_ns']; phase=row['phase']
         devices.add((row['dev_major'],row['dev_minor'])); queues.add(row['queue']); flags.add(row['operation'])
         if terminal is not None: problems['event_after_terminal']+=1; continue
         if row['multi_bio']: uncertainty['multiple_bios']+=1
-        if row['protocol']==2:
+        if row['protocol']>=2:
             origin=(row['bio_owner_id'],row['bio_owner_generation'])
             bio_origins.append(dict(time_ns=now,bio=row['bio'],cgroup_id=row['bio_cgroup'],
                 registered_container=list(origin) if all(origin) else None,bytes=row['bio_bytes'],
                 phase=phase,request_remaining_bytes=row['remaining'],
                 ancestor_overdepth=bool(row['bio_origin_overdepth'])))
             if not all(origin): uncertainty['head_bio_origin_unresolved']+=1
-        if (row['id'],row['generation'],row['submitter_tid'],row['submitter_start'])!=submitter:
+        if submitter(row)!=initial_submitter:
             problems['submitter_changed']+=1
+        if (row['id'],row['generation'])!=selection or any(row.get(k)!=start.get(k) for k in ('admission','submitter_flags')):
+            problems['admission_changed']+=1
         if phase==1:
             if index: problems['duplicate_start']+=1
         elif phase==2:
@@ -81,13 +90,17 @@ def episode(rows):
     if queued is not None: uncertainty['unclosed_queue_interval']+=1
     if issued is not None: uncertainty['unclosed_execution_interval']+=1
     if problems: return None,dict(problems)
-    return dict(request=start['request'],episode_ns=start['episode_ns'],submitter=list(submitter),
+    return dict(request=start['request'],episode_ns=start['episode_ns'],submitter=list(initial_submitter),
+        selected_container=list(selection),admission='bio_billing_root' if start.get('admission')==2 else 'submitter_root',
+        submitter_kernel_thread=bool(start['submitter_flags'] & 0x00200000) if start['protocol']==3 else None,
+        initial_dirtier=None,inode_owner=None,
         episode_interval_ns=[start['episode_ns'],terminal],terminal='merge_transfer' if rows[-1]['phase']==6 else
             'data_completion' if terminal is not None else 'UNOBSERVED',
         devices=[list(v) for v in sorted(devices)],queues=sorted(queues),initial_bytes=start['remaining'],
         initial_bio=start['bio'],operation=start['operation'],queue_intervals_ns=queue_intervals,
         service_intervals=service_intervals,completions=completions,uncertainty=dict(uncertainty),
-        ownership='initial_submitter_only' if uncertainty or remapped else 'observed_request_submitter',
+        ownership='billing_scope_not_dirtier' if start.get('admission')==2 else
+            'initial_submitter_only' if uncertainty or remapped else 'observed_request_submitter',
         head_bio_origins=bio_origins,origin_coverage='observed_head_bio_only' if bio_origins else 'HISTORICAL_NOT_RECORDED',
         blocking_container=None,causal='NOT_ESTABLISHED',evidence='E2',request_memory_free='UNOBSERVED'),{}
 
@@ -104,20 +117,28 @@ def analyze(record,raw):
         if item.get('kind')!='BLOCK': continue
         count+=1
         if count>16384: excluded['report_capacity']+=1; continue
-        required=REQUIRED | (ORIGIN if d.get('protocol')==2 else set())
+        required=REQUIRED | (ORIGIN if d.get('protocol') in (2,3) else set()) | (ADMISSION if d.get('protocol')==3 else set())
         if (not required<=d.keys() or any(type(d[k]) is not int or d[k]<0 for k in required-{'stack_id'})
-                or d['stack_id'] < -4095 or d['protocol'] not in (1,2) or not 1<=d['phase']<=7
+                or d['stack_id'] < -4095 or d['protocol'] not in (1,2,3) or not 1<=d['phase']<=7
                 or not 0<=d['context']<=3 or d['multi_bio'] not in (0,1)
                 or not all(d[k] for k in ('request','episode_ns','queue','submitter_tid','submitter_start'))):
             excluded['schema']+=1; continue
-        if d['protocol']==2 and (d['bio_origin_overdepth'] not in (0,1) or
+        if d['protocol']>=2 and (d['bio_origin_overdepth'] not in (0,1) or
                 (d['bio_owner_id'],d['bio_owner_generation'])!=(0,0) and
-                (d['bio_owner_id'],d['bio_owner_generation']) not in known):
+                ((d['bio_owner_id'],d['bio_owner_generation']) not in known or d['bio_origin_overdepth'])):
             excluded['bio_origin_identity']+=1; continue
         d.update(id=item.get('id'),generation=item.get('generation')); who=actor(d)
+        if d['protocol']==3:
+            source=(d['submitter_id'],d['submitter_generation']); selection=(d['id'],d['generation'])
+            if (d['admission'] not in (1,2) or d['submitter_flags']>0xffffffff or
+                    source!=(0,0) and source not in known or
+                    d['admission']==1 and source!=selection or
+                    d['phase']==1 and d['admission']==2 and
+                    (source==selection or (d['bio_owner_id'],d['bio_owner_generation'])!=selection)):
+                excluded['admission_identity']+=1; continue
         if ((d['id'],d['generation']) not in known or who[:2]!=(0,0) and who[:2] not in known
                 or d['context'] and any(who) or not d['context'] and not all(who[2:])
-                or d['phase']==1 and (d['context'] or who!=(d['id'],d['generation'],d['submitter_tid'],d['submitter_start']))):
+                or d['phase']==1 and (d['context'] or who!=submitter(d))):
             excluded['identity']+=1; continue
         if not within_window(record,d['episode_ns'],d['sample_time_ns']): excluded['outside_window']+=1; continue
         key=(d['request'],d['episode_ns'])
@@ -169,6 +190,7 @@ def analyze(record,raw):
             for name in ('block_report.py','block_tag_report.py','block_merge_report.py')}),
         performance_certification='NOT_ACCEPTED',limits=[
             'initial request submitter is not an exclusive owner of merged bios or writeback work',
+            'bio billing-root admission preserves the real submitter; initial dirtier and inode owner are not inferred',
             'device overlap identifies neither a holder nor a blocking container',
             'tag slowpath excludes immediate successes and does not identify slot holders; TAG_FOUND can still be rejected by inactive hctx',
             'tag io_schedule intervals include wakeup/scheduling and probe overhead, not exclusive device delay or spin cycles',

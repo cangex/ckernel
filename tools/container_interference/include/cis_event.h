@@ -92,6 +92,8 @@ struct cis_block_event {
 	struct cis_event base;
 	__u64 queue, bio, submitter_start, actor_id, actor_generation, actor_tid, actor_start;
 	__u64 bio_cgroup, bio_owner_id, bio_owner_generation;
+	__u64 submitter_id, submitter_generation;
+	__u32 admission, submitter_flags;
 	__u32 bio_bytes, bio_origin_overdepth;
 	__u32 phase, dev_major, dev_minor, remaining, completed, operation, multi_bio, context, status, reserved;
 };

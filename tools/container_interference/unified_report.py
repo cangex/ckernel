@@ -120,6 +120,8 @@ def analyze(record,raw):
                     ['initial submitter is not a merge/writeback owner; device peers are not proven blockers'],
                     devices=f['devices'],queue_intervals_ns=f['queue_intervals_ns'],service_intervals=f['service_intervals'],
                     head_bio_origins=f['head_bio_origins'],origin_coverage=f['origin_coverage'],
+                    selected_container=f['selected_container'],admission=f['admission'],
+                    submitter_kernel_thread=f['submitter_kernel_thread'],initial_dirtier=f['initial_dirtier'],inode_owner=f['inode_owner'],
                     issue_bio_sources=bio_sources.get((f['request'],f['episode_ns']),[]),
                     merge_transfers=merge_transfers.get((f['request'],f['episode_ns']),[]),
                     uncertainty=f['uncertainty'],terminal=f['terminal'])
@@ -151,6 +153,8 @@ def markdown(report):
             r['affected_actor'],json.dumps(r['resource'],ensure_ascii=False),r['participants']))
         if r['chain_leaf_to_root']: lines.append('  调用栈（叶到根）：`%s`。'%' → '.join(r['chain_leaf_to_root']))
         if r['relation']=='block_request_episode':
+            if r['details'].get('admission')=='bio_billing_root':
+                lines.append('  按bio计费容器 %s 纳入窗口；实际提交者保留为上述任务，不等于最初写文件的容器，inode归属仍未知。'%r['details']['selected_container'])
             snapshots=r['details'].get('issue_bio_sources',[])
             for snap in snapshots[:4]:
                 lines.append('  下发时剩余 %d 字节；bio计费来源 %s；未知 %d 字节。重排队快照不累加为新请求量。'%(

@@ -138,6 +138,27 @@ int block_link(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
+static __noinline void head_origin(struct bio *bio, struct cis_block_event *e)
+{
+	struct kernfs_node *kn = BPF_CORE_READ(bio, bi_blkg, blkcg, css.cgroup, kn);
+	e->bio_cgroup = BPF_CORE_READ(kn, id);
+	e->bio_bytes = BPF_CORE_READ(bio, bi_iter.bi_size);
+	e->bio_owner_id = 0; e->bio_owner_generation = 0; e->bio_origin_overdepth = 0;
+#pragma clang loop unroll(disable)
+	for (int i = 0; i < 32; i++) {
+		struct cis_identity *origin;
+		__u64 cg;
+		if (!kn) break;
+		cg = BPF_CORE_READ(kn, id); origin = bpf_map_lookup_elem(&roots, &cg);
+		if (origin) {
+			e->bio_owner_id = origin->id; e->bio_owner_generation = origin->generation;
+			kn = NULL; break;
+		}
+		kn = BPF_CORE_READ(kn, parent);
+	}
+	if (kn) e->bio_origin_overdepth = 1;
+}
+
 static __always_inline int block_event(void *ctx, struct request *rq,
 		__u32 phase, __u32 completed, __u32 status)
 {
@@ -152,7 +173,19 @@ static __always_inline int block_event(void *ctx, struct request *rq,
 	COUNT(s, received);
 	if (!rq) { COUNT(s, rejected); return 0; }
 	if (phase == 1) {
-		if (context || !identity(task, &id) || !allowed(&id, CIS_DIAG_BLOCK, now)) return 0;
+		if (context) return 0;
+		identity(task, &executor);
+		head_origin(BPF_CORE_READ(rq, bio), &e);
+		id = executor; e.admission = 1;
+		if (!allowed(&id, CIS_DIAG_BLOCK, now)) {
+			/* Billing ancestry admits async work, but never renames its
+			 * submitter to the billed container or to an inferred dirtier. */
+			id.id = e.bio_owner_id; id.generation = e.bio_owner_generation;
+			if (!id.id || e.bio_origin_overdepth || !allowed(&id, CIS_DIAG_BLOCK, now)) return 0;
+			e.admission = 2;
+		}
+		e.submitter_id = executor.id; e.submitter_generation = executor.generation;
+		e.submitter_flags = BPF_CORE_READ(task, flags);
 		e.base.id = id.id; e.base.generation = id.generation;
 		e.base.time_ns = now; e.base.sequence_ns = now;
 		e.base.object = object; e.base.tid = bpf_get_current_pid_tgid();
@@ -172,27 +205,12 @@ static __always_inline int block_event(void *ctx, struct request *rq,
 	e.remaining = BPF_CORE_READ(rq, __data_len); e.operation = BPF_CORE_READ(rq, cmd_flags);
 	bio = BPF_CORE_READ(rq, bio); e.bio = (__u64)bio;
 	e.multi_bio = bio && BPF_CORE_READ(bio, bi_next) != 0;
-	e.bio_cgroup=0; e.bio_owner_id=0; e.bio_owner_generation=0;
-	e.bio_bytes=0; e.bio_origin_overdepth=0;
-	if (bio) {
-		struct kernfs_node *kn=BPF_CORE_READ(bio,bi_blkg,blkcg,css.cgroup,kn);
-		e.bio_cgroup=BPF_CORE_READ(kn,id);
-		e.bio_bytes=BPF_CORE_READ(bio,bi_iter.bi_size);
-#pragma clang loop unroll(disable)
-		for (int i=0;i<32;i++) {
-			struct cis_identity *origin;
-			__u64 cg;
-			if (!kn) break;
-			cg=BPF_CORE_READ(kn,id); origin=bpf_map_lookup_elem(&roots,&cg);
-			if (origin) {e.bio_owner_id=origin->id; e.bio_owner_generation=origin->generation; kn=NULL; break;}
-			kn=BPF_CORE_READ(kn,parent);
-		}
-		if (kn) e.bio_origin_overdepth=1;
-	}
+	if (phase != 1) head_origin(bio, &e);
 	e.actor_id = 0; e.actor_generation = 0; e.actor_tid = 0; e.actor_start = 0;
 	if (!context) {
 		e.actor_tid = bpf_get_current_pid_tgid(); e.actor_start = BPF_CORE_READ(task, start_boottime);
-		if (identity(task, &executor)) { e.actor_id = executor.id; e.actor_generation = executor.generation; }
+		if (phase != 1) identity(task, &executor);
+		e.actor_id = executor.id; e.actor_generation = executor.generation;
 	}
 	if (phase == 1) {
 		if (bpf_map_update_elem(&block_watched, &object, &e, BPF_NOEXIST)) { COUNT(s, rejected); return 0; }

@@ -131,3 +131,48 @@ class BlockReport(unittest.TestCase):
         origins=report['requests'][0]['head_bio_origins']
         self.assertEqual([v['bytes'] for v in origins],[4096,4096,4096,2048])
         self.assertTrue(all(v['bytes']==v['request_remaining_bytes'] for v in origins))
+
+    def async_rows(self, **changes):
+        args=dict(protocol=3,admission=2,submitter_id=0,submitter_generation=0,submitter_flags=0x200000,
+            bio_cgroup=1,bio_owner_id=1,bio_owner_generation=1,bio_bytes=4096,bio_origin_overdepth=0,
+            actor_id=0,actor_generation=0)
+        args.update(changes)
+        return [self.row(t,p,**args) for t,p in ((10,1),(20,3),(30,5))]
+
+    def test_billing_admission_never_renames_background_worker(self):
+        r=self.run_rows(self.async_rows())
+        self.assertEqual(r['quality']['status'],'PASS',r)
+        req=r['requests'][0]
+        self.assertEqual(req['selected_container'],[1,1]); self.assertEqual(req['submitter'],[0,0,101,1])
+        self.assertEqual(req['admission'],'bio_billing_root'); self.assertTrue(req['submitter_kernel_thread'])
+        self.assertEqual(req['ownership'],'billing_scope_not_dirtier')
+        self.assertIsNone(req['initial_dirtier']); self.assertIsNone(req['inode_owner']); self.assertIsNone(req['blocking_container'])
+
+    def test_other_registered_executor_does_not_own_selected_billing_root(self):
+        r=self.run_rows(self.async_rows(submitter_id=2,submitter_generation=1,actor_id=2,actor_generation=1,submitter_flags=0))
+        self.assertEqual(r['quality']['status'],'PASS',r)
+        self.assertEqual(r['requests'][0]['submitter'][:2],[2,1])
+        self.assertEqual(r['requests'][0]['selected_container'],[1,1])
+        self.assertFalse(r['requests'][0]['submitter_kernel_thread'])
+
+    def test_billing_unknown_stale_overdepth_or_wrong_selection_rejects(self):
+        for changes in (dict(bio_owner_id=0,bio_owner_generation=0),dict(bio_owner_generation=8),
+                        dict(bio_owner_id=2),dict(bio_origin_overdepth=1),dict(admission=4),
+                        dict(submitter_id=2),dict(submitter_flags=1<<32)):
+            with self.subTest(changes=changes):
+                r=self.run_rows(self.async_rows(**changes))
+                self.assertEqual(r['quality']['status'],'FAIL',r); self.assertFalse(r['requests'])
+
+    def test_async_lifetime_fields_cannot_change_or_forge_start_actor(self):
+        for change in ('admission=2','submitter_id=0','submitter_flags=2097152'):
+            rows=self.async_rows(); rows[1]['detail']=rows[1]['detail'].replace(change,change.split('=')[0]+'=1')
+            r=self.run_rows(rows); self.assertEqual(r['quality']['status'],'FAIL',r)
+        r=self.run_rows(self.async_rows(actor_id=1,actor_generation=1))
+        self.assertEqual(r['quality']['status'],'FAIL',r)
+
+    def test_protocol3_direct_admission_keeps_historical_submitter_semantics(self):
+        r=self.run_rows(self.async_rows(admission=1,submitter_id=1,submitter_generation=1,
+                                       actor_id=1,actor_generation=1,submitter_flags=0))
+        self.assertEqual(r['quality']['status'],'PASS',r)
+        self.assertEqual(r['requests'][0]['submitter'],[1,1,101,1])
+        self.assertEqual(r['requests'][0]['admission'],'submitter_root')
