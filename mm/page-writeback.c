@@ -13,6 +13,8 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/cgroup.h>
+#include <linux/ktime.h>
 #include <linux/math64.h>
 #include <linux/export.h>
 #include <linux/spinlock.h>
@@ -1944,7 +1946,28 @@ pause:
 		}
 		__set_current_state(TASK_KILLABLE);
 		bdi->last_bdp_sleep = jiffies;
+#ifdef CONFIG_CIS_OBSERVE
+		{
+			struct cis_wb_pause observed = {};
+
+			if (trace_cis_writeback_pause_enabled()) {
+				observed.begin_ns = ktime_get_ns();
+				observed.cgroup_id = cgroup_id(task_dfl_cgroup(current));
+				observed.requested_jiffies = pause;
+				observed.dirty = sdtc->dirty;
+				observed.threshold = sdtc->thresh;
+				observed.wb_dirty = sdtc->wb_dirty;
+				observed.wb_threshold = sdtc->wb_thresh;
+			}
+			observed.remaining_jiffies = io_schedule_timeout(pause);
+			if (observed.begin_ns) {
+				observed.end_ns = ktime_get_ns();
+				trace_cis_writeback_pause(wb, &observed);
+			}
+		}
+#else
 		io_schedule_timeout(pause);
+#endif
 
 		current->dirty_paused_when = now + pause;
 		current->nr_dirtied = 0;

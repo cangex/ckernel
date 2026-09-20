@@ -60,6 +60,7 @@ DECLARE_TRACEPOINT(block_merge_link);
 DECLARE_TRACEPOINT(writeback_dirty_folio);
 DECLARE_TRACEPOINT(writeback_single_inode_start);
 DECLARE_TRACEPOINT(writeback_single_inode);
+DECLARE_TRACEPOINT(cis_writeback_pause);
 #define CIS_BLOCK_ON(name) tracepoint_enabled(name)
 #else
 #define CIS_BLOCK_ON(name) 0
@@ -72,7 +73,8 @@ static bool cis_block_active(void)
 	       CIS_BLOCK_ON(block_rq_complete) || CIS_BLOCK_ON(block_rq_merge) ||
 	       CIS_BLOCK_ON(block_rq_remap) || CIS_BLOCK_ON(block_tag_wait) ||
 	       CIS_BLOCK_ON(block_merge_link) || CIS_BLOCK_ON(writeback_dirty_folio) ||
-	       CIS_BLOCK_ON(writeback_single_inode_start) || CIS_BLOCK_ON(writeback_single_inode);
+	       CIS_BLOCK_ON(writeback_single_inode_start) || CIS_BLOCK_ON(writeback_single_inode) ||
+	       CIS_BLOCK_ON(cis_writeback_pause);
 }
 
 /* Monotone one-bit membership: collisions only admit extra events. No deletes
@@ -231,7 +233,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=17 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u page_backend=%u filesystem=%u filesystem_filter=%u\n",
+	seq_printf(m, "version=18 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u page_backend=%u filesystem=%u filesystem_filter=%u wb_pause=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -244,7 +246,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_merge_link), CIS_BLOCK_ON(writeback_dirty_folio),
 		   CIS_BLOCK_ON(writeback_single_inode_start), CIS_BLOCK_ON(writeback_single_inode),
 		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled(), cis_backend_active(), trace_cis_page_backend_enabled(),
-		   cis_fs_source_enabled(), cis_fs_active());
+		   cis_fs_source_enabled(), cis_fs_active(), CIS_BLOCK_ON(cis_writeback_pause));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);

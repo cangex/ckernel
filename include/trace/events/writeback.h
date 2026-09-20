@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM writeback
+#include <linux/cis_io.h>
 
 #if !defined(_TRACE_WRITEBACK_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_WRITEBACK_H
@@ -617,6 +618,40 @@ TRACE_EVENT(bdi_dirty_ratelimit,
 		  (unsigned long)__entry->cgroup_ino
 	)
 );
+
+#ifdef CONFIG_CIS_OBSERVE
+TRACE_EVENT(cis_writeback_pause,
+	TP_PROTO(struct bdi_writeback *wb, const struct cis_wb_pause *s),
+	TP_ARGS(wb, s),
+	TP_STRUCT__entry(
+		__field(void *, wb)
+		__field(u64, begin_ns)
+		__field(u64, end_ns)
+		__field(u64, cgroup_id)
+		__field(u64, dirty)
+		__field(u64, threshold)
+		__field(u64, wb_dirty)
+		__field(u64, wb_threshold)
+		__field(s64, requested_jiffies)
+		__field(s64, remaining_jiffies)
+	),
+	TP_fast_assign(
+		__entry->wb = wb;
+		__entry->begin_ns = s->begin_ns;
+		__entry->end_ns = s->end_ns;
+		__entry->cgroup_id = s->cgroup_id;
+		__entry->dirty = s->dirty;
+		__entry->threshold = s->threshold;
+		__entry->wb_dirty = s->wb_dirty;
+		__entry->wb_threshold = s->wb_threshold;
+		__entry->requested_jiffies = s->requested_jiffies;
+		__entry->remaining_jiffies = s->remaining_jiffies;
+	),
+	TP_printk("wb=%p begin_ns=%llu end_ns=%llu cgroup_id=%llu pause=%lld remaining=%lld",
+		__entry->wb, __entry->begin_ns, __entry->end_ns, __entry->cgroup_id,
+		__entry->requested_jiffies, __entry->remaining_jiffies)
+);
+#endif
 
 TRACE_EVENT(balance_dirty_pages,
 
