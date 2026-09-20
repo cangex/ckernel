@@ -32,7 +32,7 @@ int main(int argc,char **argv)
 	actor=atoi(argv[1]); start=strtoull(argv[3],NULL,10);
 	background=!strcmp(argv[2],"background"); migration=!strcmp(argv[2],"migration") && !actor;
 	if(actor<0 || actor>1 || !start) return 2;
-	if(background) { fd=open("/dev/cis-fixture",O_RDWR|O_CLOEXEC); if(fd<0) return 3; }
+	if(background) { fd=open("/dev/cis-fixture",O_RDWR|O_CLOEXEC); if(fd<0) {perror("fixture open");return 3;} }
 	at=(struct timespec){start/1000000000ULL,start%1000000000ULL};
 	while(clock_nanosleep(CLOCK_MONOTONIC,TIMER_ABSTIME,&at,NULL)==EINTR) {}
 	begin=cis_now_ns(); cpu_begin=process_ns();
@@ -40,7 +40,7 @@ int main(int argc,char **argv)
 		unsigned int i;
 		for(i=0;i<40;i++) {
 			struct cis_fixture_async q={.requeue=i%2};
-			if(ioctl(fd,CIS_FIXTURE_QUEUE,&q) || ioctl(fd,CIS_FIXTURE_WAIT,&q)) return 4;
+			if(ioctl(fd,CIS_FIXTURE_QUEUE,&q) || ioctl(fd,CIS_FIXTURE_WAIT,&q)) {perror("fixture ioctl");return 4;}
 			printf("CPU_WORK_TRUTH object=%llu owner=%llu executor=%llu queued=%llu start=%llu end=%llu\n",
 				(unsigned long long)q.object,(unsigned long long)q.owner_cgroup,
 				(unsigned long long)q.executor_cgroup,(unsigned long long)q.queued_ns,

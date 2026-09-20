@@ -94,6 +94,7 @@ def run():
             idle=observe(None); after=snapshot()
             evidence=dict(**entry,session_id=sid,targets=targets,window=window,before=before,after=after,
                 active_sources=active,idle_sources=idle,exit_codes=codes)
+            (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2))
             checked=check(evidence,[(out/(label+'-%d.log'%i)).read_text() for i in range(2)],record,raw)
             evidence['result']=checked; states.append(evidence)
             (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2))

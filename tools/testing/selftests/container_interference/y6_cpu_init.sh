@@ -16,7 +16,8 @@ if ! insmod /cis_fixture.ko isolated_vm=1 async_cpu=0; then
     exit 91
 fi
 mkdir -p /container-root/dev
-if ! mount --bind /dev /container-root/dev; then
+if ! cp -a /dev/cis-fixture /container-root/dev/cis-fixture ||
+   ! test -c /container-root/dev/cis-fixture; then
     echo CIS_PROFILE_VM_EXIT=92
     poweroff -f
     exit 92
