@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import resource
 import socket
 import subprocess
 import time
@@ -97,12 +98,16 @@ def run():
             checked=check(state,[(out/(label+'-%d.log'%i)).read_text() for i in range(4)],records,raws,plan)
             state['business_after']=after
             state['explanation_ready_ns']=time.monotonic_ns()
+            state['analysis_process']=dict(status=Path('/proc/self/status').read_text(),
+                peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024,
+                scope='test harness and first unified analysis; cumulative peak, not daemon or native total')
             state['after']=snapshot(root,roots)
             checked.update(cost_fields(state,plan))
             (out/(label+'-evidence.json')).write_text(json.dumps(state,indent=2))
             (out/(label+'-check.json')).write_text(json.dumps(checked,indent=2))
             states.append(dict(label=label,result=checked['status']));(out/'partial.json').write_text(json.dumps(states,indent=2))
             if checked['status']!='PASS_SCOPED': raise ValueError(checked['errors'])
+            del checked,records,raws,state
         (out/'result.json').write_text(json.dumps(dict(status='PASS_SCOPED',states=states,source=source),indent=2))
     finally:
         for p in children:

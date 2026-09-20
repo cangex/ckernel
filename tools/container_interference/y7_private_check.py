@@ -97,7 +97,13 @@ def check(state,logs,records,raws,plan):
         if any(r['causal']!='NOT_ESTABLISHED' for r in report['relations']): errors.append('causal_overclaim')
         observations.append(dict(collector=collector,quality=report['quality'],relations=report['relations'],
             omitted=report.get('omitted_relations'),process_cpu=record.get('process_cpu_budget'),
-            rss_bytes=record.get('combined_rss_peak_bytes'),report=report))
+            rss_bytes=record.get('combined_rss_peak_bytes'),
+            raw_sha256=report['raw_sha256'],analysis_source_sha256=report['analysis_source_sha256'],
+            coverage=(report.get('specialist') or {}).get('coverage'),
+            report_timing=report.get('timing')))
+        # The raw capture is retained. Do not hold six full expandable reports
+        # concurrently just to summarize a joint validation run.
+        del report
     validate(state['idle_sources'],None,0,2**64-1)
     measured=cost_fields(state,plan)
     for actor in measured['system_cost']['actors']:
