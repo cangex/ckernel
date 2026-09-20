@@ -17,6 +17,7 @@
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/skbuff.h>
+#include <linux/cis_qdisc.h>
 #include <linux/init.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -1371,6 +1372,8 @@ static int qdisc_change(struct Qdisc *sch, struct nlattr **tca,
 	struct qdisc_size_table *ostab, *stab = NULL;
 	int err = 0;
 
+	/* Failed changes also conservatively end the observation epoch. */
+	cis_qdisc_invalidate(sch);
 	if (tca[TCA_OPTIONS]) {
 		if (!sch->ops->change) {
 			NL_SET_ERR_MSG(extack, "Change operation not supported by specified qdisc");

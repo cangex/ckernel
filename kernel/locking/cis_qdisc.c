@@ -66,7 +66,8 @@ void cis_qdisc_invalidate(struct Qdisc *q)
 	struct cis_queue_filter *f;
 	rcu_read_lock();
 	f = rcu_dereference(selection);
-	if (f && f->qdisc == q)
+	/* Child/other-queue reset on this device also makes the epoch uncertain. */
+	if (f && q->dev_queue && q->dev_queue->dev == f->dev)
 		WRITE_ONCE(f->invalid, true);
 	rcu_read_unlock();
 }

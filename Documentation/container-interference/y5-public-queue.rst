@@ -11,7 +11,11 @@ device queue. Default profiling observes that public resource, not every socket
 lock. One administrative lease pins one net_device, transmit queue and qdisc
 object. Namespace inode, ifindex, queue number, qdisc handle and a monotonic
 lease generation identify the selection; equal names or handles are not equal
-resources. Replacement/reset invalidates the lease. Unrelated queues are filtered
+resources. Replacement/reset or a qdisc change invalidates the lease; resets
+or qdisc changes on another queue of the same device conservatively do so too.
+Class/filter-only administration is not yet a complete invalidation contract:
+the first test scope must freeze these and cannot certify arbitrary TC mutation.
+Unrelated queues are filtered
 before BPF, with native per-CPU entry/filter accounting retained.
 
 The first adapter records sampled closed admission brackets and sampled service
@@ -28,6 +32,12 @@ identifier: it must not be joined across time as a proven skb lifetime. Complete
 packet lineage, per-tenant queue occupancy and unique blockers are not provided
 by these observations. A queue delay graph requires additional proven lifetime
 evidence, not visual correlation.
+
+The administrative pin can delay device unregister until the lease is closed.
+It is not a free or wait-bounded operation; the controller must release its
+bounded session lease before deleting its test device. No host device is changed
+by the test harness. Queue-local raw qlen/backlog fields for per-CPU-stat qdiscs
+are not their aggregate values and must be reported as such or unknown.
 
 Boundedness and tests
 --------------------
