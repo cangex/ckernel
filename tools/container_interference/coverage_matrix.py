@@ -29,6 +29,11 @@ CONTRACT={
         object='FD专项源开关和拒收的截断会话，不是持有者正例',
         participants='保护通过不等于密集FD关系采集可用',
         pending=['不代表所有容量路径','完整源端和异步后台成本']),
+    'fd_relations': dict(name='FD独立申请与持有区间重叠覆盖',collector='fd',
+        discovered='全部独立调用真值先生成关系分母，再核对原始采集关系',
+        object='同files_struct、不同任务、窗口内完整调用及退役边界',
+        participants='有界全部关系核验，摘要省略不能充当完整检查',
+        pending=['不是纯自旋或因果阻塞召回','普通应用无完整独立分母','超出有界前缀仍可遗漏']),
     'counter': dict(name='page_counter',collector='counter',discovered='实际叶/祖先更新与限额回滚',
         object='初始化代次、地址和字段',participants='共同更新者，不是锁持有者',
         pending=['选定祖先汇总已做采样事件级验证；高事件率待测','全量更新计数不由采样推算','硬件cacheline证据（条件项）']),
@@ -123,6 +128,7 @@ CONTRACT={
 VERIFIERS={
     'sync': ('sync_vm_check','sync',{}), 'fd':('fd_vm_check','fd',{}),
     'fd_guard':('fd_guard_check','fd_guard',{}),
+    'fd_relations':('fd_vm_check','fd_relations',{}),
     'counter':('counter_vm_check','counter',{}),
     'allocator':('allocator_vm_check','allocator',{}),
     'maple_context':('allocator_vm_check','maple_context',dict(maple=True)),
@@ -207,6 +213,15 @@ def replay(index,base,output):
                             len(v.get('post_detach_operations',[]))!=2 or
                             min(v['post_detach_operations'])<=0 for v in selected)):
                     raise ValueError('rejected FD entry-rate capture and continued business required')
+            if key=='fd_relations':
+                selected=[v for v in checked.get('cases',[]) if v.get('label','').startswith(('threads','cross','reuse'))]
+                if (len(selected) not in (3,6) or any(
+                        v.get('relationships',{}).get('design')!='PREDECLARED' or
+                        v['relationships'].get('threshold_status')!='PASS' or
+                        v['relationships'].get('eligible',0)<=0 or
+                        v['relationships'].get('capture_ratio',0)<.90 or
+                        v['relationships'].get('true_blocking_recall') is not None for v in selected)):
+                    raise ValueError('predeclared independent FD overlap population required')
             if key=='net_tx':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
                 if len(selected)!=3 or any(not v.get('result',{}).get('tx') or

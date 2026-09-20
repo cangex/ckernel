@@ -3,12 +3,34 @@ import unittest
 import hashlib
 from pathlib import Path
 import tempfile
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
+sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'container_interference'))
 from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown,replay
 
 
 class CoverageTests(unittest.TestCase):
+    def test_fd_call_or_retrospective_evidence_cannot_certify_relation_population(self):
+        checked=dict(status='PASS',cases=[dict(label='threads%d'%i,
+            relationships=dict(design='PREDECLARED',threshold_status='PASS',eligible=62,capture_ratio=1,
+                               true_blocking_recall=None)) for i in range(3)])
+        module=SimpleNamespace(__file__=__file__,verify=lambda *a,**k:checked)
+        with tempfile.TemporaryDirectory() as tmp,patch('coverage_matrix.importlib.import_module',return_value=module):
+            base=Path(tmp);(base/'serial.log').write_bytes(b'fixture')
+            row=dict(name='fdrelations',serial='serial.log',sha256=hashlib.sha256(b'fixture').hexdigest(),verifier='fd_relations')
+            def check(name):
+                return replay(dict(schema='cis-coverage-input-v1',cohorts=[row]),base,base/name)['evidence'][0]['status']
+            self.assertEqual(check('declared'),'PASS_SCOPED')
+            checked['cases'][0]['relationships']['design']='RETROSPECTIVE_REPLAY'
+            self.assertEqual(check('historical'),'FAIL')
+            checked['cases'][0]['relationships'].update(design='PREDECLARED',eligible=0)
+            self.assertEqual(check('zero-denominator'),'FAIL')
+            checked['cases'][0]['relationships'].update(eligible=62,capture_ratio=.80)
+            self.assertEqual(check('missed-relations'),'FAIL')
+            checked['cases'][0].pop('relationships')
+            self.assertEqual(check('only-calls'),'FAIL')
+
     def test_fd_guard_preserves_rejection_and_business_progress(self):
         checked=dict(status='PASS',cases=[dict(label='storm%d'%i,capture_status='PARTIAL',
             rates=[dict(configured_limit=200000)],post_detach_operations=[100,200]) for i in range(3)])
