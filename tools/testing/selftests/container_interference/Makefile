@@ -21,6 +21,7 @@ TEST_GEN_PROGS += net_storm_workload
 TEST_GEN_PROGS += net_release_workload
 TEST_GEN_PROGS += topology_workload
 TEST_GEN_PROGS += page_backend_workload
+TEST_GEN_PROGS += page_fixture_workload
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
@@ -37,6 +38,7 @@ net_workload net_backlog_workload net_capacity_workload net_storm_workload: net_
 net_release_workload: net_fixture/uapi.h
 rwsem_workload: rwsem_fixture/uapi.h
 slub_workload: slub_fixture/uapi.h
+page_fixture_workload: page_fixture/uapi.h
 tag_workload: tag_fixture/abi.h
 block_merge_workload: block_fixture/merge_uapi.h
 block_lifecycle_workload: block_fixture/lifecycle_uapi.h

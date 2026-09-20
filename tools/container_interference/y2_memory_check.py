@@ -61,30 +61,44 @@ def verify(serial,output):
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     output.mkdir(mode=0o700)
     plan,result,permit=[value(n+'.json') for n in ('plan','result','permit')]
+    fixture=plan['schema']=='cis-y2-page-fixture-v1'
     errors=[]; states=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
     if any(v in text for v in ('page_counter underflow:', 'BUG: KASAN:', 'Oops:', 'Kernel panic','WARNING: CPU:')):
         errors.append('kernel_warning')
     lease=value('lease-checks.json')
     if lease.get('status')!='PASS' or len(lease.get('checks',[]))!=6: errors.append('lease_control')
-    if (plan['schema'] not in ('cis-y2-memory-plan-v1','cis-y2-memory-plan-v2') or len(plan['order'])!=24 or
+    if (plan['schema'] not in ('cis-y2-memory-plan-v1','cis-y2-memory-plan-v2','cis-y2-page-fixture-v1') or len(plan['order'])!=(12 if fixture else 24) or
             plan['operations']!=16 or plan['sample_shift']!=6 or plan['cpus']!=[0,1] or plan['mems']!=[0]):
         errors.append('plan')
+    if fixture and ('CIS_PAGE_FIXTURE_UNLOAD=0' not in text.splitlines() or
+                    plan['pcp_high_fraction']!=4096 or plan['page_bytes_per_operation']!=3088*plan['page_size']):
+        errors.append('page_fixture_configuration')
+    if fixture:
+        restored=[fields(line) for line in text.splitlines() if line.startswith('CIS_PAGE_PCP_RESTORED=')]
+        if len(restored)!=1 or restored[0].get('CIS_PAGE_PCP_RESTORED')!=restored[0].get('original'):
+            errors.append('page_fixture_restore')
     if [s['label'] for s in result['states']]!=[s['label'] for s in plan['order']]: errors.append('state_order')
     if any(result['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
     captures=[p for p in files if p.startswith(prefix+'records/') and p.endswith('.json')]
     records=[json.JSONDecoder().raw_decode(files[p].lstrip())[0] for p in captures]
     records=[r for r in records if 'session_id' in r]
-    if len(records)!=12: errors.append('capture_count')
+    if len(records)!=(6 if fixture else 12): errors.append('capture_count')
     for expected in plan['order']:
         label=expected['label']; ev=value(label+'-evidence.json'); c=expected['case']
         if any(ev.get(k)!=v for k,v in expected.items()): errors.append('plan_state_'+label)
         if ev['exit_codes']!=[0,0]: errors.append('workload_exit_'+label)
         logs=[files[prefix+job['log']] for job in ev['jobs']]
-        page_case=plan['schema']=='cis-y2-memory-plan-v2' and c['collector']=='page_backend'
-        if page_case and (plan['page_operations']!=8 or plan['page_bytes_per_operation']!=64<<20 or plan['page_thp']!='MADV_NOHUGEPAGE'):
+        page_case=plan['schema']!='cis-y2-memory-plan-v1' and c['collector']=='page_backend'
+        if page_case and not fixture and (plan['page_operations']!=8 or plan['page_bytes_per_operation']!=64<<20 or plan['page_thp']!='MADV_NOHUGEPAGE'):
             errors.append('page_workload_plan')
-        ops=[operations(log,ev['window'],8 if page_case else 16,(64 if page_case else 8)<<20) for log in logs]
+        ops=[operations(log,ev['window'],8 if page_case else 16,plan['page_bytes_per_operation'] if page_case else 8<<20) for log in logs]
+        if fixture:
+            for log in logs:
+                truth=[fields(line) for line in log.splitlines() if line.startswith('CIS_PAGE_TRUTH ')]
+                if len(truth)!=8 or [d['index'] for d in truth]!=list(range(8)) or any(
+                    d['node']!=0 or d['allocated']!=3088 or d['freed']!=3088 or d['failed'] or d['wrong_node'] for d in truth):
+                    errors.append('native_page_truth_'+label)
         for i,index in enumerate(c['actors']):
             before,after=[ev[edge]['roots'][index] for edge in ('before','after')]
             cb,ca=[counts(d['cpu.stat']) for d in (before,after)]
@@ -130,6 +144,8 @@ def verify(serial,output):
                 if c['name']=='zone1' and episodes: errors.append('outside_selected_node_'+label)
                 if c['name']=='zone0' and any(not by_actor[a] for a in actors): errors.append('missing_page_actor_'+label)
                 if c['name']=='zone0' and not report['shared_backends']: errors.append('common_zone_missing_'+label)
+                if fixture and c['name']=='zone0' and {e['operation'] for e in episodes}!={'pcp_refill','pcp_drain','buddy_allocate','buddy_free'}:
+                    errors.append('native_page_shapes_not_covered_'+label)
                 entry.update(page_episodes=len(episodes),same_zone_resources=report['shared_backends'],
                     wait_wall_ns=[e['wait_to_acquire_wall_ns'] for e in episodes],
                     hold_wall_ns=[e['held_inner_wall_ns'] for e in episodes],

@@ -61,7 +61,7 @@ def lease_checks(out):
     (out/'lease-checks.json').write_text(json.dumps(dict(status='PASS',checks=events),indent=2))
 
 
-def run():
+def run(page_fixture=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=admission.environment(); admission.check_environment(env)
     out=Path('/tmp/y2-memory-evidence'); out.mkdir(mode=0o700)
@@ -71,6 +71,8 @@ def run():
         if Path('/sys/module/cis_observe/parameters',name).read_text().strip()!='6':
             raise ValueError('default 1/64 source sampling required')
     lease_checks(out)
+    if page_fixture and Path('/proc/sys/vm/percpu_pagelist_high_fraction').read_text().strip()!='4096':
+        raise ValueError('dedicated coverage PCP configuration required')
     root=Path('/sys/fs/cgroup/cis-y2-memory'); root.mkdir(); (root/'management').mkdir()
     (root/'management/cgroup.procs').write_text(str(os.getpid()))
     (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
@@ -89,6 +91,7 @@ def run():
            dict(name='separate',collector='counter',actors=[0,2]),
            dict(name='zone0',collector='page_backend',actors=[0,1],backend=dict(cache='page_zone',nodes=[0])),
            dict(name='zone1',collector='page_backend',actors=[0,1],backend=dict(cache='page_zone',nodes=[1]))]
+    if page_fixture: cases=cases[2:]
     order=[dict(case=c,round=r,enabled=on,label='%s%d%s'%(c['name'],r,'on' if on else 'off'))
            for r in range(3) for c in cases for on in ((False,True) if r%2==0 else (True,False))]
     plan=dict(schema='cis-y2-memory-plan-v2',cases=cases,order=order,source=source,
@@ -97,6 +100,10 @@ def run():
               page_operations=8,page_bytes_per_operation=64<<20,page_thp='MADV_NOHUGEPAGE',
               sample_shift=6,window_ms=2000,cpus=[0,1],mems=[0],manager_cpu=7,
               host_scope='isolated VM',claim='native participation and ownership, not causal blocking')
+    if page_fixture:
+        plan.update(schema='cis-y2-page-fixture-v1',page_bytes_per_operation=3088*os.sysconf('SC_PAGESIZE'),
+                    page_thp='native order0/order4',page_size=os.sysconf('SC_PAGESIZE'),
+                    pcp_high_fraction=4096,claim='native allocation/free coverage fixture, not ordinary workload cost')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
     endpoint='/run/cis-y2-memory.sock'; log=(out/'controller.log').open('x')
     requests=(out/'requests.jsonl').open('x')
@@ -152,6 +159,7 @@ def run():
             for cpu,actor in enumerate(c['actors']):
                 name=label+'-%d.log'%actor; h=(out/name).open('x'); handles.append(h)
                 binary='/page_backend_workload' if c['collector']=='page_backend' else '/counter_mem_workload'
+                if page_fixture: binary='/page_fixture_workload'
                 p=subprocess.Popen(['/session_launch',str(roots[actor]),str(cpu),binary,str(start)],stdout=h,stderr=h)
                 children.append(p); running.append(p); jobs.append(dict(actor=actor,log=name,cpu=cpu))
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()

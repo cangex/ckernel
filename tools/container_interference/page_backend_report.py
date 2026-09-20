@@ -71,6 +71,8 @@ def analyze(record,raw):
         analysis_source_sha256={'page_backend_report.py':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
         episodes=episodes,shared_backends=shared,excluded=dict(excluded),
         coverage=dict(pcp_refill='SAMPLED',pcp_drain='SAMPLED',buddy_allocate='SAMPLED',buddy_free='SAMPLED',
+                      observed_operation_counts={name:sum(e['operation']==name for e in episodes) for name in OPERATIONS.values()},
+                      observation_status='ACCEPTED_SAMPLES' if episodes and quality['status']=='PASS' else 'NO_ACCEPTED_SAMPLES',
                       other_zone_lock_users='NOT_TRACED',holder='UNKNOWN',page_lifetime='NOT_TRACKED',causal='NOT_CLAIMED'),
         limits=['wall brackets include timing overhead, preemption and interrupts; not pure spin cycles',
                 'one callback follows zone unlock; callers may still hold another native lock or have IRQs disabled',

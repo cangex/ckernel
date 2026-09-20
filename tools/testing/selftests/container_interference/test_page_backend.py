@@ -43,6 +43,8 @@ class PageBackend(unittest.TestCase):
         self.assertEqual(r['quality']['status'],'PASS')
         self.assertEqual(len(r['shared_backends']),1)
         self.assertEqual(r['shared_backends'][0]['evidence'],'E1')
+        self.assertEqual(r['coverage']['observed_operation_counts']['pcp_refill'],2)
+        self.assertEqual(r['coverage']['observed_operation_counts']['buddy_free'],0)
         for e in r['episodes']:
             self.assertIsNone(e['holder']); self.assertIsNone(e['blocking_container'])
             self.assertEqual(e['wait_to_acquire_wall_ns'],1)
@@ -68,6 +70,11 @@ class PageBackend(unittest.TestCase):
                          self.event(actor=2,begin=30,operation=2,order=-1,completed_pages=36)])
         self.assertEqual(r['quality']['status'],'PASS')
         self.assertEqual([e['operation'] for e in r['episodes']],['buddy_allocate','pcp_drain'])
+
+    def test_empty_sample_is_not_runtime_coverage(self):
+        r=self.run_rows([])
+        self.assertEqual(r['coverage']['observation_status'],'NO_ACCEPTED_SAMPLES')
+        self.assertEqual(sum(r['coverage']['observed_operation_counts'].values()),0)
 
     def test_no_callback_inside_zone_critical_section(self):
         root=Path(__file__).resolve().parents[4]
