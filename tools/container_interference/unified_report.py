@@ -50,6 +50,10 @@ def analyze(record,raw):
                         dict(kind=f.get('observation',f['kind'])),[],f.get('interval_ns'),f.get('stack_leaf_to_root',[]),
                         ['external pressure producer not identified'],source_finding=f)
         elif collector=='cpu':
+            for f in specialist['quota_observations']:
+                if f['nr_throttled']:
+                    add('cgroup_quota_throttle','E1',f['identity'],dict(kind='cgroup_cpu_bandwidth',cpu_max=f['cpu_max']),
+                        [],None,[],['boundary counter not a per-event cause or exact capture-window total; no other container blamed'],source_finding=f)
             for f in specialist['associations']:
                 add('cpu_execution_overlap','E1',f['waiter'],dict(kind='boot_cpu',cpu=f['cpu']),
                     [f['executor']],[f['begin_ns'],f['end_ns']],[],
@@ -218,6 +222,7 @@ def markdown(report):
         'block_request_episode':'块请求排队与服务','block_tag_wait':'块请求槽位等待','rwsem_holder_waiter':'读写锁已观察持有与等待',
         'dirty_throttle_pause':'脏页限流暂停', 'cpu_execution_overlap':'等待期间的同核执行关联',
         'background_execution':'后台工作执行，来源未确定',
+        'cgroup_quota_throttle':'容器CPU额度节流记录',
         'public_queue_participation':'共同使用同一公共发送队列', 'queue_backlog_observation':'发送队列积压观察'}
     lines=['# 容器周期Profile解释报告','','会话 `%s`，专项 `%s`，证据质量 **%s**。'%(report['session_id'],report['collector'],report['quality']['status']),
         '这是受限路径上的观察报告，不是总干扰率或生产性能认证。','','## 已观察关系']

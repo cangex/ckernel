@@ -94,6 +94,19 @@ class CPUReport(unittest.TestCase):
         r=self.analyze([point(10),point(39,phase=3,value=29),point(40,actor=2,next_actor=1)])
         self.assertFalse(r['native_sched_wait'][0]['additive'])
 
+    def test_quota_is_boundary_fact_not_neighbor_blame(self):
+        r=self.record(); key=next(iter(r['root_identities'])); ident=r['root_identities'][key]
+        def snap(t,n):
+            return dict(id=ident['id'],generation=ident['generation'],identity_valid=True,
+                config={'cpu.max':'20000 100000'},files={'cpu.stat':dict(start_ns=t,end_ns=t+1,
+                    counters=dict(nr_throttled=n,throttled_usec=n*100))})
+        r['boundary_before']={key:snap(1,0)}; r['boundary_after']={key:snap(101,2)}
+        q=self.analyze([point(10),point(40,actor=2,next_actor=1)],r)['quota_observations'][0]
+        self.assertEqual(q['nr_throttled'],2); self.assertIsNone(q['blocking_container'])
+        self.assertFalse(q['perf_window_aligned'])
+        r['boundary_after'][key]['config']['cpu.max']='max 100000'
+        self.assertFalse(self.analyze([],r)['quota_observations'])
+
     def test_unified_dispatch_keeps_noncausal_boundaries(self):
         from unittest.mock import patch
         from unified_report import analyze as unified

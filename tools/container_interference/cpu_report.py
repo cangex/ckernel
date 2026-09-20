@@ -9,6 +9,7 @@ from pathlib import Path
 from collector_audit import audit
 from explain import explain, within_window
 from owner_report import fields
+from survey import boundary_delta
 
 MAX_POINTS=16384
 MAX_ASSOCIATIONS=4096
@@ -158,11 +159,26 @@ def analyze(record,raw):
     if excluded or result['defects'] or scope['status']!='PASS':
         quality=dict(quality,status='FAIL',defects=quality['defects']+['cpu_audit'])
     if quality['status']!='PASS': result['associations']=[]
+    quota=[]
+    for key,identity in record.get('root_identities',{}).items():
+        before=record.get('boundary_before',{}).get(key)
+        after=record.get('boundary_after',{}).get(key)
+        if not before or not after: continue
+        delta=boundary_delta(before,after)
+        counters=delta.get('files',{}).get('cpu.stat')
+        if delta['status'] not in ('VALID','PARTIAL') or not counters: continue
+        values=counters['delta']
+        if 'nr_throttled' not in values or 'throttled_usec' not in values: continue
+        quota.append(dict(identity=[identity['id'],identity['generation']],
+            nr_throttled=values['nr_throttled'],throttled_usec=values['throttled_usec'],
+            read_intervals_ns=counters['read_intervals_ns'],cpu_max=before.get('config',{}).get('cpu.max'),
+            perf_window_aligned=False,blocking_container=None,
+            evidence='E1' if quality['status']=='PASS' else 'UNACCEPTED'))
     return dict(schema='cis-cpu-background-report-v1',quality=quality,scope_audit=scope,
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),cpu_selection=cpus,
         analysis_source_sha256=dict(base['analysis_source_sha256'],
             cpu_report=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),
-        points=len(rows),excluded=dict(excluded),**result,
+        points=len(rows),excluded=dict(excluded),quota_observations=quota,**result,
         limits=['same-CPU execution association is not a unique blocker or causal proof',
                 'only runnable switch-out waits fully contained on one CPU are joined; wakeup and migration waits are not reconstructed',
                 'quota is a separate cgroup boundary counter, not attributed to another container',
