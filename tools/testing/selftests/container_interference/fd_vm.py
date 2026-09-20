@@ -14,6 +14,7 @@ from session import source_manifest
 from explain import explain, MAX_AUDIT_FINDINGS
 from fd_check import check
 from fd_population_check import POPULATION_PLAN, check_population
+from fd_relation_population import RELATION_PLAN, check_relations
 from collector_audit import audit as scope_audit
 from source_switches import observe
 
@@ -34,6 +35,7 @@ def run(suite='basic'):
               window_ms=2000,operations_per_thread=16,fixture_hold_us=100,
               suite=suite,collector='fd',reuse_generations=4,
               population=POPULATION_PLAN,
+              relation_population=RELATION_PLAN,
               reuse_allocator='fixture helper allocates on worker CPU then restores management affinity; not a cost test',
               scope='selected FD adapter bridge; full X1 acceptance incomplete',performance_certification='NOT_ACCEPTED')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
@@ -117,16 +119,20 @@ def run(suite='basic'):
                 truth['summary_omitted_findings']=report['omitted_findings']
                 truth['audit_finding_limit']=MAX_AUDIT_FINDINGS
                 population=check_population([(out/name).read_text() for name in names],raw,window,case,plan['population'])
+                relationships=check_relations([(out/name).read_text() for name in names],raw,window,
+                                             case,complete_report,plan['relation_population'])
                 (out/(label+'-boundaries.json')).write_text(json.dumps(dict(logs=names,groups=boundaries,
                     active_sources=active_sources,idle_sources=observe()),indent=2))
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 (out/(label+'-truth.json')).write_text(json.dumps(truth,indent=2))
                 (out/(label+'-population.json')).write_text(json.dumps(population,indent=2))
+                (out/(label+'-relationships.json')).write_text(json.dumps(relationships,indent=2))
                 (out/(label+'-scope.json')).write_text(json.dumps(scope,indent=2))
                 results.append(dict(label=label,session_id=sid,truth=truth,scope=scope['status']))
                 (out/'partial.json').write_text(json.dumps(results,indent=2))
                 assert truth['status']=='PASS' and scope['status']=='PASS',(truth,scope)
                 assert population['status']=='PASS_SCOPED',population
+                assert relationships['status']=='PASS_SCOPED',relationships
         result=dict(status='PASS',source=source,plan=plan,cases=results,
                     unverified=(['full rwsem reader set','dense FD observer cost'] if suite=='lifecycle' else
                                 ['explicit CLONE_FILES cross-container bridge','address reuse runtime','full rwsem reader set']),
