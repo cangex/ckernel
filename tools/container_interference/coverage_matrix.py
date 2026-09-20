@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+from prototype_contract import assess as assess_prototype
 
 CONTRACT={
     'sync': dict(name='泛型spinlock/rwsem线索',collector='sync',
@@ -15,7 +16,7 @@ CONTRACT={
     'rwsem': dict(name='rwsem有界持有者专项',collector='rwsem',
         discovered='公共非RT接口的尝试、获取、释放、降级和中止',object='本窗实际初始化事件与对象地址',
         participants='已观察写者或至多8个读者；集合不保证完整',
-        pending=['窗口前对象仍为E1','non-owner使用和读者溢出不得提升归因','选定对象rwsem未计入普通应用十专项联合矩阵']),
+        pending=['窗口前对象仍为E1','non-owner使用和读者溢出不得提升归因','选定对象rwsem联合验证单列，不借用安静十专项结果']),
     'rwsem_joint': dict(name='rwsem与四容器业务联合真值',collector='rwsem',
         discovered='普通文件/VMA负载覆盖诊断窗口，独立rwsem正反例同时执行',
         object='受控公共rwsem接口及本窗初始化代次',
@@ -39,7 +40,7 @@ CONTRACT={
         pending=['选定祖先汇总已做采样事件级验证；高事件率待测','全量更新计数不由采样推算','硬件cacheline证据（条件项）']),
     'allocator': dict(name='SLUB/Maple',collector='allocator',discovered='指定cache的分配阶段和释放入口',
         object='cache/节点/已观测分配代次',participants='分配请求方与释放执行方；后端锁持有者未知',
-        pending=['允许节点放置、原生failslab拒绝及fail_page_alloc部分回滚已有专项；并发策略变化和真实压力待验证','SLUB节点锁关系由独立专项核验；其余后端锁仍未知','Maple树归属']),
+        pending=['允许节点放置、原生failslab拒绝及fail_page_alloc部分回滚已有专项；并发策略变化和真实压力待验证','SLUB节点锁关系由独立专项核验；其余后端锁仍未知','Maple申请到目标树的关联另列，不等于完整树所有权']),
     'maple_context': dict(name='Maple请求与分配后端关联',collector='allocator',
         discovered='原生申请闭合边界、目标树、SLUB调用与已采样节点释放入口',
         object='树地址仅在一次申请内有效；节点分配代次独立保留',
@@ -47,7 +48,7 @@ CONTRACT={
         pending=['不将跨申请同地址当作完整树生命周期','预分配节点实际安装位置未追踪','完整后端释放和RCU耗时仍未知']),
     'slub': dict(name='SLUB节点锁专项',collector='slub',discovered='指定cache的实际节点锁尝试、获取、释放与回收边界',
         object='完整cache指针、节点锁地址和watch代次',participants='已观察持有者与等待者；不含窗口前或中断持有者',
-        pending=['受控节点锁不代表生产发生率','普通分配路径没有独立持有者召回分母','其他SLUB锁与Maple树归属','完整入口及后台成本与联合回归']),
+        pending=['受控节点锁不代表生产发生率','普通分配路径没有独立持有者召回分母','其他SLUB锁与完整Maple树归属','完整入口及后台成本未知；普通应用联合回归另列']),
     'net': dict(name='Socket逻辑锁',collector='net',discovered='选定TCP Socket逻辑锁的获取、等待和释放',
         object='原生Socket cookie与netns',participants='已观察逻辑持有者与等待者，不代表TCP全部锁',
         pending=['窗口内用户Socket创建与accept已区分；窗口前/内核创建者仍未知','SCM_RIGHTS来源与持有者有专项真值，不等于报文来源','更多协议/短锁覆盖']),
@@ -78,7 +79,7 @@ CONTRACT={
         discovered='原生fclone申请、内存准入与原始skb头部释放入口',
         object='Socket cookie、请求任务代次与分配边界；原始头部地址不代表共享数据页',
         participants='申请容器与释放执行者分开；不是分配器锁持有关系或报文内容所有权',
-        pending=['接收与clone/GSO/GRO来源变换不在此闭环','后端经过时间不是独占CPU','完整释放后端未知；原生分配失败与内存准入拒绝由独立专项核验']),
+        pending=['接收与clone/GSO/GRO来源变换不在此闭环','后端经过时间不是独占CPU','原始头部释放后端、原生分配失败与内存准入拒绝由独立专项核验']),
     'net_tx_failure': dict(name='TCP发送分配失败与恢复',collector='net',
         discovered='任务与cache限定的原生failslab失败、系统调用返回及同Socket恢复',
         object='私有Socket cookie、请求任务代次与实际send调用边界',
@@ -109,7 +110,7 @@ CONTRACT={
         discovered='原生bio按设备限制拆分后的请求及其完成状态、字节守恒',
         object='请求episode；原始bio关系仅由独立fixture核验，不冒充生产采集能力',
         participants='提交任务与bio计费身份；取消未提交时不得出现请求或阻塞关系',
-        pending=['尚未覆盖在途请求取消与任意叠加设备拆分','完整生产bio父子生命周期未知','固定设备错误不等于真实硬件故障覆盖']),
+        pending=['驱动在途终止由独立专项核验，不代表任意取消接口与叠加设备拆分','完整生产bio父子生命周期未知','固定设备错误不等于真实硬件故障覆盖']),
     'block_inflight': dict(name='驱动已接收请求的终止与正常完成',collector='block',
         discovered='实际started请求、提交返回、终止前未完成与最终错误或成功完成',
         object='请求episode与独立驱动真值，不是通用取消意图采集',
@@ -119,7 +120,7 @@ CONTRACT={
         discovered='原生ext4后台提交的请求、bio计费容器与实际执行线程',
         object='请求episode和bio计费身份，不是完整inode生命周期',
         participants='已注册计费根与真实kworker分别记录；共享inode不推断唯一脏化者或阻塞方',
-        pending=['脏化到inode再到bio的受限闭环','多写入者、归属切换和回收并发','写回节流及完整后台成本']),
+        pending=['脏化与inode同步回写请求关联另列，不是完整数据所有权','多写入者、归属切换和回收并发','写回节流及完整后台成本']),
     'writeback_inode': dict(name='原生inode回写与请求上下文',collector='block',
         discovered='容器脏化事件、闭合inode回写调用与其同步提交的请求',
         object='I_SYNC调用边界、inode观测属性、任务代次与请求episode',
@@ -127,7 +128,7 @@ CONTRACT={
         pending=['脏化事件到回写之前的完整inode生命周期未闭合','异步脱离调用的提交与合并内容不推断inode','写回节流及完整后台成本']),
     'routing': dict(name='有界专项调度',collector='controller',discovered='真实巡检候选到单槽专项',
         object='配置epoch、目标代次及候选来源会话',participants='按目标轮转，候选不是因果认定',
-        pending=['四容器混合来源联合验收']),
+        pending=['四容器混合来源另列；真实周期等待不等于解释生成耗时']),
     'mixed': dict(name='网络与块I/O混合来源独立真值',collector='joint',
         discovered='四容器普通文件/VMA覆盖同窗网络锁和直接I/O，OFF/IP/NET/BLOCK轮换',
         object='Socket cookie、请求episode和独立工作负载时间括号',
@@ -136,9 +137,9 @@ CONTRACT={
     'joint': dict(name='四容器普通应用联合成本',collector='joint',
         discovered='OFF/IP/专项的固定轮次、角色切换与等到达率响应',object='逐容器操作窗口、实际采集对象与源码绑定',
         participants='无完整应用真值时不伪造召回；安静专项不算正例',
-        pending=['新增采集器与新内核回归','各资源强制正反例仍须分别通过','完整后台与内核内存成本']),
+        pending=['按实际源码绑定限定回归，不继承为未来版本通过','各资源强制正反例单列，安静应用不代替正例','完整后台与内核内存成本']),
     'control': dict(name='加载与清理',collector='controller',discovered='独立采集器加载、共享预算、停止与恢复',
-        object='真实程序/map ID及源开关',participants='不作业务竞争归因',pending=['新版本故障矩阵回归'])}
+        object='真实程序/map ID及源开关',participants='不作业务竞争归因',pending=['仅证明已运行版本的故障与清理，不自动认证未来版本'])}
 
 VERIFIERS={
     'sync': ('sync_vm_check','sync',{}), 'fd':('fd_vm_check','fd',{}),
@@ -318,18 +319,20 @@ def replay(index,base,output):
         matrix.append(dict(key=key,**contract,implementation='IMPLEMENTED_PARTIAL',
             cohort_status='FAIL' if any(e['status']=='FAIL' for e in cohort) else 'PASS_SCOPED' if cohort else 'UNVERIFIED',
             evidence=[e['name'] for e in cohort],causal='NOT_ESTABLISHED',production='NOT_ACCEPTED'))
-    return dict(schema='cis-coverage-matrix-v1',status='INCOMPLETE',rows=matrix,evidence=evidence,
-        x7_complete=False,remaining_joint=['四容器混合来源的独立真值','新内核与新增专项的普通应用及成本回归',
-            '强制保护和故障反例','逐资源最低覆盖合同中的未通过项'],
+    prototype=assess_prototype(evidence)
+    return dict(schema='cis-coverage-matrix-v1',status=prototype['status'],rows=matrix,evidence=evidence,
+        x7_complete=prototype['x7_complete'],prototype_contract=prototype,
+        remaining_joint=[name+': '+item for name,stage in prototype['stages'].items() for item in stage['missing']],
         interpretation='PASS_SCOPED仅证明对应原始批次及支持范围；不继承为未来版本通过，不将unknown算PASS')
 
 
 def markdown(result):
     lines=['# 原型覆盖与缺口','','各证据均重新读取原始日志核验。PASS_SCOPED不代表整类问题已完全覆盖。','',
-        '| 来源 | 实际发现/对象 | 参与者边界 | 本批验证 | 待完成 |','|---|---|---|---|---|']
+        '| 来源 | 实际发现/对象 | 参与者边界 | 本批验证 | 边界与后续扩展 |','|---|---|---|---|---|']
     for row in result['rows']:
         lines.append('| %s | %s；%s | %s | %s | %s |'%(row['name'],row['discovered'],row['object'],row['participants'],row['cohort_status'],'；'.join(row['pending'])))
-    lines+=['','X7状态：尚未完成。逐批源码绑定、原始日志哈希及复核结果见JSON。']
+    lines+=['',('X7状态：限定原型合同通过，不代表完整内核覆盖或生产验收。' if result.get('x7_complete') else
+                'X7状态：尚未完成。')+'逐批源码绑定、原始日志哈希及复核结果见JSON。']
     return '\n'.join(lines)+'\n'
 
 
