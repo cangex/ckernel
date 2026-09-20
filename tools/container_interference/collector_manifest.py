@@ -118,6 +118,12 @@ COLLECTORS['page_backend']=dict(profile=14,programs=['page_backend'],maps=COMMON
     source_filter='immutable page_zone node lease; per-CPU sampled PCP refill/drain and buddy allocate/free brackets; timestamps inside native zone lock, one callback after unlock; no page lifetime tracking, inferred holder or pure spin time; preemption/IRQ and unobserved zone operations remain outside causal coverage')
 
 
+COLLECTORS['filesystem']=dict(profile=15,programs=['filesystem'],maps=COMMON_MAPS+['targets','stacks'],
+    relation='selected_filesystem_public_operations',clock='monotonic_wall_ns',contexts=['synchronous_task_completion'],
+    object_kinds=['pinned_ext4_filesystem','journal_transaction','allocation_group','legacy_orphan_mutex','orphan_file'],
+    source_filter='exclusive pinned directory lease; one ext4 device; native JBD2 commit/switch brackets and 1/16 ext4 allocation/orphan samples; no private inode lock tracing; group use is not lock contention, journal waits do not identify a unique blocking tenant; endpoints require same registered cgroup')
+
+
 def contract(name, legacy_block=False, legacy_rwsem=False):
     if name not in COLLECTORS:
         raise ValueError('unsupported collector')

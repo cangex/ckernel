@@ -139,7 +139,10 @@ int main(void) {
     assert(!cis_profile_map(14, "holders"));
     assert(cis_profile_program(14, "page_backend"));
     assert(!cis_profile_program(14, "alloc_step"));
-    assert(!cis_profile_map(15, "roots"));
+    assert(cis_profile_map(15, "roots"));
+    assert(cis_profile_program(15, "filesystem"));
+    assert(!cis_profile_map(15, "holders"));
+    assert(!cis_profile_map(16, "roots"));
     return 0;
 }
 '''

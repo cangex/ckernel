@@ -22,8 +22,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 35
+#define CIS_DIAGNOSTIC_LINKS 36
 #include "include/cis_backend_selection.h"
+#include <sys/sysmacros.h>
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -43,7 +44,59 @@ struct capture {
 	int quiesced, stop_error;
 	int rwsem_filter_fd;
 	int backend_filter_fd;
+	int filesystem_filter_fd;
+	unsigned long long filesystem_before[6];
+	int filesystem_audit_ready;
 };
+
+static int filesystem_audit(unsigned long long sum[6])
+{
+	FILE *f=fopen("/sys/kernel/debug/cis_fs_audit","r");
+	char line[512];
+	unsigned char seen[CIS_CPU_CAP]={0};
+	unsigned int cpu,ncpu=0;
+	unsigned long long values[6];
+	int i,rc=-EINVAL;
+	memset(sum,0,6*sizeof(*sum));
+	if(!f) return -errno;
+	if(!fgets(line,sizeof(line),f) || strncmp(line,"version=1 ",10)) goto out;
+	while(fgets(line,sizeof(line),f)) {
+		if(sscanf(line,"cpu=%u entries=%llu filtered=%llu sampled=%llu emitted=%llu expired=%llu recursive=%llu",
+			&cpu,&values[0],&values[1],&values[2],&values[3],&values[4],&values[5])!=7 || cpu>=CIS_CPU_CAP || seen[cpu]) goto out;
+		seen[cpu]=1; ncpu++;
+		for(i=0;i<6;i++) sum[i]+=values[i];
+	}
+	if(!ferror(f) && ncpu) rc=0;
+out:
+	fclose(f); return rc;
+}
+
+static int prepare_filesystem_filter(struct capture *c)
+{
+	struct cis_context *ctx=c->ctx;
+	struct stat st;
+	unsigned long long lease;
+	unsigned int dev,maj,min;
+	char wanted[24],actual[160],detail[256];
+	int n,consumed=0;
+	ssize_t got;
+	if(ctx->session_collector!=15) return 0;
+	if(ctx->filesystem_fd<0 || fstat(ctx->filesystem_fd,&st) || !S_ISDIR(st.st_mode)) return -EINVAL;
+	c->filesystem_filter_fd=open("/sys/kernel/debug/cis_fs_filter",O_RDWR|O_CLOEXEC);
+	if(c->filesystem_filter_fd<0) return -errno;
+	n=snprintf(wanted,sizeof(wanted),"%d\n",ctx->filesystem_fd);
+	if(write(c->filesystem_filter_fd,wanted,n)!=n) return -EIO;
+	got=read(c->filesystem_filter_fd,actual,sizeof(actual)-1);
+	if(got<=0) return -EIO;
+	actual[got]=0;
+	if(sscanf(actual,"version=1 lease=%llu dev=%u major=%u minor=%u\n%n",&lease,&dev,&maj,&min,&consumed)!=4 ||
+	   consumed!=got || !lease || maj!=major(st.st_dev) || min!=minor(st.st_dev)) return -EINVAL;
+	snprintf(detail,sizeof(detail),"protocol=1 lease=%llu dev=%u major=%u minor=%u pinned=1 readback=1",lease,dev,maj,min);
+	cis_report(ctx,"filesystem_source_filter",NULL,detail);
+	if(filesystem_audit(c->filesystem_before)) return -EIO;
+	c->filesystem_audit_ready=1;
+	return 0;
+}
 
 static int prepare_backend_filter(struct capture *c)
 {
@@ -315,6 +368,18 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 			(unsigned long long)v->actor_generation,e->cpu,(unsigned long long)v->skipped,e->stack_id);
 		cis_report(ctx,"RWSEM",r,d);return;
 	}
+	if(size>=sizeof(struct cis_filesystem_event) && size<=sizeof(struct cis_filesystem_event)+7 && e->type==CIS_FILESYSTEM_EVENT) {
+		struct cis_filesystem_event *v=data;
+		char d[900];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 begin_ns=%llu acquired_ns=%llu end_ns=%llu tid=%llu task_start=%llu cgroup_id=%llu cpu=%u resource=0x%llx lease=%llu dev=%u operation=%u sample_shift=%u value=%llu count=%llu error=%d stack_id=%d",
+			(unsigned long long)e->sequence_ns,(unsigned long long)v->acquired_ns,(unsigned long long)e->time_ns,
+			(unsigned long long)e->tid,(unsigned long long)v->task_start,(unsigned long long)v->cgroup_id,
+			e->cpu,(unsigned long long)e->object,(unsigned long long)v->lease,v->dev,v->operation,v->sample_shift,
+			(unsigned long long)v->value,(unsigned long long)v->count,v->error,e->stack_id);
+		cis_report(ctx,"FILESYSTEM",r,d);return;
+	}
 	if(size>=sizeof(struct cis_page_event) && size<=sizeof(struct cis_page_event)+7 && e->type==CIS_PAGE_BACKEND_EVENT) {
 		struct cis_page_event *v=data;
 		char d[900];
@@ -436,7 +501,7 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
 		{"block_tag",256},{"block_link",256},
 		{"wb_dirty",256},{"wb_begin",256},{"wb_end",256},
-		{"rwsem_state",512},{"page_backend",1024}};
+		{"rwsem_state",512},{"page_backend",1024},{"filesystem",2048}};
 	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
@@ -619,7 +684,9 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		cis_report(ctx,"capture_failure",NULL,"unsupported_page_size: kernel-memory budget not validated");
 		free(c); return -EOPNOTSUPP;
 	}
-	c->ctx=ctx; ctx->capture=c; c->rwsem_filter_fd=-1; c->backend_filter_fd=-1;
+	c->ctx=ctx; ctx->capture=c; c->rwsem_filter_fd=-1; c->backend_filter_fd=-1; c->filesystem_filter_fd=-1;
+	stage="filesystem_selection";
+	if(prepare_filesystem_filter(c)) goto fail;
 	for(i=0;i<CIS_CPU_CAP;i++) c->perf_fds[i]=-1;
 	stage="backend_selection";
 	if (prepare_backend_filter(c)) goto fail;
@@ -1111,6 +1178,28 @@ int cis_capture_quiesce(struct cis_context *ctx)
 		if(close(c->backend_filter_fd)) c->stop_error=-errno;
 		c->backend_filter_fd=-1;
 		cis_report(ctx,"backend_source_filter_closed",NULL,"lease=0 close_after_detach=1");
+	}
+	if(c->filesystem_filter_fd>=0) {
+		if(close(c->filesystem_filter_fd)) c->stop_error=-errno;
+		c->filesystem_filter_fd=-1;
+		cis_report(ctx,"filesystem_source_filter_closed",NULL,"lease=0 close_after_detach=1");
+	}
+	if(c->filesystem_audit_ready) {
+		unsigned long long values[6];
+		char detail[384];
+		int valid=!filesystem_audit(values);
+		for(i=0;i<6 && valid;i++) if(values[i]<c->filesystem_before[i]) valid=0;
+		if(valid) {
+			for(i=0;i<6;i++) values[i]-=c->filesystem_before[i];
+			snprintf(detail,sizeof(detail),"valid=1 entries=%llu filtered=%llu sampled=%llu emitted=%llu expired=%llu recursive=%llu endpoint_snapshot=1 unfinished_unknown=1",
+				values[0],values[1],values[2],values[3],values[4],values[5]);
+			cis_report(ctx,"filesystem_native_audit",NULL,detail);
+			if(values[5]) c->stop_error=-EIO;
+		} else c->stop_error=-EIO;
+	}
+	if(ctx->session_collector==15 && ctx->filesystem_fd>=0) {
+		if(close(ctx->filesystem_fd)) c->stop_error=-errno;
+		ctx->filesystem_fd=-1;
 	}
 	c->quiesced=1;
 	return c->stop_error;

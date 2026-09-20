@@ -131,7 +131,7 @@ def validate(request):
     op = request.get('op')
     fields = {'register': {'path'}, 'unregister': {'target'}, 'status': {'session'},
               'report': {'session'}, 'cancel': {'session'}, 'stop': set(), 'recover': set(),
-              'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject', 'objects', 'backend'},
+              'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject', 'objects', 'backend', 'filesystem'},
               'schedule_configure': {'plan'}, 'schedule_enable': set(),
               'schedule_pause': set(), 'schedule_status': {'offset'},
               'survey_epoch': set(), 'survey_report': {'target'},
@@ -142,6 +142,12 @@ def validate(request):
     if op == 'start':
         if request.get('collector') not in collector_manifest.COLLECTORS:
             raise ValueError('unsupported collector')
+        if request['collector']=='filesystem':
+            path=request.get('filesystem')
+            if not isinstance(path,str) or not path.startswith('/') or not 1<len(path)<=4096 or '\0' in path:
+                raise ValueError('explicit absolute ext4 directory required')
+        elif 'filesystem' in request:
+            raise ValueError('filesystem selection requires filesystem collector')
         if request['collector']=='rwsem' or request['collector']=='counter' and 'objects' in request:
             objects=request.get('objects')
             if (not isinstance(objects,list) or not 1<=len(objects)<=8 or
@@ -496,6 +502,7 @@ class Controller:
                       window_ms=request.get('window_ms', WINDOW_MS), targets=request['targets'],
                       selected_objects=request.get('objects',[]),
                       backend_selection=request.get('backend'),
+                      filesystem_selection=request.get('filesystem'),
                       inventory=None, receipt=None, cancellation_requested=False,
                       nonce_epoch=request.get('nonce_epoch'), retention_managed=bool(self.schedule),
                       survey_epoch=self.survey_epoch, scheduled=planned,
@@ -553,6 +560,7 @@ class Controller:
         record, request, roots = admission['record'], admission['request'], admission['roots']
         output, errors = fds
         parent = child = None
+        filesystem_fd = None
         try:
             if record['cancellation_requested'] or self.stopping or admission['timed_out']:
                 record.update(state='FAULTED' if admission['timed_out'] else 'IDLE',
@@ -578,9 +586,13 @@ class Controller:
             if request.get('backend'):
                 backend=request['backend']
                 command += ['a:'+backend['cache']+':'+(','.join(str(v) for v in backend['nodes']) or '*')]
+            if request['collector']=='filesystem':
+                filesystem_fd=os.open(request['filesystem'],os.O_PATH|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+                command += ['f:'+str(filesystem_fd)]
             command += ['%s:%d:%d:%d' % ('t' if root['session_target'] else 'i', root['fd'],
                                        root['id'], root['generation']) for root in roots]
-            child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots]),
+            child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots],
+                *([filesystem_fd] if filesystem_fd is not None else [])),
                                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors)
         except BaseException:
             self.faulted = True
@@ -590,6 +602,8 @@ class Controller:
                 parent.close()
             raise
         finally:
+            if filesystem_fd is not None:
+                os.close(filesystem_fd)
             if child is not None:
                 child.close()
             os.close(output)

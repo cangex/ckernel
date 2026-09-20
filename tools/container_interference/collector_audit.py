@@ -19,7 +19,7 @@ def audit(record, raw):
              'owner_entry_stages': ('owner_entries', 'sched_entries', 'target_waits', 'watch_events')}
     found = {}
     owner_resources=set()
-    selections=[]; closes=[]
+    selections=[]; closes=[]; fs_selections=[]; fs_closes=[]; fs_audits=[]
     optional = {'owner_map_updates': ('watch_races', 'watch_failed', 'holder_failed', 'attempt_failed')}
     for line in raw.splitlines():
         if len(line) > 8192: raise ValueError('audit record length')
@@ -29,6 +29,9 @@ def audit(record, raw):
         kind = row.get('kind')
         if kind=='backend_source_filter': selections.append(row.get('detail',''))
         if kind=='backend_source_filter_closed': closes.append(row.get('detail',''))
+        if kind=='filesystem_source_filter': fs_selections.append(row.get('detail',''))
+        if kind=='filesystem_source_filter_closed': fs_closes.append(row.get('detail',''))
+        if kind=='filesystem_native_audit': fs_audits.append(row.get('detail',''))
         if record.get('collector')=='alloc_backend' and kind=='MAPLE_ALLOC':
             errors.append('backend-only capture contains excluded Maple context')
         if kind=='OWNER':
@@ -79,9 +82,27 @@ def audit(record, raw):
                 if requested and requested!=dict(cache=backend['cache'],nodes=nodes):
                     raise ValueError('backend selection readback mismatch')
         except (ValueError,KeyError): errors.append('backend_selection_invalid')
+    filesystem=None; native_fs=None
+    if record.get('collector')=='filesystem':
+        try:
+            if len(fs_selections)!=1 or fs_closes!=['lease=0 close_after_detach=1'] or len(fs_audits)!=1:
+                raise ValueError('filesystem lease lifecycle')
+            filesystem={k:int(v) for k,v in (p.split('=',1) for p in fs_selections[0].split())}
+            native_fs={k:int(v) for k,v in (p.split('=',1) for p in fs_audits[0].split())}
+            if (set(filesystem)!={'protocol','lease','dev','major','minor','pinned','readback'} or
+                    filesystem['protocol']!=1 or filesystem['pinned']!=1 or filesystem['readback']!=1 or
+                    filesystem['lease']<=0 or filesystem['dev']!=(filesystem['major']<<20|filesystem['minor']) or
+                    not 0<=filesystem['major']<4096 or not 0<=filesystem['minor']<1048576 or
+                    set(native_fs)!={'valid','entries','filtered','sampled','emitted','expired','recursive','endpoint_snapshot','unfinished_unknown'} or
+                    min(native_fs.values())<0 or native_fs['valid']!=1 or native_fs['endpoint_snapshot']!=1 or
+                    native_fs['unfinished_unknown']!=1 or native_fs['recursive'] or
+                    native_fs['filtered']+native_fs['sampled']>native_fs['entries']):
+                raise ValueError('filesystem lease or native audit')
+        except (ValueError,KeyError): errors.append('filesystem_selection_invalid')
     return dict(schema='cis-collector-audit-v1', status='FAIL' if errors else 'BLOCKED' if missing else 'PASS',
                 collector_contract_sha256=contract, errors=errors, missing=missing, counters=found,
                 counters_overlap=True, owner_resources=sorted(owner_resources),
                 backend_selection=backend,
+                filesystem_selection=filesystem, filesystem_native_audit=native_fs,
                 population_coverage=None, object_reuse_coverage=None,
                 note='scope audit only, not a zero-loss, attribution or performance acceptance')
