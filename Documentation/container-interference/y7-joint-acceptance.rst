@@ -1,6 +1,9 @@
 Y7 joint acceptance protocol (implementation, not acceptance)
 ============================================================
 
+The scoped execution receipt is y7-validation-20260920.rst. This protocol
+describes the frozen test design; its presence alone is not a runtime result.
+
 The first cohort uses four active containers with four private directories,
 private files, FD tables and anonymous address spaces. A fixed open-loop
 arrival sequence performs file write/read/verification, private rename/unlink,
