@@ -87,9 +87,9 @@ def check(state,clients,servers,records,raws,plan):
         if any(r['causal']!='NOT_ESTABLISHED' for r in report['relations']): errors.append('causal_overclaim')
         if collector=='qdisc':
             q=report['specialist'];observed={tuple(s['actor']) for s in q['samples'] if s['actor'] is not None}
-            identities=record['root_identities']
+            identities=dict(record.get('owner_identities',{}));identities.update(record['root_identities'])
             allowed={(identities[state['all_targets'][j]]['id'],identities[state['all_targets'][j]]['generation'])
-                for j in ROLES[state['round']] if plan['destinations'][j]==0}
+                for j in range(4) if plan['destinations'][j]==0}
             if observed!=allowed: errors.append('queue_participant_binding')
             if len(allowed)<2 and q['shared_resources']: errors.append('separate_queue_false_sharing')
             if any(s['holder'] is not None or s['blocking_container'] is not None or s['packet_owner'] is not None for s in q['samples']):

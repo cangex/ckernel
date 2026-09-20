@@ -63,6 +63,8 @@ struct cis_context {
 	unsigned int selected_cpus[8], selected_cpu_count;
 	unsigned int selected_object_count;
 	uint64_t session_id, output_bytes, output_limit;
+	char report_buffer[16384];
+	size_t report_used;
 	uint64_t terminal_received, terminal_emitted, terminal_rejected;
 	uint64_t terminal_lost, terminal_owner_skipped;
 	int terminal_valid;
@@ -88,6 +90,7 @@ void cis_baseline_update(struct cis_context *, struct cis_root *, const struct c
 void cis_baseline_idle(struct cis_context *, struct cis_root *, const struct cis_metric *, int);
 void cis_diagnostics_tick(struct cis_context *, uint64_t);
 void cis_report(struct cis_context *, const char *, const struct cis_root *, const char *);
+void cis_report_flush(struct cis_context *);
 const char *cis_state_name(enum cis_state);
 int cis_capture_start(struct cis_context *, const char *);
 int cis_capture_root(struct cis_context *, struct cis_root *, int);

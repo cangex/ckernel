@@ -45,5 +45,8 @@ rounds in each fresh VM. Target/bystander roles rotate; only one egress queue
 is selected. A nonselected connection must not appear as its participant.
 Three two-second profile windows fit within the nine-second client sequence.
 Queue participation remains E1, never a unique holder or blocking container.
+The selected queue may also carry registered bystander traffic. Its validated
+identity universe includes these roots, not only the two active diagnostic
+targets. Participants must match the actual queue placement of all four roots.
 Combined client/server CPU and memory belong to their accounting root; the
 measurement includes endpoint startup/shutdown and first unified analysis.

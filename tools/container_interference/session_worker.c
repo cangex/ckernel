@@ -166,6 +166,8 @@ int main(int argc,char **argv)
 		struct cis_root *r=&ctx->roots[i];
 		if(cis_capture_root(ctx,r,1)) { err=1; reason="ROOT_MAP"; goto drain; }
 	}
+	cis_report_flush(ctx);
+	if(ctx->output_error) { err=1;reason="OUTPUT_ERROR";goto drain; }
 	start=cis_clock_ns()+100000000ULL; end=start+window*1000000ULL;
 	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used && ctx->roots[i].session_target) {
 		struct cis_root *r=&ctx->roots[i];
@@ -187,6 +189,7 @@ int main(int argc,char **argv)
 		if(p>0) { reason="CANCELLED"; break; }
 		if(p<0 && errno!=EINTR) { err=1; reason="POLL"; break; }
 		capture_error=cis_capture_poll(ctx);
+		cis_report_flush(ctx);
 		if(capture_error<0) {
 			err=1; reason=capture_error==-E2BIG?"ENTRY_RATE_LIMIT":"CAPTURE_ERROR"; break;
 		}
@@ -223,6 +226,7 @@ drain:
 		cis_report(ctx,"producer_recursion",NULL,detail);
 	}
 	cis_registry_destroy(ctx); cis_symbols_free(ctx);
+	cis_report_flush(ctx);
 	if(ctx->errors || ctx->dropped || ctx->output_error) err=1;
 	if(err && !strcmp(reason,"COMPLETE")) reason="QUALITY";
 	if(close(ctx->output_fd)) { err=1; reason="OUTPUT_CLOSE"; }
