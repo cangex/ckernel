@@ -9,7 +9,7 @@ CASES={'shared_sync':dict(disks=[0,0],mode='sync'),
 
 
 def case_order():
-    return [dict(case=c,round=r,enabled=v,label=c+str(r)+('on' if v else 'off'))
+    return [dict(case=c,round=r,enabled=v,label=c.replace('_','')+str(r)+('on' if v else 'off'))
             for r in range(3) for c in CASES for v in ((False,True) if r%2==0 else (True,False))]
 
 
