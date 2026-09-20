@@ -137,5 +137,14 @@ class ReleaseTruth(unittest.TestCase):
         args=self.fixture(True); args[2][0]=args[2][0].split('\n',1)[1]
         self.assertIn('launcher_reference_unclosed',net_release_check.check(*args)['errors'])
 
+    def test_fixture_uses_native_tcp_tsorted_save_restore(self):
+        root=Path(__file__).resolve().parents[4]
+        source=(root/'tools/testing/selftests/container_interference/net_fixture/cis_net_fixture.c').read_text()
+        a=source.index('tcp_skb_tsorted_save(skb)')
+        b=source.index('state->child = skb_clone(skb, GFP_KERNEL)')
+        c=source.index('tcp_skb_tsorted_restore(skb)')
+        self.assertLess(a,b); self.assertLess(b,c)
+        self.assertIn('state->child->dev = NULL',source)
+
 
 if __name__=='__main__': unittest.main()

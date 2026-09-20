@@ -79,8 +79,12 @@ static long clone_ioctl(struct file *file, unsigned int command, unsigned long a
 	    skb->fclone != SKB_FCLONE_ORIG) { error = -EINVAL; goto unlock; }
 	r.original = (unsigned long)skb;
 	if (r.clone) {
-		state->child = skb_clone(skb, GFP_KERNEL);
+		/* Match TCP transmit: tsorted links alias destination/destructor. */
+		tcp_skb_tsorted_save(skb) {
+			state->child = skb_clone(skb, GFP_KERNEL);
+		} tcp_skb_tsorted_restore(skb);
 		if (!state->child) { error = -ENOMEM; goto unlock; }
+		state->child->dev = NULL;
 	}
 	r.child = (unsigned long)state->child;
 	r.data_refs = atomic_read(&skb_shinfo(skb)->dataref);
