@@ -35,6 +35,14 @@ def workload(text):
         raise ValueError('arrival-relative timing or business integrity')
     return dict(r,throughput=6000e9/(r['end']-r['due']))
 
+def cost_fields(state,plan):
+    c=costs(state['before'],state['after'],plan['clock_ticks'])
+    a=cpu_snapshot(state['before']['proc_stat']);b=cpu_snapshot(state['after']['proc_stat'])
+    if a.keys()!=b.keys(): raise ValueError('CPU topology changed')
+    cpu={k:[q-p for p,q in zip(a[k],b[k])] for k in a}
+    if any(v<0 for row in cpu.values() for i,v in enumerate(row) if i!=4): raise ValueError('cpu_accounting_regression')
+    return dict(system_cost=c,cpu_delta_ticks=cpu)
+
 def check(state,logs,records,raws,plan):
     errors=[]; work=[workload(t) for t in logs]; observations=[]
     selected=[state['all_targets'][i] for i in ROLES[state['round']]]
@@ -67,15 +75,11 @@ def check(state,logs,records,raws,plan):
             omitted=report.get('omitted_relations'),process_cpu=record.get('process_cpu_budget'),
             rss_bytes=record.get('combined_rss_peak_bytes'),report=report))
     validate(state['idle_sources'],None,0,2**64-1)
-    c=costs(state['before'],state['after'],plan['clock_ticks'])
-    for actor in c['actors']:
+    measured=cost_fields(state,plan)
+    for actor in measured['system_cost']['actors']:
         if actor['memory_events_delta'].get('oom',0) or actor['memory_events_delta'].get('oom_kill',0): errors.append('business_oom')
-    a=cpu_snapshot(state['before']['proc_stat']);b=cpu_snapshot(state['after']['proc_stat'])
-    if a.keys()!=b.keys(): raise ValueError('CPU topology changed')
-    cpu={k:[q-p for p,q in zip(a[k],b[k])] for k in a}
-    if any(v<0 for row in cpu.values() for i,v in enumerate(row) if i!=4): errors.append('cpu_accounting_regression')
     return dict(status='FAIL' if errors else 'PASS_SCOPED',errors=sorted(set(errors)),workloads=work,
-                system_cost=c,cpu_delta_ticks=cpu,observations=observations)
+                **measured,observations=observations)
 
 def replay(serial,destination):
     text=Path(serial).read_text();files=extract(text);prefix='/tmp/y7-private-evidence/'

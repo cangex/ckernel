@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 import hashlib
 import json
+from pathlib import Path
 
 from collector_audit import audit
 from explain import explain, within_window
@@ -71,6 +72,8 @@ def analyze(record,raw):
                  relation='same_public_resource_observed',contention='NOT_ESTABLISHED',blocking_container=None)
             for k,v in sorted(participants.items()) if len(v)>1]
     return dict(schema='cis-filesystem-report-v1',quality=quality,scope_audit=scope,source=base['source'],
+        analysis_source_sha256=dict(base['analysis_source_sha256'],
+            filesystem_report=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),
         raw_sha256=hashlib.sha256(raw).hexdigest(),episodes=episodes,shared_resources=shared,excluded=dict(excluded),
         coverage=dict(observation_status='ACCEPTED_SAMPLES' if episodes and quality['status']=='PASS' else 'NO_ACCEPTED_SAMPLES',
             operations={n:sum(e['operation']==n for e in episodes) for n in OPERATIONS.values()},

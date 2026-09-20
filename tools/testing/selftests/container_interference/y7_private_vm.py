@@ -11,7 +11,7 @@ import prototype_admission as admission
 from joint_costs import snapshot
 from session import source_manifest
 from source_switches import observe
-from y7_private_check import order,captures,check,ROLES
+from y7_private_check import order,captures,check,cost_fields,ROLES
 
 def run():
     os.umask(0o077);os.sched_setaffinity(0,{7})
@@ -62,6 +62,7 @@ def run():
             off='idle controller without attached producers',p99='record_only',
             scope='four real containers, private files and anonymous VMAs; no injected lock delays',
             comparisons='within arrangement only; CPU and disk layouts are not independent causal interventions',
+            cost_boundary='before launch through first unified analysis; final archive serialization and independent replay excluded',
             mounts=Path('/proc/self/mountinfo').read_text(),schedstats=Path('/proc/sys/kernel/sched_schedstats').read_text())
         (out/'plan.json').write_text(json.dumps(plan,indent=2))
         daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
@@ -94,6 +95,11 @@ def run():
             records=[json.loads((out/'records'/(s['session_id']+'.json')).read_text()) for s in sessions]
             raws=[(out/'records'/(s['session_id']+'.jsonl')).read_bytes() for s in sessions]
             checked=check(state,[(out/(label+'-%d.log'%i)).read_text() for i in range(4)],records,raws,plan)
+            state['business_after']=after
+            state['explanation_ready_ns']=time.monotonic_ns()
+            state['after']=snapshot(root,roots)
+            checked.update(cost_fields(state,plan))
+            (out/(label+'-evidence.json')).write_text(json.dumps(state,indent=2))
             (out/(label+'-check.json')).write_text(json.dumps(checked,indent=2))
             states.append(dict(label=label,result=checked['status']));(out/'partial.json').write_text(json.dumps(states,indent=2))
             if checked['status']!='PASS_SCOPED': raise ValueError(checked['errors'])

@@ -52,6 +52,18 @@ class Filesystem(unittest.TestCase):
         self.assertEqual(r['quality']['status'],'PASS')
         self.assertEqual(r['coverage']['waits'],0); self.assertFalse(r['shared_resources'])
 
+    def test_unified_report_retains_parser_provenance(self):
+        from unittest.mock import patch
+        from unified_report import analyze as unified
+        report=self.run_rows([self.event()])
+        self.assertIn('filesystem_report',report['analysis_source_sha256'])
+        with patch('filesystem_report.analyze',return_value=report), patch('unified_report.explain',return_value=dict(
+                quality=report['quality'],source=report['source'],analysis_source_sha256={},explanation_lag_ns=None)):
+            r=unified(self.record(),b'')
+        self.assertEqual(r['quality']['status'],'PASS')
+        self.assertIn('filesystem_report',r['analysis_source_sha256'])
+        self.assertEqual(r['relations'][0]['causal'],'NOT_ESTABLISHED')
+
     def test_other_fs_lease_reuse_unknown_and_window(self):
         for e in (self.event(lease=8),self.event(dev=9<<20),self.event(actor=3),self.event(begin=99),self.event(sample_shift=4)):
             r=self.run_rows([e]); self.assertNotEqual(r['quality']['status'],'PASS')

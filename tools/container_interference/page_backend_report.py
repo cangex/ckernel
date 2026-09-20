@@ -68,7 +68,8 @@ def analyze(record,raw):
             for k,v in sorted(participants.items()) if len(v)>1]
     return dict(schema='cis-page-backend-report-v1',quality=quality,scope_audit=scope,
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),
-        analysis_source_sha256={'page_backend_report.py':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        analysis_source_sha256=dict(base['analysis_source_sha256'],
+            page_backend_report=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),
         episodes=episodes,shared_backends=shared,excluded=dict(excluded),
         coverage=dict(pcp_refill='SAMPLED',pcp_drain='SAMPLED',buddy_allocate='SAMPLED',buddy_free='SAMPLED',
                       observed_operation_counts={name:sum(e['operation']==name for e in episodes) for name in OPERATIONS.values()},
