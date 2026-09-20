@@ -11,6 +11,24 @@ from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown,replay
 
 
 class CoverageTests(unittest.TestCase):
+    def test_private_quota_negative_cannot_certify_positive_socket_ownership(self):
+        checked=dict(status='PASS',states=[dict(label='private-net%d'%i,
+            result=dict(namespace_validation=dict(status='PASS'),quota_validation=dict(status='PASS'),
+                        eligible=0,captured=0)) for i in range(3)])
+        module=SimpleNamespace(__file__=__file__,verify=lambda *a,**k:checked)
+        with tempfile.TemporaryDirectory() as tmp,patch('coverage_matrix.importlib.import_module',return_value=module):
+            base=Path(tmp); (base/'serial.log').write_bytes(b'fixture')
+            row=dict(name='quota',serial='serial.log',sha256=hashlib.sha256(b'fixture').hexdigest())
+            def check(kind,name):
+                return replay(dict(schema='cis-coverage-input-v1',cohorts=[dict(row,verifier=kind)]),base,base/name)['evidence'][0]['status']
+            self.assertEqual(check('net_isolation','negative'),'PASS_SCOPED')
+            self.assertEqual(check('net','not-positive'),'FAIL')
+            checked['states'][0]['result']['quota_validation']['status']='FAIL'
+            self.assertEqual(check('net_isolation','no-throttle'),'FAIL')
+            checked['states'][0]['result']['quota_validation']['status']='PASS'
+            checked['states'][0]['result']['captured']=1
+            self.assertEqual(check('net_isolation','false-edge'),'FAIL')
+
     def test_release_entry_or_logical_lock_cannot_certify_backend_clone_closure(self):
         checked=dict(status='PASS',states=[dict(label='%s-net%d'%(case,i),
             result=dict(matched=2,truth=[dict(clone=int(case=='txclone'))]*2))
