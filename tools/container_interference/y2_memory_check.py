@@ -61,19 +61,22 @@ def verify(serial,output):
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     output.mkdir(mode=0o700)
     plan,result,permit=[value(n+'.json') for n in ('plan','result','permit')]
-    fixture=plan['schema']=='cis-y2-page-fixture-v1'
+    fixture=plan['schema'] in ('cis-y2-page-fixture-v1','cis-y2-page-fixture-v2')
+    page_count=4 if plan['schema']=='cis-y2-page-fixture-v2' else 8
     errors=[]; states=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
     if any(v in text for v in ('page_counter underflow:', 'BUG: KASAN:', 'Oops:', 'Kernel panic','WARNING: CPU:')):
         errors.append('kernel_warning')
     lease=value('lease-checks.json')
     if lease.get('status')!='PASS' or len(lease.get('checks',[]))!=6: errors.append('lease_control')
-    if (plan['schema'] not in ('cis-y2-memory-plan-v1','cis-y2-memory-plan-v2','cis-y2-page-fixture-v1') or len(plan['order'])!=(12 if fixture else 24) or
+    if (plan['schema'] not in ('cis-y2-memory-plan-v1','cis-y2-memory-plan-v2','cis-y2-page-fixture-v1','cis-y2-page-fixture-v2') or len(plan['order'])!=(12 if fixture else 24) or
             plan['operations']!=16 or plan['sample_shift']!=6 or plan['cpus']!=[0,1] or plan['mems']!=[0]):
         errors.append('plan')
     if fixture and ('CIS_PAGE_FIXTURE_UNLOAD=0' not in text.splitlines() or
                     plan['pcp_high_fraction']!=4096 or plan['page_bytes_per_operation']!=3088*plan['page_size']):
         errors.append('page_fixture_configuration')
+    if plan['schema']=='cis-y2-page-fixture-v2' and (plan['page_operations']!=4 or plan.get('page_sample_shift')!=0):
+        errors.append('page_fixture_full_rate_configuration')
     if fixture:
         restored=[fields(line) for line in text.splitlines() if line.startswith('CIS_PAGE_PCP_RESTORED=')]
         if len(restored)!=1 or restored[0].get('CIS_PAGE_PCP_RESTORED')!=restored[0].get('original'):
@@ -92,11 +95,11 @@ def verify(serial,output):
         page_case=plan['schema']!='cis-y2-memory-plan-v1' and c['collector']=='page_backend'
         if page_case and not fixture and (plan['page_operations']!=8 or plan['page_bytes_per_operation']!=64<<20 or plan['page_thp']!='MADV_NOHUGEPAGE'):
             errors.append('page_workload_plan')
-        ops=[operations(log,ev['window'],8 if page_case else 16,plan['page_bytes_per_operation'] if page_case else 8<<20) for log in logs]
+        ops=[operations(log,ev['window'],page_count if page_case else 16,plan['page_bytes_per_operation'] if page_case else 8<<20) for log in logs]
         if fixture:
             for log in logs:
                 truth=[fields(line) for line in log.splitlines() if line.startswith('CIS_PAGE_TRUTH ')]
-                if len(truth)!=8 or [d['index'] for d in truth]!=list(range(8)) or any(
+                if len(truth)!=page_count or [d['index'] for d in truth]!=list(range(page_count)) or any(
                     d['node']!=0 or d['allocated']!=3088 or d['freed']!=3088 or d['failed'] or d['wrong_node'] for d in truth):
                     errors.append('native_page_truth_'+label)
         for i,index in enumerate(c['actors']):
@@ -140,6 +143,8 @@ def verify(serial,output):
                 episodes=report['episodes']; by_actor=defaultdict(list)
                 for e in episodes:
                     by_actor[tuple(e['actor'][:2])].append(e)
+                    if e['sample_shift']!=plan.get('page_sample_shift',plan['sample_shift']):
+                        errors.append('page_sampling_configuration_'+label)
                     if e['holder'] is not None or e['blocking_container'] is not None: errors.append('invented_holder_'+label)
                 if c['name']=='zone1' and episodes: errors.append('outside_selected_node_'+label)
                 if c['name']=='zone0' and any(not by_actor[a] for a in actors): errors.append('missing_page_actor_'+label)
@@ -173,7 +178,7 @@ def verify(serial,output):
     report=dict(status='FAIL' if errors else 'PASS_SCOPED',errors=sorted(set(errors)),states=states,
         source=result['source'],serial_sha256=hashlib.sha256(raw_serial).hexdigest(),lease_control=lease,
         paired_descriptive_changes=pairs,scope='Y2 native ancestor identity and page-zone selection, not complete Y2/Y7 acceptance',
-        limits=['8 or 16 operations per actor; all samples retained, P99 not estimated',
+        limits=['4/8/16 operations per actor according to frozen plan; P99 not estimated',
                 'source audit includes host/background entries; process costs exclude source-side CPU',
                 'shared counter/zone participation is not contention or a uniquely blocking tenant',
                 'reclaim, SLUB selected-node runtime and joint costs require separate evidence'])

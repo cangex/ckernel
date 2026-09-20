@@ -85,6 +85,12 @@ class PageBackend(unittest.TestCase):
             self.assertIn('ktime_get_ns',body)
         page=(root/'mm/page_alloc.c').read_text()
         for marker in ('CIS_PB_REFILL','CIS_PB_DRAIN','CIS_PB_ALLOC','CIS_PB_FREE'): self.assertIn(marker,page)
+        high_order=page.rsplit('static void __free_pages_ok(',1)[1].split('void __free_pages_core(',1)[0]
+        sequence=['free_pages_prepare(', 'cis_page_begin(', '\tspin_lock_irqsave(',
+                  'cis_page_acquired(', '__free_one_page(', 'cis_page_releasing(',
+                  'spin_unlock_irqrestore(', 'cis_page_end(']
+        offsets=[high_order.index(s) for s in sequence]
+        self.assertEqual(offsets,sorted(offsets))
         self.assertEqual(expected_fields('16','page_backend')['page_backend'],'1')
         self.assertEqual(expected_fields('16',None)['backend_filter'],'0')
         with self.assertRaises(ValueError): expected_fields('15','page_backend')

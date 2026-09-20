@@ -68,8 +68,9 @@ def run(page_fixture=False):
     if Path('/sys/devices/system/node/online').read_text().strip()!='0-1':
         raise ValueError('two guest NUMA nodes required')
     for name in ('counter_shift','page_shift'):
-        if Path('/sys/module/cis_observe/parameters',name).read_text().strip()!='6':
-            raise ValueError('default 1/64 source sampling required')
+        expected='0' if page_fixture and name=='page_shift' else '6'
+        if Path('/sys/module/cis_observe/parameters',name).read_text().strip()!=expected:
+            raise ValueError('frozen source sampling configuration required')
     lease_checks(out)
     if page_fixture and Path('/proc/sys/vm/percpu_pagelist_high_fraction').read_text().strip()!='4096':
         raise ValueError('dedicated coverage PCP configuration required')
@@ -101,7 +102,8 @@ def run(page_fixture=False):
               sample_shift=6,window_ms=2000,cpus=[0,1],mems=[0],manager_cpu=7,
               host_scope='isolated VM',claim='native participation and ownership, not causal blocking')
     if page_fixture:
-        plan.update(schema='cis-y2-page-fixture-v1',page_bytes_per_operation=3088*os.sysconf('SC_PAGESIZE'),
+        plan.update(schema='cis-y2-page-fixture-v2',page_operations=4,page_sample_shift=0,
+                    page_bytes_per_operation=3088*os.sysconf('SC_PAGESIZE'),
                     page_thp='native order0/order4',page_size=os.sysconf('SC_PAGESIZE'),
                     pcp_high_fraction=4096,claim='native allocation/free coverage fixture, not ordinary workload cost')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
