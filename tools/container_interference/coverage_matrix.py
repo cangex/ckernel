@@ -79,6 +79,11 @@ CONTRACT={
         object='Socket cookie、申请调用边界及释放先于拒绝的原始头部',
         participants='申请容器与管理面压力条件分开，不推断设备阻塞方或分配器持有者',
         pending=['修复模式仅验证队列接收，不代表数据已上网','真实业务压力发生率与其他失败来源','全部释放后端和转换后的skb来源']),
+    'net_release': dict(name='原始TCP头部释放后端与克隆保留',collector='net',
+        discovered='原生发送分配、关闭时释放后端返回及真实skb_clone保留反例',
+        object='原始头部episode与释放前冻结的地址/时间token，非转换后报文所有权',
+        participants='申请者与释放执行者分开；共享数据与fclone引用保留不标为回收完成',
+        pending=['不支持转换后子skb的全生命周期归属','bulk/NAPI/morph保留入口级证据','后端wall时间不是纯CPU或其他容器阻塞时间']),
     'block': dict(name='块I/O',collector='block',discovered='直接I/O请求形成、排队、下发与完成',
         object='请求episode、设备/队列、head-bio blkcg',participants='初始提交者与bio归属；不推断唯一阻塞方',
         pending=['tag等待由独立专项核验','重排队/部分完成及bio/request合并由独立专项核验，不代表任意设备','buffered writeback多源归属']),
@@ -141,6 +146,7 @@ VERIFIERS={
     'net_tx':('net_vm_check','net_tx',{}),
     'net_tx_failure':('net_vm_check','net_tx_failure',{}),
     'net_tx_admission':('net_vm_check','net_tx_admission',{}),
+    'net_release':('net_vm_check','net_release',{}),
     'net_capacity':('net_vm_check','net_capacity',{}),
     'net_guard':('net_guard_check','net_guard',{}),
     'block':('block_vm_check','block',{}), 'block_tag':('tag_vm_check','block_tag',{}),
@@ -190,7 +196,7 @@ def replay(index,base,output):
             labels=[r.get('label','') for r in checked.get('states',[])]
             if key=='backlog' and not labels or (key=='backlog' and not all(v.startswith('backlog-') for v in labels)):
                 raise ValueError('backlog cohort required')
-            if key=='net' and labels and all(v.startswith(('backlog-','capacity-','storm-','txfailure-','txunmarked-','txadmission-','txnormal-')) for v in labels):
+            if key=='net' and labels and all(v.startswith(('backlog-','capacity-','storm-','txfailure-','txunmarked-','txadmission-','txnormal-','txplain-','txclone-')) for v in labels):
                 raise ValueError('logical ownership cohort required')
             if key=='net_capacity':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
@@ -242,6 +248,14 @@ def replay(index,base,output):
                                 (v['label'].startswith('txadmission-') and p.get('admission_rejected',0)<=0)
                                 for p in v['result']['participants']) for v in selected)):
                     raise ValueError('native memory admission rejection and restored-budget recovery required')
+            if key=='net_release':
+                selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
+                if (len(selected)!=6 or {v['label'].split('-')[0] for v in selected}!={'txplain','txclone'} or
+                        any(v.get('result',{}).get('matched')!=2 or
+                            len(v['result'].get('truth',[]))!=2 or
+                            any(t.get('clone')!=int(v['label'].startswith('txclone-')) for t in v['result']['truth'])
+                            for v in selected)):
+                    raise ValueError('independent native queue/close/retained-clone truth required')
             if key=='block_merge' and checked.get('fixture') not in ('merge','merge-scheduler'):
                 raise ValueError('native merge truth cohort required')
             if key=='block_lifecycle' and checked.get('fixture')!='lifecycle':

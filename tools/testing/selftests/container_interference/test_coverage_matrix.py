@@ -11,6 +11,21 @@ from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown,replay
 
 
 class CoverageTests(unittest.TestCase):
+    def test_release_entry_or_logical_lock_cannot_certify_backend_clone_closure(self):
+        checked=dict(status='PASS',states=[dict(label='%s-net%d'%(case,i),
+            result=dict(matched=2,truth=[dict(clone=int(case=='txclone'))]*2))
+            for case in ('txplain','txclone') for i in range(3)])
+        module=SimpleNamespace(__file__=__file__,verify=lambda *a,**k:checked)
+        with tempfile.TemporaryDirectory() as tmp,patch('coverage_matrix.importlib.import_module',return_value=module):
+            base=Path(tmp); (base/'serial.log').write_bytes(b'fixture')
+            row=dict(name='release',serial='serial.log',sha256=hashlib.sha256(b'fixture').hexdigest())
+            def check(kind,name):
+                return replay(dict(schema='cis-coverage-input-v1',cohorts=[dict(row,verifier=kind)]),base,base/name)['evidence'][0]['status']
+            self.assertEqual(check('net_release','closure'),'PASS_SCOPED')
+            self.assertEqual(check('net','not-owner'),'FAIL')
+            checked['states'][0]['result']['matched']=0
+            self.assertEqual(check('net_release','only-entry'),'FAIL')
+
     def test_fd_call_or_retrospective_evidence_cannot_certify_relation_population(self):
         checked=dict(status='PASS',cases=[dict(label='threads%d'%i,
             relationships=dict(design='PREDECLARED',threshold_status='PASS',eligible=62,capture_ratio=1,
