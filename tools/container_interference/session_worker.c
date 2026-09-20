@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,14 +64,16 @@ int main(int argc,char **argv)
 		!strcmp(argv[4],"sched")?3:!strcmp(argv[4],"reclaim")?4:!strcmp(argv[4],"sync")?5:!strcmp(argv[4],"fd")?6:!strcmp(argv[4],"counter")?7:!strcmp(argv[4],"allocator")?8:!strcmp(argv[4],"net")?9:!strcmp(argv[4],"block")?10:!strcmp(argv[4],"rwsem")?11:!strcmp(argv[4],"slub")?12:!strcmp(argv[4],"alloc_backend")?13:!strcmp(argv[4],"page_backend")?14:!strcmp(argv[4],"filesystem")?15:!strcmp(argv[4],"qdisc")?16:!strcmp(argv[4],"cpu")?17:0;
 	if(!ctx->session_id || !ctx->session_collector || window<100 || window>10000) return 2;
 	if(ctx->session_collector==17) {
+		cpu_set_t observer;
 		char *p=argv[8]+2,*tail;
 		unsigned long value;
 		unsigned int j;
 		if(strncmp(argv[8],"c:",2)) return 2;
+		if(sched_getaffinity(0,sizeof(observer),&observer)) return 2;
 		do {
 			if(ctx->selected_cpu_count==8 || *p<'0' || *p>'9') return 2;
 			errno=0; value=strtoul(p,&tail,10);
-			if(errno || value>=512 || (*tail && *tail!=',')) return 2;
+			if(errno || value>=512 || CPU_ISSET(value,&observer) || (*tail && *tail!=',')) return 2;
 			for(j=0;j<ctx->selected_cpu_count;j++) if(ctx->selected_cpus[j]==value) return 2;
 			ctx->selected_cpus[ctx->selected_cpu_count++]=value;
 			if(!*tail) break;

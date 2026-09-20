@@ -26,6 +26,8 @@
 #include "uapi.h"
 static bool isolated_vm;
 module_param(isolated_vm,bool,0400);
+static int async_cpu = -1;
+module_param(async_cpu,int,0400);
 /* Do not keep the lock tracepoint active during IDLE/IP cost tests. */
 static bool enable_dentry_delay;
 module_param(enable_dentry_delay,bool,0400);
@@ -178,7 +180,8 @@ static void fixture_work(struct work_struct *work)
 	ctx->result.end_ns=ktime_get_ns();
 	if(ctx->result.requeue) {
 		ctx->result.requeue=0;
-		queue_work(system_unbound_wq,&ctx->work);
+		if(async_cpu>=0) queue_work_on(async_cpu,system_wq,&ctx->work);
+		else queue_work(system_unbound_wq,&ctx->work);
 		return;
 	}
 	complete(&ctx->done);
@@ -216,7 +219,8 @@ static long async_ioctl(struct file *file,unsigned int cmd,unsigned long arg)
 		ctx->result.requeue=input.requeue; ctx->result.owner_cgroup=cgroup_id(ctx->owner);
 		ctx->result.object=(unsigned long)&ctx->work; ctx->result.queued_ns=ktime_get_ns();
 		reinit_completion(&ctx->done); ctx->queued=true;
-		if(!queue_work(system_unbound_wq,&ctx->work)) { ctx->queued=false; ret=-EIO; goto out; }
+		if(!(async_cpu>=0 ? queue_work_on(async_cpu,system_wq,&ctx->work) :
+		     queue_work(system_unbound_wq,&ctx->work))) { ctx->queued=false; ret=-EIO; goto out; }
 		/* Return only submission facts: worker result fields are not yet synchronized. */
 		input.object=ctx->result.object; input.owner_cgroup=ctx->result.owner_cgroup; input.queued_ns=ctx->result.queued_ns;
 	} else if(cmd==CIS_FIXTURE_WAIT) {
@@ -357,6 +361,7 @@ static int __init fixture_init(void)
 {
 	int ret, i;
 	if(!isolated_vm) return -EPERM;
+	if(async_cpu < -1 || (async_cpu >= 0 && (async_cpu>=nr_cpu_ids || !cpu_online(async_cpu)))) return -EINVAL;
 	for(i=0;i<2;i++) { spin_lock_init(&sync_spin[i]); init_rwsem(&sync_rwsem[i]); }
 	ww_mutex_init(&attempt_ww[0],&attempt_class);
 	ww_mutex_init(&attempt_ww[1],&attempt_class);

@@ -46,7 +46,7 @@ def check(state,logs,record=None,raw=None):
         if name in ('separateCPU','quota','background') and cross: errors.append('false cross CPU association')
         if name=='migration' and (work[0]['migrations']<5 or report['unknown'].get('migrated_wait',0)<1):
             errors.append('migration coverage')
-        if not report['interrupts']: errors.append('interrupt coverage')
+        if not sum(v['entries'] for v in report['interrupt_totals']): errors.append('interrupt coverage')
         if name=='background':
             truth=[fields(l.split(' ',1)[1]) for text in logs for l in text.splitlines() if l.startswith('CPU_WORK_TRUTH ')]
             matched=[r for r in report['background'] if any(r['object']==t['object'] and
@@ -57,7 +57,7 @@ def check(state,logs,record=None,raw=None):
     return dict(status='FAIL' if errors else 'PASS_SCOPED',errors=errors,workloads=work,quota_deltas=quotas,
         cpu_report_summary=None if report is None else dict(points=report['points'],
             execution=len(report['execution']),waits=len(report['runnable_offcpu']),
-            associations=len(report['associations']),interrupts=len(report['interrupts']),
+            associations=len(report['associations']),interrupts=sum(v['entries'] for v in report['interrupt_totals']),
             background=len(report['background']),unknown=report['unknown']))
 
 def replay(serial,destination):

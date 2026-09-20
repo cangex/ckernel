@@ -14,7 +14,8 @@ from survey import boundary_delta
 MAX_POINTS=16384
 MAX_ASSOCIATIONS=4096
 KEYS=set(('protocol time_ns cpu phase tid task_start actor_id actor_generation next_tid '
-          'next_start next_id next_generation value flags destination object function').split())
+          'next_start next_id next_generation value flags destination object function '
+          'irq_ns irq_entries irq_errors irq_valid').split())
 
 
 def union(intervals):
@@ -35,6 +36,13 @@ def timeline(points,cpus):
     running={}; pending={}; irq=defaultdict(list); works={}
     runs=[]; waits=[]; interrupts=[]; background=[]; native_wait=[]
     unknown=Counter(); defects=Counter(); seen=set()
+    counters={(d['cpu'],d['time_ns']):(d['irq_ns'],d['irq_errors'],d['irq_valid']) for d in points if d['phase']!=2}
+    def irq_delta(cpu,a,b):
+        first,last=counters.get((cpu,a)),counters.get((cpu,b))
+        if (first is None or last is None or not first[2] or not last[2] or first[1]!=last[1] or
+                not 0<=last[0]-first[0]<=b-a):
+            unknown['irq_interval_incomplete']+=1; return None
+        return last[0]-first[0]
     for d in sorted(points,key=lambda d:(d['time_ns'],d['cpu'])):
         t=d['time_ns']; cpu=d['cpu']; phase=d['phase']
         key=(d['tid'],d['task_start']); ident=(d['actor_id'],d['actor_generation'])
@@ -95,14 +103,15 @@ def timeline(points,cpus):
     irq_union={cpu:union((r['begin_ns'],r['end_ns']) for r in interrupts if r['cpu']==cpu) for cpu in cpus}
     by_cpu=defaultdict(list); by_task=defaultdict(list)
     for r in runs:
-        r['observed_interrupt_ns']=overlap(r['begin_ns'],r['end_ns'],irq_union[r['cpu']])
-        r['irq_subtracted_slice_ns']=r['end_ns']-r['begin_ns']-r['observed_interrupt_ns']
+        r['observed_interrupt_ns']=irq_delta(r['cpu'],r['begin_ns'],r['end_ns'])
+        r['irq_subtracted_slice_ns']=(r['end_ns']-r['begin_ns']-r['observed_interrupt_ns']
+            if r['observed_interrupt_ns'] is not None else None)
         by_cpu[r['cpu']].append(r); by_task[tuple(r['task'])].append(r)
     ends={cpu:[r['end_ns'] for r in values] for cpu,values in by_cpu.items()}
     associations=[]
     for w in waits:
         a,b=w['begin_ns'],w['end_ns']; cpu=w['cpu']
-        w['observed_interrupt_ns']=overlap(a,b,irq_union[cpu]); w['blocking_container']=None
+        w['observed_interrupt_ns']=irq_delta(cpu,a,b); w['blocking_container']=None
         values=by_cpu[cpu]
         for i in range(bisect_left(ends.get(cpu,[]),a),len(values)):
             r=values[i]
@@ -111,16 +120,19 @@ def timeline(points,cpus):
             if x>=y or r['task']==w['task'] or r['identity'] in ([0,0],w['identity']): continue
             if len(associations)>=MAX_ASSOCIATIONS: defects['association_capacity']+=1; break
             associations.append(dict(cpu=cpu,waiter=w['identity'],executor=r['identity'],
-                begin_ns=x,end_ns=y,observed_interrupt_ns=overlap(x,y,irq_union[cpu]),
+                begin_ns=x,end_ns=y,observed_interrupt_ns=irq_delta(cpu,x,y),
                 relation='execution_during_runnable_offcpu_interval',evidence='E1',blocking_container=None))
     for w in background:
         slices=[]
         for r in by_task.get(tuple(w['task']),[]):
             a,b=max(w['begin_ns'],r['begin_ns']),min(w['end_ns'],r['end_ns'])
-            if a<b: slices.append(dict(cpu=r['cpu'],begin_ns=a,end_ns=b,
-                irq_subtracted_slice_ns=b-a-overlap(a,b,irq_union[r['cpu']])))
+            if a<b:
+                irq_ns=irq_delta(r['cpu'],a,b)
+                slices.append(dict(cpu=r['cpu'],begin_ns=a,end_ns=b,
+                    irq_subtracted_slice_ns=b-a-irq_ns if irq_ns is not None else None))
         w['observed_slices']=slices
-        w['observed_irq_subtracted_execution_ns']=sum(s['irq_subtracted_slice_ns'] for s in slices)
+        w['observed_irq_subtracted_execution_ns']=sum(s['irq_subtracted_slice_ns'] or 0 for s in slices)
+        w['unknown_irq_slice_ns']=sum(s['end_ns']-s['begin_ns'] for s in slices if s['irq_subtracted_slice_ns'] is None)
         w['wall_ns']=w['end_ns']-w['begin_ns']
         w['complete_cpu_cost']=False
     if defects: associations=[]
@@ -133,16 +145,18 @@ def analyze(record,raw):
     cpus=record.get('cpu_selection')
     if (not isinstance(cpus,list) or not 1<=len(cpus)<=8 or any(type(c) is not int or not 0<=c<512 for c in cpus)
             or len(set(cpus))!=len(cpus)): raise ValueError('CPU selection required')
-    base=explain(record,raw); scope=audit(record,raw); rows=[]; selected=[]; excluded=Counter()
+    base=explain(record,raw); scope=audit(record,raw); rows=[]; selected=[]; excluded=Counter(); irq_totals=[]
     identities=dict(record.get('root_identities',{})); identities.update(record.get('owner_identities',{}))
     known={(r['id'],r['generation']) for r in identities.values()}
     for line in raw.splitlines():
         r=json.loads(line)
         if r.get('kind')=='cpu_selection': selected.append(fields(r.get('detail','')))
+        if r.get('kind')=='cpu_irq_audit': irq_totals.append(fields(r.get('detail','')))
         if r.get('kind')!='CPU_POINT': continue
         d=fields(r.get('detail',''))
-        if (set(d)!=KEYS or any(type(v) is not int or v<0 for v in d.values()) or d['protocol']!=1 or
-                not 1<=d['phase']<=9 or d['cpu']>=512 or d['destination']>=512 or d['flags'] not in (0,1) or
+        if (set(d)!=KEYS or any(type(v) is not int or v<0 for v in d.values()) or d['protocol']!=2 or
+                d['phase'] not in (1,2,3,8,9) or d['cpu']>=512 or d['destination']>=512 or d['flags'] not in (0,1) or
+                d['irq_valid'] not in (0,1) or
                 not within_window(record,d['time_ns'],d['time_ns']) or d['time_ns']>=record['window']['end_ns']):
             excluded['schema_window']+=1; continue
         for prefix in ('actor','next'):
@@ -155,6 +169,11 @@ def analyze(record,raw):
         rows.append(d)
     expected=[dict(cpu=c,count=len(cpus),readback=1) for c in cpus]
     if selected!=expected: excluded['selection_readback']+=1
+    if ([v.get('cpu') for v in irq_totals]!=cpus or any(
+            set(v)!=set('protocol cpu total_ns entries errors depth sequence detached'.split()) or
+            any(type(x) is not int or x<0 for x in v.values()) or v['protocol']!=2 or
+            v['detached']!=1 or v['sequence']%2 for v in irq_totals)):
+        excluded['irq_terminal_audit']+=1
     result=timeline(rows,set(cpus)); quality=base['quality']
     if excluded or result['defects'] or scope['status']!='PASS':
         quality=dict(quality,status='FAIL',defects=quality['defects']+['cpu_audit'])
@@ -178,11 +197,11 @@ def analyze(record,raw):
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),cpu_selection=cpus,
         analysis_source_sha256=dict(base['analysis_source_sha256'],
             cpu_report=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),
-        points=len(rows),excluded=dict(excluded),quota_observations=quota,**result,
+        points=len(rows),excluded=dict(excluded),quota_observations=quota,interrupt_totals=irq_totals,**result,
         limits=['same-CPU execution association is not a unique blocker or causal proof',
                 'only runnable switch-out waits fully contained on one CPU are joined; wakeup and migration waits are not reconstructed',
                 'quota is a separate cgroup boundary counter, not attributed to another container',
-                'IRQ handler/softirq unions observed; NMI, entry/exit overhead and vCPU steal remain unmeasured',
+                'IRQ handler/softirq nested union aggregated per CPU without IRQ perf records; NMI, entry/exit overhead and vCPU steal remain unmeasured',
                 'work executor and function identified; submitter and merged/requeued ownership unknown',
                 'work address is one execution token, never a persistent owner key',
                 'observed execution slices exclude recorded interrupts only, not an exact total backend CPU cost',

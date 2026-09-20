@@ -477,6 +477,8 @@ class Controller:
         resource_policy.admit(self.manifest.get('collector_policy', resource_policy.policy()),
                               request['collector'], automatic=bool(planned and
                               planned.get('kind') == 'automatic_diagnosis'))
+        if request['collector']=='cpu' and set(request['cpus']) & set(os.sched_getaffinity(0)):
+            raise ValueError('selected CPUs must be disjoint from observer management affinity')
         fingerprint = hashlib.sha256(encoded(request)).hexdigest()
         for saved in self.history.values():
             if saved['nonce'] == request['nonce'] and saved.get('nonce_epoch') == request.get('nonce_epoch'):

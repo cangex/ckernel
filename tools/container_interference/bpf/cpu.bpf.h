@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u32); __type(value,__u8); } cpu_selected SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(key,__u32); __type(value,struct cis_cpu_irq_state); } cpu_irq_totals SEC(".maps");
 
 static __always_inline void cpu_actor(struct task_struct *t, struct cis_cpu_actor *a)
 {
@@ -28,6 +29,13 @@ static __always_inline int cpu_admit(struct cis_cpu_event *e, __u32 phase, int m
 static __always_inline int cpu_output(void *ctx, struct cis_cpu_event *e)
 {
 	struct cis_bpf_stats *s=statistics();
+	__u32 zero=0;
+	struct cis_cpu_irq_state *irq=bpf_map_lookup_elem(&cpu_irq_totals,&zero);
+	if(irq) {
+		__u64 sequence=irq->sequence;
+		e->irq_ns=irq->total_ns; e->irq_entries=irq->entries; e->irq_errors=irq->errors;
+		e->irq_valid=!(sequence&1) && !irq->depth && sequence==irq->sequence;
+	}
 	if(bpf_perf_event_output(ctx,&events,BPF_F_CURRENT_CPU,e,sizeof(*e))) COUNT(s,lost);
 	else COUNT(s,emitted);
 	return 0;
@@ -61,10 +69,30 @@ int cpu_wait(struct bpf_raw_tracepoint_args *ctx)
 static __always_inline int cpu_interrupt(void *ctx,__u32 phase,__u64 vector)
 {
 	struct cis_cpu_event e={};
+	struct cis_cpu_irq_state *irq;
+	__u32 zero=0,depth;
+	(void)ctx;
 	if(!cpu_admit(&e,phase,0)) return 0;
-	e.value=vector;
-	/* Interrupted current is deliberately not treated as an IRQ owner. */
-	return cpu_output(ctx,&e);
+	irq=bpf_map_lookup_elem(&cpu_irq_totals,&zero);
+	if(!irq) return 0;
+	/* Never emit perf records from IRQ callbacks: perf's irq_work notification
+	 * would itself create observable IRQs and a self-amplifying event stream. */
+	__sync_fetch_and_add(&irq->sequence,1);
+	depth=irq->depth;
+	if(phase==4 || phase==6) {
+		irq->entries++;
+		if(!depth) irq->begin_ns=e.base.time_ns;
+		if(depth<8) { irq->kinds[depth]=phase; irq->vectors[depth]=vector; }
+		else irq->errors++;
+		irq->depth=depth+1;
+	} else if(!depth) irq->errors++;
+	else {
+		depth--; irq->depth=depth;
+		if(depth<8 && (irq->kinds[depth]!=phase-1 || irq->vectors[depth]!=vector)) irq->errors++;
+		if(!depth && e.base.time_ns>=irq->begin_ns) irq->total_ns+=e.base.time_ns-irq->begin_ns;
+	}
+	__sync_fetch_and_add(&irq->sequence,1);
+	return 0;
 }
 SEC("raw_tp/irq_handler_entry")
 int cpu_irq_begin(struct bpf_raw_tracepoint_args *ctx) { return cpu_interrupt(ctx,4,ctx->args[0]); }

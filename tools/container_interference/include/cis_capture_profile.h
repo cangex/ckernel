@@ -71,7 +71,7 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 	if (profile == 3 || profile == 16)
 		return !strcmp(name, "targets");
 	if (profile == 17)
-		return !strcmp(name,"targets") || !strcmp(name,"cpu_selected");
+		return !strcmp(name,"targets") || !strcmp(name,"cpu_selected") || !strcmp(name,"cpu_irq_totals");
 	if (profile == 14 || profile == 15)
 		return !strcmp(name,"targets") || !strcmp(name,"stacks");
 	if (profile == 8 && (!strcmp(name, "alloc_live") || !strcmp(name, "maple_pending")))

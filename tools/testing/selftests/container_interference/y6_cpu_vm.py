@@ -57,7 +57,7 @@ def run():
         (out/'permit.json').write_text(json.dumps(permit,indent=2))
         devices=sorted(p.name for p in Path('/sys/bus/event_source/devices').iterdir())
         plan=dict(schema='cis-y6-cpu-plan-v1',order=order(),cases=CASES,source=source,window_ms=2000,
-            cpus=list(range(8)),management_cpu=7,hardware_sources=devices,
+            cpus=[0,1],management_cpu=7,hardware_sources=devices,
             spe='UNSUPPORTED' if not any('spe' in n.lower() for n in devices) else 'NOT_VALIDATED',
             pmu_contention='NOT_CLAIMED',tail_latency='Y7_PENDING',background_origin='UNKNOWN')
         (out/'plan.json').write_text(json.dumps(plan,indent=2))
@@ -74,7 +74,7 @@ def run():
             for i,p in enumerate(roots): (p/'cpu.max').write_text('20000 100000' if name=='quota' and not i else 'max 100000')
             before=snapshot()
             if entry['enabled']:
-                sid=request('start',collector='cpu',cpus=list(range(8)),targets=targets,nonce=label,window_ms=2000)['session_id']
+                sid=request('start',collector='cpu',cpus=[0,1],targets=targets,nonce=label,window_ms=2000)['session_id']
                 window=wait(sid,'window')['window']; active=observe('cpu')
             else:
                 t=time.monotonic_ns(); window=dict(start_ns=t,end_ns=t+2_000_000_000); active=observe(None)

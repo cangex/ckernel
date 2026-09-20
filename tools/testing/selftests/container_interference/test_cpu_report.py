@@ -15,9 +15,10 @@ import test_prototype
 
 
 def point(t,phase=1,actor=1,next_actor=2,cpu=0,**kw):
-    r=dict(protocol=1,time_ns=t,cpu=cpu,phase=phase,tid=actor*100,task_start=actor,
+    r=dict(protocol=2,time_ns=t,cpu=cpu,phase=phase,tid=actor*100,task_start=actor,
         actor_id=actor,actor_generation=int(bool(actor)),next_tid=next_actor*100,next_start=next_actor,
-        next_id=next_actor,next_generation=int(bool(next_actor)),value=0,flags=1,destination=0,object=0,function=0)
+        next_id=next_actor,next_generation=int(bool(next_actor)),value=0,flags=1,destination=0,object=0,function=0,
+        irq_ns=0,irq_entries=0,irq_errors=0,irq_valid=1)
     if phase!=1:
         for k in ('next_tid','next_start','next_id','next_generation'): r[k]=0
         r['flags']=0
@@ -34,6 +35,7 @@ class CPUReport(unittest.TestCase):
 
     def analyze(self,points,record=None):
         tail=[('cpu_selection','cpu=0 count=1 readback=1'),
+              ('cpu_irq_audit','protocol=2 cpu=0 total_ns=15 entries=2 errors=0 depth=0 sequence=8 detached=1'),
               ('terminal_counters','received=20 emitted=20 rejected=0'),
               ('terminal_coverage','lost=0 owner_skipped=0'),
               ('terminal_scope','unknown=0 overdepth=0 unmatched=0 nested=0 expired=0 irq_context=0'),
@@ -63,11 +65,12 @@ class CPUReport(unittest.TestCase):
         self.assertFalse(r['associations'])
 
     def test_interrupt_union_not_double_counted(self):
-        p=[point(10),point(15,phase=6,actor=0,value=1),point(20,phase=4,actor=0,value=3),
-           point(25,phase=5,actor=0,value=3),point(30,phase=7,actor=0,value=1),point(40,actor=2,next_actor=1)]
+        p=[point(10),point(40,actor=2,next_actor=1,irq_ns=15,irq_entries=2)]
         r=self.analyze(p); self.assertEqual(r['quality']['status'],'PASS')
         self.assertEqual(r['execution'][0]['observed_interrupt_ns'],15)
         self.assertEqual(r['execution'][0]['irq_subtracted_slice_ns'],15)
+        r=self.analyze([point(10),point(40,actor=2,next_actor=1,irq_errors=1)])
+        self.assertIsNone(r['execution'][0]['irq_subtracted_slice_ns'])
 
     def test_work_executor_not_origin(self):
         p=[point(10,next_actor=0,next_tid=50,next_start=7),

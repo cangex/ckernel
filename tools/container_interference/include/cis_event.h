@@ -66,11 +66,18 @@ struct cis_qdisc_event {
 	__u64 socket_id, socket_generation;
 };
 struct cis_cpu_actor { __u64 tid, start, id, generation; };
+struct cis_cpu_irq_state {
+	__u64 total_ns, begin_ns, entries, errors, sequence;
+	__u32 depth, reserved;
+	__u32 kinds[8], vectors[8];
+};
 struct cis_cpu_event {
 	struct cis_event base;
 	struct cis_cpu_actor actor, next;
 	__u64 value, function;
 	__u32 phase, destination;
+	__u64 irq_ns, irq_entries, irq_errors;
+	__u32 irq_valid, reserved;
 };
 struct cis_work_state { struct cis_event queued, active; __u32 queued_valid, active_valid; };
 struct cis_pending_key { __u64 tid, object, task_start_ns; __u32 type, reserved; };

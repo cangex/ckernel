@@ -291,14 +291,16 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	(void)cpu;
 	if(size>=sizeof(struct cis_cpu_event) && size<=sizeof(struct cis_cpu_event)+7 && e->type==CIS_CPU_EVENT) {
 		struct cis_cpu_event *v=data;
-		snprintf(detail,sizeof(detail),"protocol=1 time_ns=%llu cpu=%u phase=%u tid=%llu task_start=%llu actor_id=%llu actor_generation=%llu next_tid=%llu next_start=%llu next_id=%llu next_generation=%llu value=%llu flags=%u destination=%u object=%llu function=%llu",
+		snprintf(detail,sizeof(detail),"protocol=2 time_ns=%llu cpu=%u phase=%u tid=%llu task_start=%llu actor_id=%llu actor_generation=%llu next_tid=%llu next_start=%llu next_id=%llu next_generation=%llu value=%llu flags=%u destination=%u object=%llu function=%llu irq_ns=%llu irq_entries=%llu irq_errors=%llu irq_valid=%u",
 			(unsigned long long)e->time_ns,e->cpu,v->phase,
 			(unsigned long long)v->actor.tid,(unsigned long long)v->actor.start,
 			(unsigned long long)v->actor.id,(unsigned long long)v->actor.generation,
 			(unsigned long long)v->next.tid,(unsigned long long)v->next.start,
 			(unsigned long long)v->next.id,(unsigned long long)v->next.generation,
 			(unsigned long long)v->value,e->flags,v->destination,
-			(unsigned long long)e->object,(unsigned long long)v->function);
+			(unsigned long long)e->object,(unsigned long long)v->function,
+			(unsigned long long)v->irq_ns,(unsigned long long)v->irq_entries,
+			(unsigned long long)v->irq_errors,v->irq_valid);
 		cis_report(ctx,"CPU_POINT",NULL,detail); return;
 	}
 	if(size>=sizeof(struct cis_qdisc_event) && size<=sizeof(struct cis_qdisc_event)+7 && e->type==CIS_QDISC_EVENT) {
@@ -1333,6 +1335,24 @@ int cis_capture_quiesce(struct cis_context *ctx)
 		int ret=bpf_link__destroy(c->diagnostic_links[i]);
 		if(ret) c->stop_error=ret;
 		c->diagnostic_links[i]=NULL;
+	}
+	if(ctx->session_collector==17 && c->object && c->possible_cpus>0) {
+		int fd=mapfd(c,"cpu_irq_totals");
+		__u32 zero=0;
+		struct cis_cpu_irq_state *all=calloc(c->possible_cpus,sizeof(*all));
+		if(fd<0 || !all || bpf_map_lookup_elem(fd,&zero,all)) c->stop_error=-EIO;
+		else for(i=0;i<(int)ctx->selected_cpu_count;i++) {
+			unsigned int cpu=ctx->selected_cpus[i];
+			char detail[256];
+			struct cis_cpu_irq_state *s;
+			if(cpu>=(unsigned int)c->possible_cpus) { c->stop_error=-EIO; break; }
+			s=&all[cpu];
+			snprintf(detail,sizeof(detail),"protocol=2 cpu=%u total_ns=%llu entries=%llu errors=%llu depth=%u sequence=%llu detached=1",
+				cpu,(unsigned long long)s->total_ns,(unsigned long long)s->entries,
+				(unsigned long long)s->errors,s->depth,(unsigned long long)s->sequence);
+			cis_report(ctx,"cpu_irq_audit",NULL,detail);
+		}
+		free(all);
 	}
 	if(c->rwsem_filter_fd>=0) {
 		if(close(c->rwsem_filter_fd)) c->stop_error=-errno;

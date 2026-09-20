@@ -136,10 +136,10 @@ COLLECTORS['qdisc']=dict(profile=16,programs=['qdisc_state'],maps=COMMON_MAPS+['
 
 COLLECTORS['cpu']=dict(profile=17,programs=['cpu_switch','cpu_migrate','cpu_wait',
     'cpu_irq_begin','cpu_irq_end','cpu_soft_begin','cpu_soft_end','cpu_work_begin','cpu_work_end'],
-    maps=COMMON_MAPS+['targets','cpu_selected'], relation='selected_cpu_execution_intervals',
+    maps=COMMON_MAPS+['targets','cpu_selected','cpu_irq_totals'], relation='selected_cpu_execution_intervals',
     clock='monotonic_wall_ns',contexts=['scheduler_event_tasks','interrupt_owner_unknown','worker_executor'],
     object_kinds=['boot_cpu','task_start_identity','single_work_execution'],
-    source_filter='manual 1..8 online CPUs; unsampled switch/IRQ/work points with global callback entry budget; all migrations retained to invalidate wait joins; no stacks or work owner/lifetime map; runnable off-CPU brackets and overlap are not causal blocking; worker is not submitter')
+    source_filter='manual 1..8 online CPUs disjoint from observer affinity; unsampled switch/work points with global callback entry budget; protocol 2 IRQ callbacks aggregate bounded per-CPU nested intervals without perf output to prevent irq_work feedback; all migrations retained to invalidate wait joins; no stacks or work owner/lifetime map; runnable off-CPU brackets and overlap are not causal blocking; worker is not submitter')
 
 
 def contract(name, legacy_block=False, legacy_rwsem=False):
