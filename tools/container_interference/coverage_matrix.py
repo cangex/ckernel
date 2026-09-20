@@ -51,6 +51,11 @@ CONTRACT={
     'net': dict(name='Socket逻辑锁',collector='net',discovered='选定TCP Socket逻辑锁的获取、等待和释放',
         object='原生Socket cookie与netns',participants='已观察逻辑持有者与等待者，不代表TCP全部锁',
         pending=['窗口内用户Socket创建与accept已区分；窗口前/内核创建者仍未知','SCM_RIGHTS来源与持有者有专项真值，不等于报文来源','更多协议/短锁覆盖']),
+    'net_reuse': dict(name='Socket关闭后地址复用反例',collector='net',
+        discovered='实际close/create、原生cookie与活对象地址独立核验',
+        object='关闭先于新建，地址复用但cookie必须不同',
+        participants='每个新对象的创建与使用者独立匹配，不继承旧持有者',
+        pending=['仅验证实际发生复用的受限原生TCP路径','非任意协议或设备生命周期']),
     'net_isolation': dict(name='CPU配额与Socket命名空间反例',collector='net',
         discovered='真实cgroup限流及原生Socket/任务namespace FD独立核对',
         object='独立Socket cookie和原生网络命名空间inode',
@@ -149,6 +154,7 @@ VERIFIERS={
     'slub':('slub_vm_check','slub',{}),
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
     'net_isolation':('net_vm_check','net_isolation',{}),
+    'net_reuse':('net_vm_check','net_reuse',{}),
     'net_tx':('net_vm_check','net_tx',{}),
     'net_tx_failure':('net_vm_check','net_tx_failure',{}),
     'net_tx_admission':('net_vm_check','net_tx_admission',{}),
@@ -202,8 +208,15 @@ def replay(index,base,output):
             labels=[r.get('label','') for r in checked.get('states',[])]
             if key=='backlog' and not labels or (key=='backlog' and not all(v.startswith('backlog-') for v in labels)):
                 raise ValueError('backlog cohort required')
-            if key=='net' and labels and all(v.startswith(('private-','backlog-','capacity-','storm-','txfailure-','txunmarked-','txadmission-','txnormal-','txplain-','txclone-')) for v in labels):
+            if key=='net' and labels and all(v.startswith(('reuse-','private-','backlog-','capacity-','storm-','txfailure-','txunmarked-','txadmission-','txnormal-','txplain-','txclone-')) for v in labels):
                 raise ValueError('logical ownership cohort required')
+            if key=='net_reuse':
+                selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
+                if (len(selected)!=3 or any(not v['label'].startswith('reuse-') or
+                        v.get('result',{}).get('matched')!=16 or
+                        len(v['result'].get('reused_boundaries',[]))!=2 or
+                        any(not b for b in v['result']['reused_boundaries']) for v in selected)):
+                    raise ValueError('native reused addresses and fresh Socket cookies required')
             if key=='net_isolation':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
                 if (len(selected)!=3 or any(not v['label'].startswith('private-') or

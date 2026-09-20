@@ -18,6 +18,7 @@ if ! (insmod /cis_net_fixture.ko && /bin/busybox ifconfig lo up &&
     exit 91
 fi
 case " $(cat /proc/cmdline) " in
+    *" cis_net_test=reuse "*) /usr/bin/python3 /profile/net_vm.py --reuse ;;
     *" cis_net_test=quota "*) /usr/bin/python3 /profile/net_vm.py --quota ;;
     *" cis_net_test=txrelease "*) /usr/bin/python3 /profile/net_vm.py --txrelease ;;
     *" cis_net_test=guard "*) /usr/bin/python3 /profile/net_guard_vm.py ;;

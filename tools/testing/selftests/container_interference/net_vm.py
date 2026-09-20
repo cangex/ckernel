@@ -28,7 +28,7 @@ def tcp_pair():
         except BaseException: client.close(); raise
 
 
-def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,txadmission=False,txrelease=False,quota=False):
+def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,txadmission=False,txrelease=False,quota=False,reuse=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/net_shift').read_text().strip()!='0':
@@ -56,6 +56,7 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
     rights=rights or origin
     cases=('capacity',) if capacity else ORIGIN_CASES if origin else ('backlog',) if backlog else RIGHTS_CASES if rights else CASES
     if quota: cases=('private',)
+    if reuse: cases=('reuse',)
     if txfailure:
         from net_tx_failure_check import CASES as failure_cases
         cases=failure_cases
@@ -70,6 +71,10 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
         scope='logical lock fixture with deliberate bounded sleep while held, not ordinary application cost acceptance')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    if reuse:
+        plan.update(socket_reuse_validation=True,operations=8,operation_spacing_ms=40,
+                    scope='native private TCP create/close with actual address reuse and independent cookie truth')
+        (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if quota or origin:
         plan.update(namespace_validation=True)
         if quota:
@@ -224,7 +229,10 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            if txrelease:
+            if reuse:
+                from net_reuse_check import check as check_reuse
+                result=check_reuse(window,logs,report,identities)
+            elif txrelease:
                 from net_release_check import check as check_release
                 result=check_release(case,window,logs,report,identities)
             elif txadmission:
@@ -289,4 +297,5 @@ if __name__=='__main__':
     group.add_argument('--txadmission',action='store_true')
     group.add_argument('--txrelease',action='store_true')
     group.add_argument('--quota',action='store_true')
-    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure,a.txadmission,a.txrelease,a.quota)
+    group.add_argument('--reuse',action='store_true')
+    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure,a.txadmission,a.txrelease,a.quota,a.reuse)

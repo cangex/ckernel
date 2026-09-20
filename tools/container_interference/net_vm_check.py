@@ -23,8 +23,11 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     cases=tuple(plan.get('cases',[]))
-    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,TX_FAILURE_CASES,TX_ADMISSION_CASES,TX_RELEASE_CASES,('backlog',),('capacity',),('private',)): raise ValueError('unsupported frozen case set')
+    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,TX_FAILURE_CASES,TX_ADMISSION_CASES,TX_RELEASE_CASES,('backlog',),('capacity',),('private',),('reuse',)): raise ValueError('unsupported frozen case set')
     quota=cases==('private',)
+    reuse=cases==('reuse',)
+    if reuse!=(plan.get('socket_reuse_validation') is True): errors.append('socket_reuse_plan')
+    if reuse and plan.get('operation_spacing_ms')!=40: errors.append('reuse_frozen_parameters')
     if quota!=(plan.get('private_quota_validation') is True): errors.append('quota_plan')
     if quota and (plan.get('namespace_validation') is not True or plan.get('cpu_max')!=QUOTA_CONFIG or
                   plan.get('quota_work_cpu_ns')!=80000000): errors.append('quota_frozen_parameters')
@@ -65,7 +68,7 @@ def verify(serial,output):
         errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
     if (plan.get('order')!=case_order(cases) or plan.get('rounds')!=3 or
-            plan.get('net_shift')!=0 or plan.get('hold_ms')!=30 or plan.get('operations')!=(1 if txrelease else 24 if txadmission else 8 if txfailure else 4)): errors.append('frozen_plan')
+            plan.get('net_shift')!=0 or plan.get('hold_ms')!=30 or plan.get('operations')!=(1 if txrelease else 24 if txadmission else 8 if txfailure or reuse else 4)): errors.append('frozen_plan')
     if cases==('backlog',) and (plan.get('unheld_drain_transfers')!=1 or plan.get('drain_offset_ms')!=450 or
                               plan.get('skb_release_not_bounded_by_recv_return') is not True): errors.append('drain_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
@@ -86,7 +89,10 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        if txrelease:
+        if reuse:
+            from net_reuse_check import check as check_reuse
+            result=check_reuse(ev['window'],logs,report,identities)
+        elif txrelease:
             from net_release_check import check as check_release
             result=check_release(label.split('-')[0],ev['window'],logs,report,identities)
         elif txadmission:
@@ -120,7 +126,7 @@ def verify(serial,output):
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result,source_audit=source))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
-        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='CPU quota and namespace negative, not Socket lock positive' if quota else 'native original skb backend return and retained clone' if txrelease else 'native TCP memory admission rejection' if txadmission else
+        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native Socket close and address reuse negative' if reuse else 'CPU quota and namespace negative, not Socket lock positive' if quota else 'native original skb backend return and retained clone' if txrelease else 'native TCP memory admission rejection' if txadmission else
             'native TCP send backend failure and recovery' if txfailure else 'native TCP logical lock fixture only',
         x4_status='INCOMPLETE',performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result

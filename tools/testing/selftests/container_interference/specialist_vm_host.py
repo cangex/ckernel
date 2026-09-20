@@ -85,6 +85,7 @@ def run(args):
     if args.label == 'x4-net-rights': command[-1] += ' cis_net_test=rights'
     if args.label == 'x4-net-origin': command[-1] += ' cis_net_test=origin'
     if args.label == 'x4-net-quota': command[-1] += ' cis_net_test=quota cis_observe.net_shift=0'
+    if args.label == 'x4-net-reuse': command[-1] += ' cis_net_test=reuse cis_observe.net_shift=0'
     if args.label == 'x4-net-capacity': command[-1] += ' cis_net_test=capacity'
     if args.label == 'x4-net-txfailure': command[-1] += ' cis_net_test=txfailure slub_debug=A,skbuff_fclone_cache'
     if args.label == 'x4-net-txadmission': command[-1] += ' cis_net_test=txadmission'
@@ -164,6 +165,6 @@ if __name__ == '__main__':
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
     parser.add_argument('--source-diagnostics', action='store_true',
                         help='bounded recursion troubleshooting; not a performance cohort')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-maple','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x4-net-quota','x4-net-capacity','x4-net-txfailure','x4-net-txadmission','x4-net-txrelease','x4-net-guard','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint','x7-mixed'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-maple','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x4-net-quota','x4-net-reuse','x4-net-capacity','x4-net-txfailure','x4-net-txadmission','x4-net-txrelease','x4-net-guard','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint','x7-mixed'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     raise SystemExit(run(parser.parse_args()))

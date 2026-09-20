@@ -95,6 +95,34 @@ static int create_tcp(void)
 	return fd;
 }
 
+static int reuse_sockets(unsigned int actor, uint64_t start)
+{
+	unsigned int i;
+	int device=open("/dev/cis-net-test",O_RDWR|O_CLOEXEC);
+	if (device<0) return 4;
+	for (i=0;i<8;i++) {
+		struct cis_net_test_request r={0};
+		uint64_t created_begin,created_end,close_begin,close_end,cookie;
+		int fd;
+		if (until(start+i*40000000ULL)) return 5;
+		created_begin=now_ns(); fd=create_tcp(); created_end=now_ns();
+		if (fd<0 || socket_cookie(fd,&cookie)) return 3;
+		r.fd=fd; r.cookie=cookie;
+		if (ioctl(device,CIS_NET_TEST_HOLD,&r)) return 6;
+		close_begin=now_ns();
+		if (close(fd)) return 7;
+		close_end=now_ns();
+		printf("CIS_NET_REUSE index=%u actor=%u cookie=%llu socket=%llu created_begin_ns=%llu created_end_ns=%llu enter_ns=%llu acquired_ns=%llu release_begin_ns=%llu released_ns=%llu close_begin_ns=%llu close_end_ns=%llu\n",
+			i,actor,(unsigned long long)cookie,(unsigned long long)r.socket_address,
+			(unsigned long long)created_begin,(unsigned long long)created_end,
+			(unsigned long long)r.enter_ns,(unsigned long long)r.acquired_ns,
+			(unsigned long long)r.release_begin_ns,(unsigned long long)r.released_ns,
+			(unsigned long long)close_begin,(unsigned long long)close_end);
+		fflush(stdout);
+	}
+	return close(device) ? 7 : 0;
+}
+
 static int excluded_sockets(void)
 {
 	const int types[]={SOCK_RAW,SOCK_DGRAM};
@@ -192,6 +220,10 @@ int main(int argc, char **argv)
 	if (argc==6 && !origin && !quota) return 2;
 	fd = atoi(argv[1]); actor = strtoul(argv[2], NULL, 10);
 	start = strtoull(argv[3], NULL, 10);
+	if (!strcmp(argv[4],"reuse")) {
+		if (argc!=5 || actor>1) return 2;
+		return reuse_sockets(actor,start);
+	}
 	rights=!strcmp(argv[4],"rightsShared") || !strcmp(argv[4],"rightsPrivate") || !strcmp(argv[4],"rightsAccept");
 	private_socket=!strcmp(argv[4],"rightsPrivate");
 	swap = !strcmp(argv[4], "switch") || rights;
