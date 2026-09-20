@@ -42,6 +42,8 @@ class SpecialistHostTests(unittest.TestCase):
             root = Path(directory)
             base = root/'dedicated'
             base.mkdir()
-            (base/'outside').symlink_to(root/'outside')
+            # TMPDIR can itself be an allowed experiment scratch directory.
+            # The escape target must be outside every allowed artifact root.
+            (base/'outside').symlink_to('/boot')
             self.assertFalse(image_path(base/'outside'/'Image', base))
             self.assertTrue(image_path(base/'Image', base))
