@@ -4,10 +4,10 @@ Y2 public memory-backend validation, 2026-09-20
 Status and scope
 ----------------
 
-Y2 is IN_PROGRESS. The counter, SLUB-node, physical-page and memcg-pressure
-cohorts below passed their stated functional scope. The CONFIG-off full
-build and selected-cache allocation/release cohort are still pending. Y3--Y7
-have not passed. No average-throughput or tail-latency certification follows
+Y2 is PASS_SCOPED for the bounded coverage below: 138 independently replayed
+functional OFF/ON states, full ARM64 ON/OFF builds and 703 Linux unit tests.
+The counter, selected-cache/node, physical-page and memcg-pressure cohorts
+passed their stated scope. Y3--Y7 have not passed. No average-throughput or tail-latency certification follows
 from these functional cohorts. The host kernel was not replaced.
 
 The native adapters leave accounting, allocator selection, locking and
@@ -79,6 +79,21 @@ or the default production sampling configuration. Two failures are retained:
 * d79904989 unpaced: all shapes appeared but the full-rate bursts lost
   records. Quality rejection stayed active; the run was not accepted.
 
+Selected-cache allocation and release
+------------------------------------
+
+y2-allocator-dd3dae18f-20260920: 36 states, PASS on independent replay.
+Serial SHA256: 350397e91e1090c60bbc3ca90fcbd346017323767063239ce151c4b9868202ee.
+Kernel d79904989; tools dd3dae18f. The boot cache is maple_node while the
+session explicitly leases cis_alloc_test, exercising a real override rather
+than coincidentally using the boot default. The alloc_backend collector omits
+private Maple-context probes/maps. Cold, warm, bulk, separate-cache,
+cross-CPU free and RCU free scenarios each have three alternating OFF/ON
+pairs. Native ioctl object truth, returned quantities, requester versus
+release executor, source-off counters and module removal are checked. A
+separate cache does not acquire the selected cache's attribution. Returned
+objects are not equated with physical page reclamation.
+
 Native reclaim and false-attribution controls
 --------------------------------------------
 
@@ -122,7 +137,18 @@ Shared counters/zone participation never imply pure spin cycles.
 pahole on the ARM64 ON kernel shows page_counter remains 192 bytes, the
 same size and usage-field offset as the preceding generation-only observer;
 new provenance consumes existing tail padding. This is architecture/config
-specific, not a universal size claim. CONFIG-off verification is pending.
+specific, not a universal size claim.
+
+y2-off-6979f1924-20260920 contains a separate full ARM64 Image/modules build
+with CIS_OBSERVE and its dependent observations/fixtures disabled. Image
+SHA256: baf8c78993d8b5c83fabc1c244a2a9dd909b0488bf236e39be9f4cfde2f90bee.
+The off structure is also 192 bytes with usage at offset zero, without CIS
+provenance fields. The tested page-source, bind and backend-filter symbols
+are absent. This is compile/link and layout acceptance, not a booted OFF
+performance comparison. Five unused-function/variable warnings are retained
+in unchanged upstream ARM64 KVM files; no warning is hidden by disabling
+compiler checks. The 703 host-side tests pass on ARM64 Linux; the same suite
+on macOS has two explicit Linux-only skips.
 
 Y7 must measure full source/worker/background CPU, kernel and process memory,
 target/bystander throughput and latency under the frozen periodic policy.
