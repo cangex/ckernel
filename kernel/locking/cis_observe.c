@@ -469,8 +469,8 @@ struct cis_page_audit {
 	unsigned long callback_ns, callback_max_ns;
 };
 static DEFINE_PER_CPU(struct cis_page_audit, cis_page_audit);
-static unsigned int page_shift = 6;
-module_param(page_shift, uint, 0400);
+static unsigned int page_sample_shift = 6;
+module_param_named(page_shift, page_sample_shift, uint, 0400);
 
 void __cis_page_begin(struct cis_page_sample *s, struct zone *zone,
 		u32 op, int order, u64 pages)
@@ -489,13 +489,13 @@ void __cis_page_begin(struct cis_page_sample *s, struct zone *zone,
 		audit->nested++;
 		goto out;
 	}
-	if (++audit->eligible & ((1UL << min(page_shift, 16U)) - 1))
+	if (++audit->eligible & ((1UL << min(page_sample_shift, 16U)) - 1))
 		goto out;
 	audit->sampled++;
 	*s = (struct cis_page_sample) {
 		.zone = zone, .node = zone_to_nid(zone), .zone_index = zone_idx(zone),
 		.operation = op, .order = order, .requested_pages = pages,
-		.sample_shift = min(page_shift, 16U), .begin_ns = ktime_get_ns(),
+		.sample_shift = min(page_sample_shift, 16U), .begin_ns = ktime_get_ns(),
 	};
 #ifdef CONFIG_CGROUPS
 	rcu_read_lock();
@@ -538,7 +538,7 @@ static int cis_page_audit_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	seq_printf(m, "version=1 active=%u shift=%u bytes_per_cpu=%zu snapshot=non_atomic\n",
-		trace_cis_page_backend_enabled(), min(page_shift, 16U), sizeof(struct cis_page_audit));
+		trace_cis_page_backend_enabled(), min(page_sample_shift, 16U), sizeof(struct cis_page_audit));
 	for_each_possible_cpu(cpu) {
 		struct cis_page_audit *a = per_cpu_ptr(&cis_page_audit, cpu);
 		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu emitted=%lu irq_filtered=%lu nested=%lu callback_ns=%lu callback_max_ns=%lu\n",
