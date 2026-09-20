@@ -29,3 +29,21 @@ This storage cohort alone cannot complete Y7. Independent-connection public
 queue integration, final source-OFF checks, enabled/disabled build validation,
 and reconciliation of Y0--Y6 coverage and residual unknowns are still required.
 SPE unsupported in a VM remains unsupported, not inferred cache-line contention.
+
+The second cohort freezes four accounting roots and eight namespace-isolated
+endpoint containers (a private UDP client and echo server per root). Clients
+use the shared host network namespace and distinct sockets; servers use two
+veth peer namespaces and distinct ports. This directly observable configuration
+does not establish forwarded-packet lineage. Shared versus separate egress
+placements keep CPUs fixed. Each actor sends 4500 validated 1024-byte echoes at
+2 ms scheduled arrivals, with 100 ms timeout reporting. Both endpoints must
+confirm the full sequence with no corruption or duplicates. The 100 Mbit TBF
+does not intentionally cause loss; sustained backlog is not presumed.
+
+OFF, IP survey and sequential IP/qdisc/CPU profile modes alternate over three
+rounds in each fresh VM. Target/bystander roles rotate; only one egress queue
+is selected. A nonselected connection must not appear as its participant.
+Three two-second profile windows fit within the nine-second client sequence.
+Queue participation remains E1, never a unique holder or blocking container.
+Combined client/server CPU and memory belong to their accounting root; the
+measurement includes endpoint startup/shutdown and first unified analysis.

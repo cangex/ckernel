@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -45,10 +46,12 @@ int main(int argc,char **argv)
 	unsigned int actor,completed=0,errors=0,duplicates=0;
 	unsigned char data[1024],reply[1024];
 	int serve,netfd,fd;
+	struct stat pidns,mntns,netns;
 	if(argc!=6 || getpid()!=1 || (strcmp(argv[1],"client") && strcmp(argv[1],"serve"))) return 2;
 	serve=!strcmp(argv[1],"serve");netfd=atoi(argv[2]);actor=atoi(argv[3]);start=strtoull(argv[5],NULL,10);
 	if(netfd<3 || actor>3 || !start || inet_pton(AF_INET,argv[4],&peer.sin_addr)!=1 || setns(netfd,CLONE_NEWNET)) return 3;
 	close(netfd);peer.sin_port=htons(19010+actor);
+	if(stat("/proc/self/ns/pid",&pidns) || stat("/proc/self/ns/mnt",&mntns) || stat("/proc/self/ns/net",&netns)) return 9;
 	fd=socket(AF_INET,SOCK_DGRAM|SOCK_CLOEXEC,0);
 	if(fd<0 || setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout))) return 4;
 	if(serve) {
@@ -64,7 +67,8 @@ int main(int argc,char **argv)
 			else {seen[seq]=1;completed++;}
 			if(sendto(fd,data,sizeof(data),0,(void*)&from,length)!=1024) errors++;
 		}
-		printf("Y7_QUEUE_SERVER actor=%u received=%u errors=%u duplicates=%u\n",actor,completed,errors,duplicates);
+		printf("Y7_QUEUE_SERVER actor=%u received=%u errors=%u duplicates=%u pidns=%llu mntns=%llu netns=%llu\n",
+		       actor,completed,errors,duplicates,(unsigned long long)pidns.st_ino,(unsigned long long)mntns.st_ino,(unsigned long long)netns.st_ino);
 		close(fd);return errors || duplicates || completed!=COUNT ? 6 : 0;
 	}
 	if(connect(fd,(void*)&peer,sizeof(peer))) return 7;
@@ -82,8 +86,9 @@ int main(int argc,char **argv)
 	qsort(latencies,completed,sizeof(*latencies),compare);
 	printf("Y7_QUEUE_CLIENT actor=%u due=%" PRIu64 " begin=%" PRIu64 " end=%" PRIu64
 	       " offered=%u completed=%u errors=%u timeouts=%" PRIu64 " period=%llu timeout=%llu p99=%" PRIu64
-	       " max=%" PRIu64 " sum=%" PRIu64 "\n",actor,start,begin,end,COUNT,completed,errors,timeouts,PERIOD,TIMEOUT,
-	       completed?latencies[(completed*99+99)/100-1]:0,completed?latencies[completed-1]:0,total);
+	       " max=%" PRIu64 " sum=%" PRIu64 " pidns=%llu mntns=%llu netns=%llu\n",actor,start,begin,end,COUNT,completed,errors,timeouts,PERIOD,TIMEOUT,
+	       completed?latencies[(completed*99+99)/100-1]:0,completed?latencies[completed-1]:0,total,
+	       (unsigned long long)pidns.st_ino,(unsigned long long)mntns.st_ino,(unsigned long long)netns.st_ino);
 	printf("Y7_QUEUE_LATENCIES ");
 	for(unsigned int i=0;i<completed;i++) printf("%s%" PRIu64,i?",":"",latencies[i]);
 	putchar('\n');close(fd);return errors || completed!=COUNT ? 8 : 0;
