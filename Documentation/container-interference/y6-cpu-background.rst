@@ -1,7 +1,7 @@
 Y6: selected-CPU execution and background intervals
 ==================================================
 
-Implementation contract (runtime acceptance pending)
+Implementation contract (scoped VM runtime accepted)
 ----------------------------------------------------
 
 An explicitly selected set of at most eight online CPUs, disjoint from the
@@ -20,6 +20,11 @@ priority, IRQ, vCPU steal and unobserved scheduling eligibility can coexist.
 Native sched_stat_wait observations remain separate and are never added to
 the switch brackets. cpu.stat/PSI boundary snapshots describe quota and
 pressure over their own timestamped read intervals, not per-event causes.
+Task field reads are checked at the producer. Failed reads increment rejected
+and cannot produce an accepted relation. Valid zero boot timestamps of early
+kernel workers are retained; a reused PID with a different birth timestamp
+cannot continue that identity. VM schedstats is explicitly enabled and frozen
+for both OFF and ON rather than assumed from the presence of a tracepoint.
 
 Execution intervals have matching switch endpoints. Protocol 2 IRQ/softirq
 intervals are stack-paired and accumulated per CPU, never exported as perf
