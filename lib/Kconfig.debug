@@ -3105,6 +3105,15 @@ config CIS_OBSERVE_FS
 	  groups through a pinned administrative directory lease. No filesystem,
 	  locking or journal algorithm changes. Shared use is not a causal holder.
 
+config CIS_OBSERVE_QDISC
+	bool "Bounded selected public transmit queue observation"
+	depends on CIS_OBSERVE && NET_SCHED && SOCK_CGROUP_DATA
+	default n
+	help
+	  Pin one administrative transmit queue and sample admission/service
+	  observations. No qdisc algorithm, skb layout or packet-owner map change.
+	  Executor and socket accounting do not identify a causal blocking tenant.
+
 config CIS_SLUB_TEST
 	bool "Disposable-VM SLUB node-lock truth fixture support"
 	depends on CIS_OBSERVE_ALLOC && SMP && !PREEMPT_RT

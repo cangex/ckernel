@@ -15,6 +15,7 @@
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/netdevice.h>
+#include <linux/cis_qdisc.h>
 #include <linux/skbuff.h>
 #include <linux/rtnetlink.h>
 #include <linux/init.h>
@@ -317,6 +318,11 @@ bool sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 {
 	int ret = NETDEV_TX_BUSY;
 	bool again = false;
+	struct cis_qdisc_sample cis;
+
+	/* This is a service attempt on the original head, not wire completion. */
+	cis_qdisc_begin(&cis, q, txq, skb, CIS_QDISC_SERVICE);
+	cis_qdisc_end(&cis, q, 0, 1);
 
 	/* And release qdisc */
 	if (root_lock)
@@ -1027,6 +1033,7 @@ void qdisc_reset(struct Qdisc *qdisc)
 {
 	const struct Qdisc_ops *ops = qdisc->ops;
 
+	cis_qdisc_invalidate(qdisc);
 	trace_qdisc_reset(qdisc);
 
 	if (ops->reset)

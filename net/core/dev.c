@@ -88,6 +88,7 @@
 #include <linux/interrupt.h>
 #include <linux/if_ether.h>
 #include <linux/netdevice.h>
+#include <linux/cis_qdisc.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/skbuff.h>
@@ -3833,8 +3834,10 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	struct sk_buff *to_free = NULL;
 	bool contended;
 	int rc;
+	struct cis_qdisc_sample cis;
 
 	qdisc_calculate_pkt_len(skb, q);
+	cis_qdisc_begin(&cis, q, txq, skb, CIS_QDISC_ADMISSION);
 
 	if (q->flags & TCQ_F_NOLOCK) {
 		if (q->flags & TCQ_F_CAN_BYPASS && nolock_qdisc_is_empty(q) &&
@@ -3856,6 +3859,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 				__qdisc_run(q);
 
 			qdisc_run_end(q);
+			cis_qdisc_end(&cis, q, NET_XMIT_SUCCESS, 0);
 			return NET_XMIT_SUCCESS;
 		}
 
@@ -3866,11 +3870,13 @@ no_lock_out:
 		if (unlikely(to_free))
 			kfree_skb_list_reason(to_free,
 					      SKB_DROP_REASON_QDISC_DROP);
+		cis_qdisc_end(&cis, q, rc, 0);
 		return rc;
 	}
 
 	if (unlikely(READ_ONCE(q->owner) == smp_processor_id())) {
 		kfree_skb_reason(skb, SKB_DROP_REASON_TC_EGRESS);
+		cis_qdisc_end(&cis, q, NET_XMIT_DROP, 0);
 		return NET_XMIT_DROP;
 	}
 	/*
@@ -3888,6 +3894,7 @@ no_lock_out:
 		spin_lock(&q->busylock);
 
 	spin_lock(root_lock);
+	cis_qdisc_acquired(&cis);
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
 		__qdisc_drop(skb, &to_free);
 		rc = NET_XMIT_DROP;
@@ -3929,6 +3936,7 @@ no_lock_out:
 		kfree_skb_list_reason(to_free, SKB_DROP_REASON_QDISC_DROP);
 	if (unlikely(contended))
 		spin_unlock(&q->busylock);
+	cis_qdisc_end(&cis, q, rc, 0);
 	return rc;
 }
 
