@@ -177,8 +177,8 @@ static ssize_t filter_write(struct file *file, const char __user *data, size_t s
 	struct net_device *dev;
 	struct netdev_queue *txq;
 	struct Qdisc *q;
-	char text[80], tail;
-	unsigned int fd, index, queue;
+	char text[80], *cursor, *token;
+	unsigned int fd, index, queue, values[3], i;
 	int error;
 	ssize_t ret = -EINVAL;
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
@@ -190,8 +190,16 @@ static ssize_t filter_write(struct file *file, const char __user *data, size_t s
 	if (memchr(text, '\0', size))
 		return -EINVAL;
 	text[size] = '\0';
-	if (sscanf(text, "%u %u %u %c", &fd, &index, &queue, &tail) != 3 ||
-	    fd > INT_MAX || !index || index > INT_MAX)
+	cursor = strim(text);
+	for (i = 0; i < ARRAY_SIZE(values); i++) {
+		token = strsep(&cursor, " ");
+		if (!token || !*token || kstrtouint(token, 10, &values[i]))
+			return -EINVAL;
+	}
+	if (cursor)
+		return -EINVAL;
+	fd = values[0]; index = values[1]; queue = values[2];
+	if (fd > INT_MAX || !index || index > INT_MAX)
 		return -EINVAL;
 	sock = sockfd_lookup(fd, &error);
 	if (!sock)
