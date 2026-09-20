@@ -23,19 +23,19 @@ def counts(text):
     return {line.split()[0]:int(line.split()[1]) for line in text.splitlines()}
 
 
-def operations(text, window):
+def operations(text, window, count=16, size=8 << 20):
     rows=[fields(line) for line in text.splitlines() if line.startswith('CIS_MEM_OP ')]
-    if (len(rows)!=16 or [r.get('index') for r in rows]!=list(range(16)) or
-            any(r.get('success')!=1 or r.get('bytes')!=8 << 20 or
+    if (len(rows)!=count or [r.get('index') for r in rows]!=list(range(count)) or
+            any(r.get('success')!=1 or r.get('bytes')!=size or
                 not window['start_ns']<=r.get('begin_ns',0)<r.get('end_ns',0)<=window['end_ns'] for r in rows) or
             any(a['end_ns']>b['begin_ns'] for a,b in zip(rows,rows[1:]))):
         raise ValueError('incomplete or out-of-window memory operation records')
     span=rows[-1]['end_ns']-rows[0]['begin_ns']
-    return dict(successful_operations=16,bytes_per_operation=8 << 20,
+    return dict(successful_operations=count,bytes_per_operation=size,
                 first_begin_ns=rows[0]['begin_ns'],last_end_ns=rows[-1]['end_ns'],
                 operation_wall_ns=[r['end_ns']-r['begin_ns'] for r in rows],
-                complete_loop_span_ns=span,operations_per_second=16e9/span,
-                quantile_caveat='16 operations per actor: retain all latencies, no reliable response P99 claim')
+                complete_loop_span_ns=span,operations_per_second=count*1e9/span,
+                quantile_caveat='%d operations per actor: retain all latencies, no reliable response P99 claim'%count)
 
 
 def verify(serial, output):

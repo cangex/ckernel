@@ -78,9 +78,9 @@ def run():
     for i in range(2):
         parent=root/('parent%d'%i); parent.mkdir()
         (parent/'cgroup.subtree_control').write_text('+cpu +memory +cpuset')
-        (parent/'memory.max').write_text(str(192<<20)); parents.append(parent)
+        (parent/'memory.max').write_text(str(384<<20)); parents.append(parent)
         for j in range(2):
-            p=parent/('root%d'%j); p.mkdir(); (p/'memory.max').write_text(str(64<<20))
+            p=parent/('root%d'%j); p.mkdir(); (p/'memory.max').write_text(str(128<<20))
             (p/'cpuset.cpus').write_text('0-1'); (p/'cpuset.mems').write_text('0'); roots.append(p)
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
     source=source_manifest(args,env['boot_id']); permit=admission.create(source,env,time.monotonic_ns())
@@ -91,9 +91,10 @@ def run():
            dict(name='zone1',collector='page_backend',actors=[0,1],backend=dict(cache='page_zone',nodes=[1]))]
     order=[dict(case=c,round=r,enabled=on,label='%s%d%s'%(c['name'],r,'on' if on else 'off'))
            for r in range(3) for c in cases for on in ((False,True) if r%2==0 else (True,False))]
-    plan=dict(schema='cis-y2-memory-plan-v1',cases=cases,order=order,source=source,
+    plan=dict(schema='cis-y2-memory-plan-v2',cases=cases,order=order,source=source,
               roots=[dict(path=str(p),cgroup_id=p.stat().st_ino,parent_id=p.parent.stat().st_ino) for p in roots],
               common_cgroup_id=root.stat().st_ino,operations=16,bytes_per_operation=8<<20,
+              page_operations=8,page_bytes_per_operation=64<<20,page_thp='MADV_NOHUGEPAGE',
               sample_shift=6,window_ms=2000,cpus=[0,1],mems=[0],manager_cpu=7,
               host_scope='isolated VM',claim='native participation and ownership, not causal blocking')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
@@ -150,7 +151,8 @@ def run():
             before=snapshot(); jobs=[]; running=[]
             for cpu,actor in enumerate(c['actors']):
                 name=label+'-%d.log'%actor; h=(out/name).open('x'); handles.append(h)
-                p=subprocess.Popen(['/session_launch',str(roots[actor]),str(cpu),'/counter_mem_workload',str(start)],stdout=h,stderr=h)
+                binary='/page_backend_workload' if c['collector']=='page_backend' else '/counter_mem_workload'
+                p=subprocess.Popen(['/session_launch',str(roots[actor]),str(cpu),binary,str(start)],stdout=h,stderr=h)
                 children.append(p); running.append(p); jobs.append(dict(actor=actor,log=name,cpu=cpu))
             codes=[p.wait(timeout=10) for p in running]; after=snapshot()
             if codes!=[0,0] or after['time_ns']>=window['end_ns']: raise ValueError('workload completion/window')
