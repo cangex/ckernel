@@ -23,6 +23,7 @@
 #include <linux/time.h>
 #include <linux/fs.h>
 #include <linux/jbd2.h>
+#include <linux/cis_fs.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/init.h>
@@ -667,7 +668,11 @@ EXPORT_SYMBOL(jbd2_trans_will_send_data_barrier);
 int jbd2_log_wait_commit(journal_t *journal, tid_t tid)
 {
 	int err = 0;
+	struct cis_fs_sample observed;
+	u64 waits = 0;
 
+	cis_fs_begin(&observed, journal->j_fs_dev->bd_dev, journal,
+		     CIS_FS_COMMIT_WAIT, tid);
 	read_lock(&journal->j_state_lock);
 #ifdef CONFIG_PROVE_LOCKING
 	/*
@@ -691,6 +696,7 @@ int jbd2_log_wait_commit(journal_t *journal, tid_t tid)
 	}
 #endif
 	while (tid_gt(tid, journal->j_commit_sequence)) {
+		waits++;
 		jbd2_debug(1, "JBD2: want %u, j_commit_sequence=%u\n",
 				  tid, journal->j_commit_sequence);
 		read_unlock(&journal->j_state_lock);
@@ -703,6 +709,8 @@ int jbd2_log_wait_commit(journal_t *journal, tid_t tid)
 
 	if (unlikely(is_journal_aborted(journal)))
 		err = -EIO;
+	/* Includes lock/wakeup/scheduling; not pure blocked or spinning time. */
+	cis_fs_end(&observed, waits, err);
 	return err;
 }
 
@@ -3207,4 +3215,3 @@ static void __exit journal_exit(void)
 MODULE_LICENSE("GPL");
 module_init(journal_init);
 module_exit(journal_exit);
-

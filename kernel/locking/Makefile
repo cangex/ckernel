@@ -35,3 +35,4 @@ obj-$(CONFIG_LOCK_EVENT_COUNTS) += lock_events.o
 PGO_PROFILE := n
 obj-$(CONFIG_CIS_OBSERVE) += cis_observe.o cis_rwsem_filter.o
 obj-$(CONFIG_CIS_OBSERVE_ALLOC) += cis_backend_filter.o
+obj-$(CONFIG_CIS_OBSERVE_FS) += cis_fs.o

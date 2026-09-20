@@ -17,6 +17,7 @@
 #include <linux/time.h>
 #include <linux/fs.h>
 #include <linux/jbd2.h>
+#include <linux/cis_fs.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/timer.h>
@@ -145,7 +146,10 @@ static void wait_transaction_locked(journal_t *journal)
 	DEFINE_WAIT(wait);
 	int need_to_start;
 	tid_t tid = journal->j_running_transaction->t_tid;
+	struct cis_fs_sample observed;
 
+	cis_fs_begin(&observed, journal->j_fs_dev->bd_dev, journal,
+		     CIS_FS_TRANSACTION_WAIT, tid);
 	prepare_to_wait_exclusive(&journal->j_wait_transaction_locked, &wait,
 			TASK_UNINTERRUPTIBLE);
 	need_to_start = !tid_geq(journal->j_commit_request, tid);
@@ -155,6 +159,7 @@ static void wait_transaction_locked(journal_t *journal)
 	jbd2_might_wait_for_commit(journal);
 	schedule();
 	finish_wait(&journal->j_wait_transaction_locked, &wait);
+	cis_fs_end(&observed, 1, 0);
 }
 
 /*
@@ -166,12 +171,15 @@ static void wait_transaction_switching(journal_t *journal)
 	__releases(journal->j_state_lock)
 {
 	DEFINE_WAIT(wait);
+	struct cis_fs_sample observed;
 
 	if (WARN_ON(!journal->j_running_transaction ||
 		    journal->j_running_transaction->t_state != T_SWITCH)) {
 		read_unlock(&journal->j_state_lock);
 		return;
 	}
+	cis_fs_begin(&observed, journal->j_fs_dev->bd_dev, journal,
+		     CIS_FS_TRANSACTION_WAIT, journal->j_running_transaction->t_tid);
 	prepare_to_wait_exclusive(&journal->j_wait_transaction_locked, &wait,
 			TASK_UNINTERRUPTIBLE);
 	read_unlock(&journal->j_state_lock);
@@ -183,6 +191,7 @@ static void wait_transaction_switching(journal_t *journal)
 	 */
 	schedule();
 	finish_wait(&journal->j_wait_transaction_locked, &wait);
+	cis_fs_end(&observed, 1, 0);
 }
 
 static void sub_reserved_credits(journal_t *journal, int blocks)

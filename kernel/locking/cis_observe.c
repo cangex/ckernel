@@ -17,6 +17,7 @@
 #include <linux/ktime.h>
 #include <linux/mmzone.h>
 #include <linux/cgroup.h>
+#include <linux/cis_fs.h>
 #ifdef CONFIG_CIS_OBSERVE_NET
 #include <linux/sock_diag.h>
 #endif
@@ -121,7 +122,7 @@ static bool cis_trace_active(void)
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
 	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
 	       trace_cis_alloc_release_enabled() || trace_cis_maple_alloc_enabled() || trace_cis_net_state_enabled() ||
-	       trace_cis_page_backend_enabled() ||
+	       trace_cis_page_backend_enabled() || cis_fs_source_enabled() ||
 	       trace_cis_net_skb_release_enabled() || trace_cis_net_tx_enabled() || trace_cis_rwsem_state_enabled() ||
 	       trace_cis_slublock_state_enabled() || cis_block_active();
 }
@@ -230,7 +231,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=16 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u page_backend=%u\n",
+	seq_printf(m, "version=17 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u page_backend=%u filesystem=%u filesystem_filter=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -242,7 +243,8 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_tag_wait), cis_rwsem_filter_active(),
 		   CIS_BLOCK_ON(block_merge_link), CIS_BLOCK_ON(writeback_dirty_folio),
 		   CIS_BLOCK_ON(writeback_single_inode_start), CIS_BLOCK_ON(writeback_single_inode),
-		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled(), cis_backend_active(), trace_cis_page_backend_enabled());
+		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled(), cis_backend_active(), trace_cis_page_backend_enabled(),
+		   cis_fs_source_enabled(), cis_fs_active());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);

@@ -4,6 +4,7 @@
 #include <linux/fs.h>
 #include <linux/quotaops.h>
 #include <linux/buffer_head.h>
+#include <linux/cis_fs.h>
 
 #include "ext4.h"
 #include "ext4_jbd2.h"
@@ -103,6 +104,7 @@ int ext4_orphan_add(handle_t *handle, struct inode *inode)
 	struct ext4_iloc iloc;
 	int err = 0, rc;
 	bool dirty = false;
+	struct cis_fs_sample observed;
 
 	if (!sbi->s_journal || is_bad_inode(inode))
 		return 0;
@@ -126,7 +128,10 @@ int ext4_orphan_add(handle_t *handle, struct inode *inode)
 		  S_ISLNK(inode->i_mode)) || inode->i_nlink == 0);
 
 	if (sbi->s_orphan_info.of_blocks) {
+		cis_fs_begin(&observed, sb->s_dev, &sbi->s_orphan_info,
+			     CIS_FS_ORPHAN_FILE, inode->i_ino);
 		err = ext4_orphan_file_add(handle, inode);
+		cis_fs_end(&observed, 1, err);
 		/*
 		 * Fallback to normal orphan list of orphan file is
 		 * out of space
@@ -145,7 +150,10 @@ int ext4_orphan_add(handle_t *handle, struct inode *inode)
 	if (err)
 		goto out;
 
+	cis_fs_begin(&observed, sb->s_dev, &sbi->s_orphan_lock,
+		     CIS_FS_ORPHAN_ADD, inode->i_ino);
 	mutex_lock(&sbi->s_orphan_lock);
+	cis_fs_acquired(&observed);
 	/*
 	 * Due to previous errors inode may be already a part of on-disk
 	 * orphan list. If so skip on-disk list modification.
@@ -162,6 +170,7 @@ int ext4_orphan_add(handle_t *handle, struct inode *inode)
 	}
 	list_add(&EXT4_I(inode)->i_orphan, &sbi->s_orphan);
 	mutex_unlock(&sbi->s_orphan_lock);
+	cis_fs_end(&observed, 1, 0);
 
 	if (dirty) {
 		err = ext4_handle_dirty_metadata(handle, NULL, sbi->s_sbh);
@@ -232,14 +241,20 @@ int ext4_orphan_del(handle_t *handle, struct inode *inode)
 	__u32 ino_next;
 	struct ext4_iloc iloc;
 	int err = 0;
+	struct cis_fs_sample observed;
 
 	if (!sbi->s_journal && !(sbi->s_mount_state & EXT4_ORPHAN_FS))
 		return 0;
 
 	WARN_ON_ONCE(!(inode->i_state & (I_NEW | I_FREEING)) &&
 		     !inode_is_locked(inode));
-	if (ext4_test_inode_state(inode, EXT4_STATE_ORPHAN_FILE))
-		return ext4_orphan_file_del(handle, inode);
+	if (ext4_test_inode_state(inode, EXT4_STATE_ORPHAN_FILE)) {
+		cis_fs_begin(&observed, inode->i_sb->s_dev, &sbi->s_orphan_info,
+			     CIS_FS_ORPHAN_FILE, inode->i_ino);
+		err = ext4_orphan_file_del(handle, inode);
+		cis_fs_end(&observed, 2, err);
+		return err;
+	}
 
 	/* Do this quick check before taking global s_orphan_lock. */
 	if (list_empty(&ei->i_orphan))
@@ -250,7 +265,10 @@ int ext4_orphan_del(handle_t *handle, struct inode *inode)
 		err = ext4_reserve_inode_write(handle, inode, &iloc);
 	}
 
+	cis_fs_begin(&observed, inode->i_sb->s_dev, &sbi->s_orphan_lock,
+		     CIS_FS_ORPHAN_DEL, inode->i_ino);
 	mutex_lock(&sbi->s_orphan_lock);
+	cis_fs_acquired(&observed);
 	ext4_debug("remove inode %lu from orphan list\n", inode->i_ino);
 
 	prev = ei->i_orphan.prev;
@@ -262,6 +280,7 @@ int ext4_orphan_del(handle_t *handle, struct inode *inode)
 	 * list in memory. */
 	if (!handle || err) {
 		mutex_unlock(&sbi->s_orphan_lock);
+		cis_fs_end(&observed, 1, err);
 		goto out_err;
 	}
 
@@ -273,6 +292,7 @@ int ext4_orphan_del(handle_t *handle, struct inode *inode)
 						    sbi->s_sbh, EXT4_JTR_NONE);
 		if (err) {
 			mutex_unlock(&sbi->s_orphan_lock);
+			cis_fs_end(&observed, 1, err);
 			goto out_brelse;
 		}
 		lock_buffer(sbi->s_sbh);
@@ -280,6 +300,7 @@ int ext4_orphan_del(handle_t *handle, struct inode *inode)
 		ext4_superblock_csum_set(inode->i_sb);
 		unlock_buffer(sbi->s_sbh);
 		mutex_unlock(&sbi->s_orphan_lock);
+		cis_fs_end(&observed, 1, 0);
 		err = ext4_handle_dirty_metadata(handle, NULL, sbi->s_sbh);
 	} else {
 		struct ext4_iloc iloc2;
@@ -291,11 +312,13 @@ int ext4_orphan_del(handle_t *handle, struct inode *inode)
 		err = ext4_reserve_inode_write(handle, i_prev, &iloc2);
 		if (err) {
 			mutex_unlock(&sbi->s_orphan_lock);
+			cis_fs_end(&observed, 1, err);
 			goto out_brelse;
 		}
 		NEXT_ORPHAN(i_prev) = ino_next;
 		err = ext4_mark_iloc_dirty(handle, i_prev, &iloc2);
 		mutex_unlock(&sbi->s_orphan_lock);
+		cis_fs_end(&observed, 1, err);
 	}
 	if (err)
 		goto out_brelse;

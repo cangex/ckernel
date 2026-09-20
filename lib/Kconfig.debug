@@ -3096,6 +3096,15 @@ config CIS_OBSERVE_ALLOC
 	  preemption; it is not spin cycles or proof of a blocking container.
 	  Cache algorithms, GFP handling and accounting remain unchanged.
 
+config CIS_OBSERVE_FS
+	bool "Bounded selected ext4/JBD2 public-resource observation"
+	depends on CIS_OBSERVE && CGROUPS
+	default n
+	help
+	  Observe selected filesystem transaction waits and sampled allocation
+	  groups through a pinned administrative directory lease. No filesystem,
+	  locking or journal algorithm changes. Shared use is not a causal holder.
+
 config CIS_SLUB_TEST
 	bool "Disposable-VM SLUB node-lock truth fixture support"
 	depends on CIS_OBSERVE_ALLOC && SMP && !PREEMPT_RT

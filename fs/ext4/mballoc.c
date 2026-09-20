@@ -17,6 +17,7 @@
 #include <linux/nospec.h>
 #include <linux/backing-dev.h>
 #include <linux/freezer.h>
+#include <linux/cis_fs.h>
 #include <trace/events/ext4.h>
 
 /*
@@ -4686,6 +4687,14 @@ ext4_mb_normalize_request(struct ext4_allocation_context *ac,
 static void ext4_mb_collect_stats(struct ext4_allocation_context *ac)
 {
 	struct ext4_sb_info *sbi = EXT4_SB(ac->ac_sb);
+	struct cis_fs_sample observed;
+
+	/* Selected allocation result, never a group-lock waiting measurement. */
+	if (ac->ac_b_ex.fe_len) {
+		cis_fs_begin(&observed, ac->ac_sb->s_dev, ac->ac_sb,
+			     CIS_FS_ALLOC_GROUP, ac->ac_b_ex.fe_group);
+		cis_fs_end(&observed, ac->ac_b_ex.fe_len, 0);
+	}
 
 	if (sbi->s_mb_stats && ac->ac_g_ex.fe_len >= 1) {
 		atomic_inc(&sbi->s_bal_reqs);
