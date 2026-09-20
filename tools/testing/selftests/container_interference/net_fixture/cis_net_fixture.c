@@ -72,8 +72,10 @@ static long clone_ioctl(struct file *file, unsigned int command, unsigned long a
 	    atomic64_read(&sk->sk_cookie) != r.cookie) { error = -EINVAL; goto put; }
 	lock_sock(sk);
 	r.begin_ns = ktime_get_ns();
-	skb = skb_peek(&sk->sk_write_queue);
-	if (!tcp_sk(sk)->repair || skb_queue_len(&sk->sk_write_queue) != 1 || !skb ||
+	/* Native repair-mode push moves the unsent buffer to the RTX tree. */
+	skb = tcp_rtx_queue_head(sk);
+	if (!tcp_sk(sk)->repair || !skb_queue_empty(&sk->sk_write_queue) || !skb ||
+	    tcp_rtx_queue_tail(sk) != skb ||
 	    skb->fclone != SKB_FCLONE_ORIG) { error = -EINVAL; goto unlock; }
 	r.original = (unsigned long)skb;
 	if (r.clone) {
