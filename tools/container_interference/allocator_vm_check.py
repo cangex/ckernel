@@ -54,7 +54,10 @@ def check_work(window,logs,report=None,identities=None,require_maple=False):
                 recall=None,performance_certification='NOT_ACCEPTED')
 
 
-def verify(serial,output,fixture=False,placement=False,failure=False,rollback=False,maple=False):
+def verify(serial,output,fixture=False,placement=False,failure=False,rollback=False,maple=False,backend_only=False):
+    if backend_only and (not fixture or any((placement,failure,rollback,maple))):
+        raise ValueError('dedicated selected-backend fixture required')
+    collector='alloc_backend' if backend_only else 'allocator'
     if maple and any((fixture,placement,failure,rollback)): raise ValueError('separate Maple cohort')
     if maple:
         from maple_fixture_check import check_work as verify_work
@@ -80,6 +83,9 @@ def verify(serial,output,fixture=False,placement=False,failure=False,rollback=Fa
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
     order=fixture_order() if fixture else ORDER
+    if backend_only and (plan.get('collector')!='alloc_backend' or plan.get('boot_cache')!='maple_node' or
+            plan.get('maple_context') is not False or plan.get('backend')!=dict(cache='cis_alloc_test',nodes=[])):
+        errors.append('backend_selection_plan')
     if placement and (plan.get('placement') is not True or plan.get('topology')!={'0':'0-3','1':'4-7'}):
         errors.append('frozen_numa_topology')
     if failure or rollback:
@@ -116,6 +122,8 @@ def verify(serial,output,fixture=False,placement=False,failure=False,rollback=Fa
             sid=str(ev['session_id'])
             if not sid.isascii() or not sid.isdigit(): raise ValueError('session id')
             record=value('records/'+sid+'.json')
+            if record['collector']!=collector: errors.append('collector_'+label)
+            if backend_only and record.get('backend_selection')!=plan['backend']: errors.append('backend_binding_'+label)
             if any(record.get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('session_source_'+label)
             capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode()
             report=analyze(record,capture)
@@ -123,14 +131,14 @@ def verify(serial,output,fixture=False,placement=False,failure=False,rollback=Fa
             if record['nonce']!=label.replace('-','') or record['window']!=ev['window'] or not record['objects_absent']:
                 errors.append('session_boundary_'+label)
             # Sources are attached before the future common business window.
-            validate(ev['active_sources'],'allocator',record['receipt']['prepared_ns'],record['window']['end_ns'])
+            validate(ev['active_sources'],collector,record['receipt']['prepared_ns'],record['window']['end_ns'])
             validate(ev['idle_sources'],None,record['window']['end_ns'],2**64-1)
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
         result=verify_case(label.split('-')[0],ev['window'],logs,report,identities,require_releases=True) if fixture else verify_work(ev['window'],logs,report,identities,**({} if maple else {'require_maple':plan.get('maple_context') is True}))
         audit=source_delta(ev['source_before'],ev['source_after'],
-                           shift=0 if fixture or maple else 6, cache='cis_alloc_test' if fixture else 'maple_node')
+                           shift=0 if fixture or maple else 6, cache=plan.get('boot_cache','cis_alloc_test' if fixture else 'maple_node'))
         if 'off' in label and any(audit['totals'].values()): errors.append('off_not_quiet_'+label)
         if 'allocator' in label and audit['totals']['sampled']==0: errors.append('source_not_sampled_'+label)
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
@@ -148,6 +156,7 @@ if __name__=='__main__':
     p.add_argument('--failure',action='store_true')
     p.add_argument('--rollback',action='store_true')
     p.add_argument('--maple',action='store_true')
-    args=p.parse_args(); r=verify(args.serial,args.output,args.fixture,args.placement,args.failure,args.rollback,args.maple)
+    p.add_argument('--backend-only',action='store_true')
+    args=p.parse_args(); r=verify(args.serial,args.output,args.fixture,args.placement,args.failure,args.rollback,args.maple,args.backend_only)
     print(json.dumps(dict(status=r['status'],errors=r['errors'],states=len(r['states']))))
     raise SystemExit(r['status']!='PASS')

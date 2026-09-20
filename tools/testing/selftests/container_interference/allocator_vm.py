@@ -18,7 +18,10 @@ from allocator_fixture_check import CASES, check_case, case_order
 ORDER=['off0','allocator0','allocator1','off1','off2','allocator2']
 
 
-def run(fixture=False,placement=False,failure=False,rollback=False,maple=False):
+def run(fixture=False,placement=False,failure=False,rollback=False,maple=False,backend_only=False):
+    if backend_only and (not fixture or any((placement,failure,rollback,maple))):
+        raise ValueError('dedicated selected-backend fixture required')
+    collector='alloc_backend' if backend_only else 'allocator'
     if maple and any((fixture,placement,failure,rollback)): raise ValueError('separate Maple cohort')
     if maple:
         from maple_fixture_check import check_work
@@ -36,6 +39,7 @@ def run(fixture=False,placement=False,failure=False,rollback=False,maple=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     selection = [('alloc_shift','0'),('alloc_cache','cis_alloc_test')] if fixture else [('alloc_shift','6'),('alloc_cache','maple_node')]
+    if backend_only: selection=[('alloc_shift','0'),('alloc_cache','maple_node')]
     if maple: selection=[('alloc_shift','0'),('alloc_cache','maple_node')]
     for name,value in selection:
         if Path('/sys/module/cis_observe/parameters/'+name).read_text().strip()!=value:
@@ -62,6 +66,9 @@ def run(fixture=False,placement=False,failure=False,rollback=False,maple=False):
             sample_shift=0,cache='cis_alloc_test',release_tracking=True,window_ms=2000,cpu=[0,1],free_migration_cpu=[2,3],
             management_cpu=7,memory_max_bytes=64<<20,
             scope='test-only native allocation and release truth; full-rate selected cache, no production recall or free completion claim')
+    if backend_only:
+        plan.update(collector=collector,boot_cache='maple_node',maple_context=False,
+                    backend=dict(cache='cis_alloc_test',nodes=[]))
     if placement:
         topology={str(i):Path('/sys/devices/system/node/node%d/cpulist'%i).read_text().strip() for i in (0,1)}
         if topology!={'0':'0-3','1':'4-7'}: raise ValueError('frozen two-node VM topology')
@@ -146,8 +153,9 @@ def run(fixture=False,placement=False,failure=False,rollback=False,maple=False):
             fault_before=fault_snapshot() if failure or rollback else None
             sid=None; source_before=snapshot()
             if collecting:
-                sid=request('start',collector='allocator',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
-                window=wait(sid,'window')['window']; active=observe('allocator')
+                selected=dict(backend=plan['backend']) if backend_only else {}
+                sid=request('start',collector=collector,targets=targets,nonce=label.replace('-',''),window_ms=2000,**selected)['session_id']
+                window=wait(sid,'window')['window']; active=observe(collector)
             else:
                 now=time.monotonic_ns(); window=dict(start_ns=now,end_ns=now+2_000_000_000); active=observe(None)
             start=max(window['start_ns']+300_000_000,time.monotonic_ns()+100_000_000)
