@@ -1,7 +1,9 @@
 Y5 selected public transmit queue
 ================================
 
-Status: design and native adapter in progress, not built/runtime accepted.
+Status: PASS_SCOPED. See y5-validation-20260920.rst for separate build,
+control, traffic, negative and source-protection receipts. This does not
+accept complete packet provenance, physical-NIC causes or Y7 overhead.
 
 Scope
 -----
