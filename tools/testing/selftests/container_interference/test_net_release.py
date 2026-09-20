@@ -76,6 +76,19 @@ class NetRelease(unittest.TestCase):
         e=self.report(self.good()[:2]+[self.row(40,5,**irq),self.row(50,7,**irq)])['episodes'][0]
         self.assertEqual(e['requester'],[1,1,101,1]); self.assertIsNone(e['release_executor'])
 
+    def test_delayed_old_end_cannot_complete_reused_address_for_new_requester(self):
+        rows=self.good()[:-1]+[
+            self.row(50,1,begin=45,who=2),self.row(55,2,begin=45,who=2),
+            self.row(60,7),
+            self.row(70,5,begin=45,who=2,release_ns=70),
+            self.row(80,7,begin=45,who=2,release_ns=70,release_backend_ns=72)]
+        r=self.report(rows)
+        self.assertEqual(r['status'],'PASS',r)
+        self.assertEqual([(e['requester'][0],e['release_backend_interval_ns']) for e in r['episodes']],
+                         [(1,[42,60]),(2,[72,80])])
+        rows[5]=self.row(60,7,begin=45,who=2)
+        self.assertEqual(self.report(rows)['status'],'FAIL')
+
     def test_source_frozen_token_and_no_use_after_free(self):
         root=Path(__file__).resolve().parents[4]
         source=(root/'net/core/skbuff.c').read_text().split('void __kfree_skb(struct sk_buff *skb)',1)[1].split('EXPORT_SYMBOL',1)[0]
