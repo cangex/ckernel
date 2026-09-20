@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 import copy
 import unittest
-from y7_acceptance import matrix
+from y7_acceptance import matrix,first_analysis_timing
 from y7_private_check import order,captures
 
 class FinalMatrix(unittest.TestCase):
@@ -19,3 +19,17 @@ class FinalMatrix(unittest.TestCase):
             if change=='business_error':x['states'][0]['errors']=['payload']
             if change=='missing_pair':x['comparisons'].pop()
             with self.assertRaises(ValueError):matrix(x)
+
+    def test_first_analysis_uses_capture_clock_not_replay_clock(self):
+        state=dict(explanation_ready_ns=50,sessions=[dict(collector='cpu',session_id='1',scheduled_ns=5)])
+        record=dict(collector='cpu',session_id='1',boot_id='guest',requested_ns=10,
+            window=dict(start_ns=20,end_ns=30))
+        checked=dict(observations=[dict(collector='cpu',quality=dict(status='PASS'),
+            report_timing=dict(explained_at_ns=40,analysis_boot_id='guest',same_clock_as_capture=True,explanation_lag_ns=10))])
+        result=first_analysis_timing(state,checked,[record])[0]
+        self.assertEqual(result['request_to_window_ns'],10)
+        self.assertEqual(result['window_end_to_first_explanation_ns'],10)
+        for key,value in [('analysis_boot_id','host'),('same_clock_as_capture',False),
+                          ('explained_at_ns',60),('explanation_lag_ns',11)]:
+            bad=copy.deepcopy(checked);bad['observations'][0]['report_timing'][key]=value
+            with self.assertRaises(ValueError):first_analysis_timing(state,bad,[record])

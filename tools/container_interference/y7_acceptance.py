@@ -62,6 +62,29 @@ def sha(path):
         for chunk in iter(lambda:f.read(1<<20),b''):h.update(chunk)
     return h.hexdigest()
 
+def first_analysis_timing(state,checked,records):
+    """Use the retained guest analysis, never a replay host's monotonic clock."""
+    observations=checked['observations'];sessions=state['sessions'];result=[]
+    if len(observations)!=len(records) or len(sessions)!=len(records):
+        raise ValueError('first-analysis population')
+    for session,observation,record in zip(sessions,observations,records):
+        t=observation['report_timing'];w=record['window'];done=t.get('explained_at_ns')
+        if (observation['collector']!=record['collector'] or session['collector']!=record['collector'] or
+                str(session['session_id'])!=str(record['session_id']) or
+                observation['quality']['status']!='PASS' or
+                t.get('analysis_boot_id')!=record['boot_id'] or not t.get('same_clock_as_capture') or
+                type(done) is not int or not w['end_ns']<=done<=state['explanation_ready_ns'] or
+                t.get('explanation_lag_ns')!=done-w['end_ns'] or
+                not session['scheduled_ns']<=record['requested_ns']<=w['start_ns']<w['end_ns']):
+            raise ValueError('first-analysis clock or capture binding')
+        result.append(dict(collector=record['collector'],session_id=record['session_id'],
+            scheduled_to_request_ns=record['requested_ns']-session['scheduled_ns'],
+            request_to_window_ns=w['start_ns']-record['requested_ns'],
+            window_end_to_first_explanation_ns=done-w['end_ns'],
+            periodic_detection_wait='NOT_MEASURED',
+            boundary='frozen schedule; harness analyzes after workload completion, not automatic discovery'))
+    return result
+
 def run(storage,network,output):
     os.umask(0o077);out=Path(output);out.mkdir(mode=0o700)
     receipts=[];proofs=[];images=set()
@@ -79,18 +102,23 @@ def run(storage,network,output):
             checker.replay(serial,dest)
             receipt=json.loads((dest/'verification.json').read_text());matrix(receipt)
             if receipt['arrangement']!=arrangement or receipt['cohort']!=cohort: raise ValueError('cohort binding')
-            files=extract(serial.read_text());analysis_peaks=[];timing=[];process=[]
+            files=extract(serial.read_text());analysis_peaks=[];timing=[];process=[];first_timing=[]
             for entry in y7_private_check.order():
                 state=json.JSONDecoder().raw_decode(files[prefix+entry['label']+'-evidence.json'].lstrip())[0]
                 analysis_peaks.append(state['analysis_process']['peak_rss_bytes'])
                 if not state['business_after']['read_end_ns']<state['explanation_ready_ns']<=state['after']['time_ns']:
                     raise ValueError('first-analysis cost boundary')
                 timing.append(dict(label=entry['label'],business_to_explanation_ns=state['explanation_ready_ns']-state['business_after']['time_ns']))
+                records=[]
                 for session in state['sessions']:
                     record=json.JSONDecoder().raw_decode(files[prefix+'records/'+session['session_id']+'.json'].lstrip())[0]
+                    records.append(record)
                     process.append(dict(collector=session['collector'],budget=record['process_cpu_budget']))
+                checked=json.JSONDecoder().raw_decode(files[prefix+entry['label']+'-check.json'].lstrip())[0]
+                first_timing.append(dict(label=entry['label'],captures=first_analysis_timing(state,checked,records)))
             s=summary(receipt);s['analysis_harness_cumulative_rss_peak_bytes']=max(analysis_peaks)
-            s['analysis_boundary_timing']=timing;s['process_cpu_budgets']=process;receipts.append(s)
+            s['analysis_boundary_timing']=timing;s['first_analysis_timing']=first_timing
+            s['process_cpu_budgets']=process;receipts.append(s)
             proofs.append(dict(serial=str(serial.resolve()),serial_sha256=sha(serial),manifest_sha256=sha(manifests[0]),
                 source_head=manifest['source_head'],initrd_sha256=manifest['initrd_sha256'],replay=str(dest.resolve())))
             del files,receipt
