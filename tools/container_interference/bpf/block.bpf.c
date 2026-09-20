@@ -19,6 +19,42 @@ struct {
 
 #include "writeback.bpf.h"
 
+/* Point observations at issue, not allocation-to-release tag lifetimes. */
+static __noinline void block_pool(void *ctx, struct request *rq,
+		const struct cis_event *base, __u32 kind)
+{
+	struct cis_block_pool_event e = {};
+	struct cis_bpf_stats *s = statistics();
+	struct blk_mq_tags *tags;
+	struct blk_mq_hw_ctx *hctx = BPF_CORE_READ(rq, mq_hctx);
+	__u32 tag;
+
+	if (kind == 1) {
+		tags = BPF_CORE_READ(hctx, tags);
+		tag = BPF_CORE_READ(rq, tag);
+	} else {
+		tags = BPF_CORE_READ(hctx, sched_tags);
+		tag = BPF_CORE_READ(rq, internal_tag);
+	}
+	if (!tags || tag == 0xffffffffU) return;
+	e.depth = BPF_CORE_READ(tags, nr_tags);
+	e.reserved_tags = BPF_CORE_READ(tags, nr_reserved_tags);
+	if (tag >= e.depth || e.reserved_tags > e.depth) { COUNT(s, rejected); return; }
+	e.base = *base; e.base.type = CIS_BLOCK_POOL_EVENT;
+	e.queue = (__u64)BPF_CORE_READ(rq, q); e.kind = kind; e.tag = tag;
+	if (tag < e.reserved_tags) {
+		e.pool = (__u64)tags + bpf_core_field_offset(struct blk_mq_tags, breserved_tags);
+		e.pool_depth = BPF_CORE_READ(tags, breserved_tags.sb.depth);
+	} else {
+		e.pool = (__u64)tags + bpf_core_field_offset(struct blk_mq_tags, bitmap_tags);
+		e.pool_depth = BPF_CORE_READ(tags, bitmap_tags.sb.depth);
+	}
+	e.dev_major = BPF_CORE_READ(rq, q, disk, major);
+	e.dev_minor = BPF_CORE_READ(rq, q, disk, first_minor);
+	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
+	else COUNT(s, emitted);
+}
+
 SEC("raw_tp/block_tag_wait")
 int block_tag(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -222,7 +258,11 @@ static __always_inline int block_event(void *ctx, struct request *rq,
 	}
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);
-	if (phase == 3) block_bios(ctx, rq, &e.base);
+	if (phase == 3) {
+		block_bios(ctx, rq, &e.base);
+		block_pool(ctx, rq, &e.base, 1);
+		block_pool(ctx, rq, &e.base, 2);
+	}
 	if (phase == 1) wb_request(ctx, &e);
 	return 0;
 }

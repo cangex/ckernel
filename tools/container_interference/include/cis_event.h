@@ -32,6 +32,8 @@
 #define CIS_NET_TX_EVENT 24
 #define CIS_PAGE_BACKEND_EVENT 25
 #define CIS_FILESYSTEM_EVENT 26
+#define CIS_BLOCK_POOL_EVENT 27
+#define CIS_DIRTY_PAUSE_EVENT 28
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -158,6 +160,17 @@ struct cis_writeback_event {
 	struct cis_event base;
 	__u64 task_start, actor_id, actor_generation, wbc, memcg;
 	__u64 wb_owner_id, wb_owner_generation, request, request_episode;
+};
+struct cis_block_pool_event {
+	struct cis_event base;
+	__u64 queue, pool;
+	__u32 kind, tag, depth, reserved_tags, pool_depth, dev_major, dev_minor, reserved;
+};
+struct cis_dirty_pause_event {
+	struct cis_event base;
+	__u64 task_start, cgroup_id, wb, bdi, bdi_id, wb_memcg;
+	__u64 wb_owner_id, wb_owner_generation, dirty, threshold, wb_dirty, wb_threshold;
+	__s64 requested_jiffies, remaining_jiffies;
 };
 struct cis_object_key { __u64 object; __u32 kind, reserved; };
 struct cis_rwsem_event {

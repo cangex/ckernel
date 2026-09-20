@@ -12,7 +12,7 @@ class BlockReport(unittest.TestCase):
     def record(self):
         r=test_counter_report.CounterReport().record(); r['collector']='block'
         r['inventory']=test_collector_manifest.CollectorContract().inventory('block')
-        for kind,items in (('program',['block_link','wb_dirty','wb_begin','wb_end']),('map',['wb_pending'])):
+        for kind,items in (('program',['block_link','wb_dirty','wb_begin','wb_end','wb_pause']),('map',['wb_pending'])):
             for name in items:
                 index=r['inventory'][kind+'_names'].index(name)
                 r['inventory'][kind+'_names'].pop(index); r['inventory'][kind+'s'].pop(index)

@@ -128,6 +128,16 @@ def analyze(record,raw):
                         unexplained_elapsed_ns=f['unexplained_elapsed_ns'])
         elif collector=='block':
             bio_sources={}; merge_transfers={}
+            pressure=specialist['pressure']; pool_shots={}; pool_links={}
+            for shot in pressure['tag_snapshots']:
+                pool_shots.setdefault(tuple(shot['request']),[]).append(shot)
+            for link in pressure['wait_pool_associations']:
+                key=(*link['waiter'],*link['waiter_task'],link['wait_episode_ns'])
+                pool_links.setdefault(key,[]).append(link)
+            for pause in pressure['dirty_pauses']:
+                add('dirty_throttle_pause','E1',pause['actor'],pause['resource'],[],
+                    pause['interval_ns'],pause['stack_leaf_to_root'],
+                    ['native pause wall bracket, not pure device delay; unique dirtier/blocker unknown'],source_finding=pause)
             inode_contexts={tuple(r['request']):r['context'] for r in
                 specialist.get('writeback',{}).get('request_links',[])}
             for row in specialist.get('provenance',{}).get('issue_sources',[]):
@@ -139,7 +149,8 @@ def analyze(record,raw):
                     dict(kind='tag_allocation_episode',queue=f['queue'],pools=f['pools'],episode_ns=f['episode_ns']),
                     [],f['interval_ns'],f['stack_leaf_to_root'],
                     ['slot holders unknown; elapsed sleep includes scheduler and probe cost; TAG_FOUND is not I/O success'],
-                    sleep_intervals=f['sleep_intervals'],outcome=f['outcome'],identity_changes=f['identity_changes'])
+                    sleep_intervals=f['sleep_intervals'],outcome=f['outcome'],identity_changes=f['identity_changes'],
+                    concurrent_pool_observations=pool_links.get((*f['container'],f['tid'],f['task_start'],f['episode_ns']),[]))
             for f in specialist['requests']:
                 add('block_request_episode','E2',f['submitter'],dict(kind='observed_request',address=f['request'],episode_ns=f['episode_ns']),
                     [],f['episode_interval_ns'],f['start_stack_leaf_to_root'],
@@ -152,7 +163,8 @@ def analyze(record,raw):
                     inode_writeback_context=inode_contexts.get((f['request'],f['episode_ns'])),
                     issue_bio_sources=bio_sources.get((f['request'],f['episode_ns']),[]),
                     merge_transfers=merge_transfers.get((f['request'],f['episode_ns']),[]),
-                    uncertainty=f['uncertainty'],terminal=f['terminal'])
+                    uncertainty=f['uncertainty'],terminal=f['terminal'],
+                    issue_tag_snapshots=pool_shots.get((f['request'],f['episode_ns']),[]))
     result=dict(schema='cis-explanation-v2',boot_id=record.get('boot_id'),session_id=record['session_id'],collector=collector,
         resource_context=resource_topology.compare_roots(record.get('boundary_before',{}),record.get('boundary_after',{})),
         window=record.get('window'),quality=quality,scope_audit=scope,relations=relations,omitted_relations=omitted,
@@ -185,7 +197,8 @@ def markdown(report):
         'counter_operation':'计数更新/回滚','allocation_stages':'对象分配阶段','allocation_release_entry':'分配与释放入口',
         'socket_holder_waiter':'Socket逻辑锁等待','backlog_service_release':'backlog排队、服务与释放',
         'tcp_send_allocation':'TCP发送缓冲区申请与释放来源',
-        'block_request_episode':'块请求排队与服务','block_tag_wait':'块请求槽位等待','rwsem_holder_waiter':'读写锁已观察持有与等待'}
+        'block_request_episode':'块请求排队与服务','block_tag_wait':'块请求槽位等待','rwsem_holder_waiter':'读写锁已观察持有与等待',
+        'dirty_throttle_pause':'脏页限流暂停'}
     lines=['# 容器周期Profile解释报告','','会话 `%s`，专项 `%s`，证据质量 **%s**。'%(report['session_id'],report['collector'],report['quality']['status']),
         '这是受限路径上的观察报告，不是总干扰率或生产性能认证。','','## 已观察关系']
     for r in report['relations'][:16]:

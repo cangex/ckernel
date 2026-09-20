@@ -16,7 +16,7 @@ class BlockSources(unittest.TestCase):
         self.assertEqual(expected_fields('11',None)['block_link'],'0')
         bpf=(ROOT/'tools/container_interference/bpf/block.bpf.c').read_text()
         self.assertIn('index < 8',bpf); self.assertIn('depth < 32',bpf)
-        self.assertIn('if (phase == 3) block_bios',bpf)
+        self.assertRegex(bpf,r'if \(phase == 3\) \{\s+block_bios\(ctx, rq, &e.base\);\s+block_pool\(ctx, rq, &e.base, 1\);\s+block_pool\(ctx, rq, &e.base, 2\);\s+\}')
 
     def test_tag_event_brackets_native_sleep_not_every_tag_success(self):
         text=(ROOT/'block/blk-mq-tag.c').read_text()

@@ -1,4 +1,43 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+SEC("raw_tp/cis_writeback_pause")
+int wb_pause(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct cis_dirty_pause_event e = {};
+	struct cis_wb_pause p = {};
+	struct bdi_writeback *wb = (void *)ctx->args[0];
+	struct task_struct *task = (void *)bpf_get_current_task();
+	struct cis_bpf_stats *s = statistics();
+	struct cis_identity id = {};
+	struct kernfs_node *kn;
+	__u64 cg;
+
+	COUNT(s, received);
+	if (!wb || bpf_probe_read_kernel(&p, sizeof(p), (void *)ctx->args[1])) { COUNT(s, rejected); return 0; }
+	if (!identity(task, &id) || !allowed(&id, CIS_DIAG_BLOCK, p.begin_ns) ||
+	    !allowed(&id, CIS_DIAG_BLOCK, p.end_ns)) return 0;
+	cg = BPF_CORE_READ(task, cgroups, dfl_cgrp, kn, id);
+	if (!p.begin_ns || p.end_ns < p.begin_ns || cg != p.cgroup_id) { COUNT(s, rejected); return 0; }
+	e.base.id = id.id; e.base.generation = id.generation; e.base.tid = bpf_get_current_pid_tgid();
+	e.base.type = CIS_DIRTY_PAUSE_EVENT; e.base.time_ns = p.end_ns; e.base.sequence_ns = p.begin_ns;
+	e.base.cpu = bpf_get_smp_processor_id(); e.base.stack_id = bpf_get_stackid(ctx, &stacks, 0);
+	e.task_start = BPF_CORE_READ(task, start_boottime); e.cgroup_id = cg;
+	e.wb = (__u64)wb; e.bdi = (__u64)BPF_CORE_READ(wb, bdi); e.bdi_id = BPF_CORE_READ(wb, bdi, id);
+	kn = BPF_CORE_READ(wb, memcg_css, cgroup, kn); e.wb_memcg = BPF_CORE_READ(kn, id);
+#pragma clang loop unroll(disable)
+	for (int i = 0; i < 32; i++) {
+		struct cis_identity *origin;
+		if (!kn) break;
+		cg = BPF_CORE_READ(kn, id); origin = bpf_map_lookup_elem(&roots, &cg);
+		if (origin) { e.wb_owner_id = origin->id; e.wb_owner_generation = origin->generation; break; }
+		kn = BPF_CORE_READ(kn, parent);
+	}
+	e.dirty = p.dirty; e.threshold = p.threshold; e.wb_dirty = p.wb_dirty; e.wb_threshold = p.wb_threshold;
+	e.requested_jiffies = p.requested_jiffies; e.remaining_jiffies = p.remaining_jiffies;
+	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
+	else COUNT(s, emitted);
+	return 0;
+}
+
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 256);

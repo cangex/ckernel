@@ -11,6 +11,7 @@ from owner_report import fields
 from block_tag_report import tag_episodes
 from block_merge_report import analyze_provenance
 from writeback_report import analyze_writeback
+from io_pressure_report import analyze_pressure
 
 REQUIRED = {'protocol','sample_time_ns','request','episode_ns','submitter_tid','submitter_start',
     'queue','bio','phase','dev_major','dev_minor','remaining','completed','operation','multi_bio',
@@ -174,6 +175,10 @@ def analyze(record,raw):
     excluded.update(provenance_defects)
     writeback,writeback_defects=analyze_writeback(record,raw,requests)
     excluded.update(writeback_defects)
+    pressure,pressure_defects=analyze_pressure(record,raw,requests,groups,tags)
+    for pause in pressure['dirty_pauses']:
+        pause['stack_leaf_to_root']=stacks.get(pause.pop('stack_id'),[])
+    excluded.update(pressure_defects)
     if tags and 'block_tag' not in record.get('inventory',{}).get('program_names',[]):
         excluded['tag_missing_producer']+=1
     quality=dict(base['quality'])
@@ -181,6 +186,7 @@ def analyze(record,raw):
     if quality['status']!='PASS' or scope['status']!='PASS':
         requests=[]; tags=[]; provenance['issue_sources']=[]; provenance['merge_transfers']=[]
         writeback['contexts']=[]; writeback['request_links']=[]; writeback['dirty_observations']=[]
+        pressure['tag_snapshots']=[]; pressure['wait_pool_associations']=[]; pressure['dirty_pauses']=[]
     else:
         victims={tuple(link['victim']):link for link in provenance['merge_transfers']
                  if link['state']=='OBSERVED_TRANSFER'}
@@ -190,12 +196,12 @@ def analyze(record,raw):
                 req['merge_survivor']=link['survivor']
                 req['uncertainty'].pop('merged_into_unobserved_survivor',None)
     return dict(schema='cis-block-report-v1',boot_id=record.get('boot_id'),session_id=record.get('session_id'),
-        quality=quality,scope_audit=scope,requests=requests,tag_waits=tags,provenance=provenance,writeback=writeback,
+        quality=quality,scope_audit=scope,requests=requests,tag_waits=tags,provenance=provenance,writeback=writeback,pressure=pressure,
         tag_coverage='AVAILABLE' if 'block_tag' in record.get('inventory',{}).get('program_names',[]) else 'HISTORICAL_NOT_RECORDED',
         excluded=dict(excluded),stack_capture_errors=dict(stack_errors),
         raw_sha256=hashlib.sha256(raw).hexdigest(),source=base['source'],
         analysis_source_sha256=dict(base['analysis_source_sha256'],**{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('block_report.py','block_tag_report.py','block_merge_report.py','writeback_report.py')}),
+            for name in ('block_report.py','block_tag_report.py','block_merge_report.py','writeback_report.py','io_pressure_report.py')}),
         performance_certification='NOT_ACCEPTED',limits=[
             'initial request submitter is not an exclusive owner of merged bios or writeback work',
             'bio billing-root admission preserves the real submitter; initial dirtier and inode owner are not inferred',

@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 36
+#define CIS_DIAGNOSTIC_LINKS 37
 #include "include/cis_backend_selection.h"
 #include <sys/sysmacros.h>
 #include <sys/stat.h>
@@ -230,6 +230,31 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	char detail[768];
 	const char *symbol;
 	(void)cpu;
+	if(size>=sizeof(struct cis_block_pool_event) && size<=sizeof(struct cis_block_pool_event)+7 && e->type==CIS_BLOCK_POOL_EVENT) {
+		struct cis_block_pool_event *v=data;
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(detail,sizeof(detail),"protocol=1 sample_time_ns=%llu request=0x%llx episode_ns=%llu queue=0x%llx pool=0x%llx kind=%u tag=%u depth=%u reserved_tags=%u pool_depth=%u dev_major=%u dev_minor=%u",
+			(unsigned long long)e->time_ns,(unsigned long long)e->object,(unsigned long long)e->sequence_ns,
+			(unsigned long long)v->queue,(unsigned long long)v->pool,v->kind,v->tag,v->depth,v->reserved_tags,
+			v->pool_depth,v->dev_major,v->dev_minor);
+		cis_report(ctx,"BLOCK_POOL",r,detail);return;
+	}
+	if(size>=sizeof(struct cis_dirty_pause_event) && size<=sizeof(struct cis_dirty_pause_event)+7 && e->type==CIS_DIRTY_PAUSE_EVENT) {
+		struct cis_dirty_pause_event *v=data;
+		char d[1100];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 begin_ns=%llu end_ns=%llu tid=%llu task_start=%llu cgroup_id=%llu wb=0x%llx bdi=0x%llx bdi_id=%llu wb_memcg=%llu wb_owner_id=%llu wb_owner_generation=%llu dirty=%llu threshold=%llu wb_dirty=%llu wb_threshold=%llu requested_jiffies=%lld remaining_jiffies=%lld cpu=%u stack_id=%d",
+			(unsigned long long)e->sequence_ns,(unsigned long long)e->time_ns,(unsigned long long)e->tid,
+			(unsigned long long)v->task_start,(unsigned long long)v->cgroup_id,(unsigned long long)v->wb,
+			(unsigned long long)v->bdi,(unsigned long long)v->bdi_id,(unsigned long long)v->wb_memcg,
+			(unsigned long long)v->wb_owner_id,(unsigned long long)v->wb_owner_generation,
+			(unsigned long long)v->dirty,(unsigned long long)v->threshold,(unsigned long long)v->wb_dirty,
+			(unsigned long long)v->wb_threshold,(long long)v->requested_jiffies,(long long)v->remaining_jiffies,
+			e->cpu,e->stack_id);
+		cis_report(ctx,"DIRTY_PAUSE",r,d);return;
+	}
 	if(size>=sizeof(struct cis_writeback_event) && size<=sizeof(struct cis_writeback_event)+7 && e->type==CIS_WRITEBACK_EVENT) {
 		struct cis_writeback_event *v=data;
 		char d[1100];
@@ -503,7 +528,7 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"block_start",256},{"block_insert",256},{"block_issue",256},
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
 		{"block_tag",256},{"block_link",256},
-		{"wb_dirty",256},{"wb_begin",256},{"wb_end",256},
+		{"wb_dirty",256},{"wb_begin",256},{"wb_end",256},{"wb_pause",256},
 		{"rwsem_state",512},{"page_backend",1024},{"filesystem",2048}};
 	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;

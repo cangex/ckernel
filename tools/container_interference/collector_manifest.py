@@ -107,6 +107,9 @@ LEGACY_BILLING_BLOCK = deepcopy(COLLECTORS['block'])
 COLLECTORS['block']['programs'] += ['wb_dirty','wb_begin','wb_end']
 COLLECTORS['block']['maps'].append('wb_pending')
 COLLECTORS['block']['source_filter'] += '; native folio dirty observations and 256 task-start keyed inode writeback contexts; closed synchronous contexts link request submission, not exclusive dirtying ownership or a causal blocker'
+LEGACY_WRITEBACK_BLOCK = deepcopy(COLLECTORS['block'])
+COLLECTORS['block']['programs'].append('wb_pause')
+COLLECTORS['block']['source_filter'] += '; at most two issue-time driver/scheduler tag pool snapshots, not tag lifetimes; native dirty pause brackets retain accounting and executor separately; same-pool wait overlap is an association, never an exclusive blocker'
 
 LEGACY_BACKEND_SELECTION = {name:deepcopy(COLLECTORS[name]) for name in ('allocator','alloc_backend','slub')}
 for _name in LEGACY_BACKEND_SELECTION:
@@ -200,7 +203,7 @@ def validate_record_inventory(record):
         if record.get('collector_contract_sha256')!=digest(expected):
             raise ValueError('unproven historical tag block contract')
     elif name=='block' and record.get('collector_contract_sha256')!=digest(expected):
-        for historical in (LEGACY_MERGE_BLOCK,LEGACY_BILLING_BLOCK):
+        for historical in (LEGACY_MERGE_BLOCK,LEGACY_BILLING_BLOCK,LEGACY_WRITEBACK_BLOCK):
             candidate=contract(name)
             for key,value in historical.items(): candidate[key]=deepcopy(value)
             if record.get('collector_contract_sha256')==digest(candidate):
