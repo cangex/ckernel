@@ -2,12 +2,21 @@
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u32); __type(value,__u8); } cpu_selected SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(key,__u32); __type(value,struct cis_cpu_irq_state); } cpu_irq_totals SEC(".maps");
 
-static __always_inline void cpu_actor(struct task_struct *t, struct cis_cpu_actor *a)
+static __always_inline int cpu_actor(struct task_struct *t, struct cis_cpu_actor *a)
 {
 	struct cis_identity id = {};
-	a->tid = ((__u64)BPF_CORE_READ(t,tgid)<<32) | (__u32)BPF_CORE_READ(t,pid);
-	a->start = BPF_CORE_READ(t,start_boottime);
+	__u32 tgid=0,pid=0;
+	/* Early boot workers may genuinely have start_boottime == 0. A failed
+	 * read is not that identity: reject it at the producer instead. */
+	if (BPF_CORE_READ_INTO(&tgid,t,tgid) || BPF_CORE_READ_INTO(&pid,t,pid) ||
+	    BPF_CORE_READ_INTO(&a->start,t,start_boottime)) {
+		struct cis_bpf_stats *s=statistics();
+		COUNT(s,rejected);
+		return 0;
+	}
+	a->tid = ((__u64)tgid<<32) | pid;
 	if (a->tid && identity(t,&id)) { a->id=id.id; a->generation=id.generation; }
+	return 1;
 }
 
 static __always_inline int cpu_admit(struct cis_cpu_event *e, __u32 phase, int migration)
@@ -47,7 +56,7 @@ int cpu_switch(struct bpf_raw_tracepoint_args *ctx)
 {
 	struct cis_cpu_event e={};
 	if(!cpu_admit(&e,1,0)) return 0;
-	cpu_actor((void*)ctx->args[1],&e.actor); cpu_actor((void*)ctx->args[2],&e.next);
+	if (!cpu_actor((void*)ctx->args[1],&e.actor) || !cpu_actor((void*)ctx->args[2],&e.next)) return 0;
 	e.value=ctx->args[3]; e.base.flags=!!ctx->args[0];
 	return cpu_output(ctx,&e);
 }
@@ -56,7 +65,8 @@ int cpu_migrate(struct bpf_raw_tracepoint_args *ctx)
 {
 	struct cis_cpu_event e={};
 	if(!cpu_admit(&e,2,1)) return 0;
-	cpu_actor((void*)ctx->args[0],&e.actor); e.destination=ctx->args[1];
+	if (!cpu_actor((void*)ctx->args[0],&e.actor)) return 0;
+	e.destination=ctx->args[1];
 	return cpu_output(ctx,&e);
 }
 SEC("raw_tp/sched_stat_wait")
@@ -64,7 +74,8 @@ int cpu_wait(struct bpf_raw_tracepoint_args *ctx)
 {
 	struct cis_cpu_event e={};
 	if(!cpu_admit(&e,3,0)) return 0;
-	cpu_actor((void*)ctx->args[0],&e.actor); e.value=ctx->args[1];
+	if (!cpu_actor((void*)ctx->args[0],&e.actor)) return 0;
+	e.value=ctx->args[1];
 	return cpu_output(ctx,&e);
 }
 static __always_inline int cpu_interrupt(void *ctx,__u32 phase,__u64 vector)
@@ -107,7 +118,7 @@ static __always_inline int cpu_work(void *ctx,__u32 phase,struct work_struct *wo
 {
 	struct cis_cpu_event e={};
 	if(!cpu_admit(&e,phase,0)) return 0;
-	cpu_actor((void*)bpf_get_current_task(),&e.actor);
+	if (!cpu_actor((void*)bpf_get_current_task(),&e.actor)) return 0;
 	e.base.object=(__u64)work; e.function=(__u64)function;
 	return cpu_output(ctx,&e);
 }

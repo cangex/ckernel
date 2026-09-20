@@ -58,6 +58,7 @@ def run():
         devices=sorted(p.name for p in Path('/sys/bus/event_source/devices').iterdir())
         plan=dict(schema='cis-y6-cpu-plan-v1',order=order(),cases=CASES,source=source,window_ms=2000,
             cpus=[0,1],management_cpu=7,hardware_sources=devices,
+            schedstats=Path('/proc/sys/kernel/sched_schedstats').read_text().strip(),
             spe='UNSUPPORTED' if not any('spe' in n.lower() for n in devices) else 'NOT_VALIDATED',
             pmu_contention='NOT_CLAIMED',tail_latency='Y7_PENDING',background_origin='UNKNOWN')
         (out/'plan.json').write_text(json.dumps(plan,indent=2))

@@ -87,6 +87,17 @@ class CPUReport(unittest.TestCase):
         self.assertEqual(self.analyze(p)['quality']['status'],'FAIL')
         self.assertFalse(self.analyze([point(10,phase=9,object=123,function=456)])['background'])
 
+    def test_zero_boot_worker_timestamp_is_not_a_failed_read(self):
+        p=[point(10,next_actor=0,next_tid=50,next_start=0),
+           point(15,phase=8,actor=0,tid=50,task_start=0,object=123,function=456),
+           point(30,phase=9,actor=0,tid=50,task_start=0,object=123,function=456),
+           point(40,actor=0,tid=50,task_start=0,next_actor=1)]
+        r=self.analyze(p)
+        self.assertEqual(r['quality']['status'],'PASS')
+        self.assertEqual(len(r['background']),1)
+        p[2]['task_start']=99
+        self.assertFalse(self.analyze(p)['background'])
+
     def test_quality_wrong_cpu_and_duplicate(self):
         for p in ([point(10,cpu=1)],[point(10),point(10)],[point(100)],[point(10,actor=3)]):
             self.assertEqual(self.analyze(p)['quality']['status'],'FAIL')

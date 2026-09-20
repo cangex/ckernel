@@ -164,7 +164,7 @@ def analyze(record,raw):
             pair=(d[prefix+'_id'],d[prefix+'_generation'])
             if pair!=(0,0) and pair not in known: excluded['identity']+=1
         if (d['phase'] in (4,5,6,7) and any(d[k] for k in ('tid','task_start','actor_id','actor_generation')) or
-                d['phase'] in (8,9) and not (d['tid'] and d['task_start'] and d['object'] and d['function'])):
+                d['phase'] in (8,9) and not (d['tid'] and d['object'] and d['function'])):
             excluded['context']+=1; continue
         if len(rows)>=MAX_POINTS: excluded['point_capacity']+=1; continue
         rows.append(d)

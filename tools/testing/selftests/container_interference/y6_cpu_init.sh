@@ -15,7 +15,19 @@ if ! insmod /cis_fixture.ko isolated_vm=1 async_cpu=0; then
     poweroff -f
     exit 91
 fi
-mount --bind /dev /container-root/dev
+mkdir -p /container-root/dev
+if ! mount --bind /dev /container-root/dev; then
+    echo CIS_PROFILE_VM_EXIT=92
+    poweroff -f
+    exit 92
+fi
+# Fixed for OFF and ON alike; attaching the tracepoint does not enable stats.
+echo 1 > /proc/sys/kernel/sched_schedstats
+if [ "$(cat /proc/sys/kernel/sched_schedstats)" != 1 ]; then
+    echo CIS_PROFILE_VM_EXIT=93
+    poweroff -f
+    exit 93
+fi
 /usr/bin/python3 /profile/y6_cpu_vm.py
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"
