@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 import copy
 import unittest
-from y2_reclaim_check import pressure
+from y2_reclaim_check import pressure, source_bound, SOURCE_KEYS
 
 
 class ReclaimPressure(unittest.TestCase):
@@ -21,3 +21,12 @@ class ReclaimPressure(unittest.TestCase):
             before=self.groups(); after=copy.deepcopy(before); after[0][key]=value
             with self.assertRaises(ValueError): pressure(before,after)
         with self.assertRaises(ValueError): pressure([],[])
+
+    def test_full_top_level_bundle_identity_required(self):
+        source={k:'value-'+k for k in SOURCE_KEYS}; record=dict(source)
+        record['source_identity']={k:v for k,v in source.items() if k!='collector_bundle_sha256'}
+        self.assertTrue(source_bound(record,source))
+        del record['collector_bundle_sha256']
+        self.assertFalse(source_bound(record,source))
+        record['collector_bundle_sha256']='changed'
+        self.assertFalse(source_bound(record,source))

@@ -7,12 +7,17 @@ import json
 from pathlib import Path
 
 from collector_audit import audit
+from collector_manifest import validate_record_inventory
 from counter_mem_check import counts
 from explain import explain
 from owner_report import fields
 from session_check import extract
 from source_switches import validate
 from y2_memory_check import SOURCE_KEYS
+
+
+def source_bound(record,source):
+    return all(k in record and k in source and record[k]==source[k] for k in SOURCE_KEYS)
 
 
 def pressure(before,after):
@@ -77,7 +82,9 @@ def verify(serial,output):
         entry=dict(label=label,enabled=ev['enabled'],case=c['name'],round=ev['round'],pressure=events,workloads=workloads)
         if ev['enabled']:
             record=next(r for r in records if r['session_id']==ev['session_id'])
-            if any(record['source_identity'].get(k)!=plan['source'].get(k) for k in SOURCE_KEYS): errors.append('capture_source_'+label)
+            if not source_bound(record,plan['source']): errors.append('capture_source_'+label)
+            if record['window']!=ev['window']: errors.append('capture_window_'+label)
+            validate_record_inventory(record)
             capture=files[prefix+'records/'+str(ev['session_id'])+'.jsonl'].encode()
             report=explain(record,capture,finding_limit=4096); scope=audit(record,capture)
             if report['quality']['status']!='PASS' or scope['status']!='PASS': errors.append('capture_'+label)
@@ -106,6 +113,8 @@ def verify(serial,output):
         states.append(entry)
     summary=dict(schema='cis-y2-reclaim-check-v1',status='PASS_SCOPED' if not errors else 'FAIL',
         errors=sorted(set(errors)),serial_sha256=hashlib.sha256(raw).hexdigest(),states=states,
+        analysis_source_sha256={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                                for name in ('y2_reclaim_check.py','explain.py','collector_audit.py','source_switches.py')},
         limits=['private anonymous memory and induced ancestor/own high pressure in a VM',
                 'native tracepoints do not expose reclaimed-page owner or actual target memcg',
                 'configuration and local high counters must not be substituted for a native reclaim-resource identity',
