@@ -4,6 +4,7 @@ from bisect import bisect_left
 from collections import Counter, defaultdict
 import hashlib
 import json
+from pathlib import Path
 
 from collector_audit import audit
 from explain import explain, within_window
@@ -159,6 +160,8 @@ def analyze(record,raw):
     if quality['status']!='PASS': result['associations']=[]
     return dict(schema='cis-cpu-background-report-v1',quality=quality,scope_audit=scope,
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),cpu_selection=cpus,
+        analysis_source_sha256=dict(base['analysis_source_sha256'],
+            cpu_report=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),
         points=len(rows),excluded=dict(excluded),**result,
         limits=['same-CPU execution association is not a unique blocker or causal proof',
                 'only runnable switch-out waits fully contained on one CPU are joined; wakeup and migration waits are not reconstructed',

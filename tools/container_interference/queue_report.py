@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 import hashlib
 import json
+from pathlib import Path
 
 from collector_audit import audit
 from explain import explain, within_window
@@ -70,6 +71,8 @@ def analyze(record,raw):
                  evidence='E1',relation='same_pinned_queue_participation',blocking_container=None,
                  lock_contention='NOT_ESTABLISHED') for k,values in sorted(participants.items()) if len(values)>1]
     return dict(schema='cis-public-queue-report-v1',quality=quality,scope_audit=scope,
+        analysis_source_sha256=dict(base['analysis_source_sha256'],
+            queue_report=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),samples=rows,
         shared_resources=shared,excluded=dict(excluded),coverage=dict(
             observation_status='ACCEPTED_SAMPLES' if rows and quality['status']=='PASS' else 'NO_ACCEPTED_SAMPLES',

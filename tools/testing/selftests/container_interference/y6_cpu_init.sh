@@ -10,7 +10,7 @@ mount -t tracefs none /sys/kernel/tracing
 mount -t debugfs none /sys/kernel/debug
 echo '+cpu +memory +pids +cpuset' > /sys/fs/cgroup/cgroup.subtree_control
 touch /cis-disposable-vm
-if ! insmod /cis_fixture.ko; then
+if ! insmod /cis_fixture.ko isolated_vm=1; then
     echo CIS_PROFILE_VM_EXIT=91
     poweroff -f
     exit 91

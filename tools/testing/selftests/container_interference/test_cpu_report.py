@@ -94,6 +94,16 @@ class CPUReport(unittest.TestCase):
         r=self.analyze([point(10),point(39,phase=3,value=29),point(40,actor=2,next_actor=1)])
         self.assertFalse(r['native_sched_wait'][0]['additive'])
 
+    def test_unified_dispatch_keeps_noncausal_boundaries(self):
+        from unittest.mock import patch
+        from unified_report import analyze as unified
+        report=self.analyze([point(10),point(40,actor=2,next_actor=1)])
+        with patch('cpu_report.analyze',return_value=report), patch('unified_report.explain',return_value=dict(
+                quality=report['quality'],source=report['source'],analysis_source_sha256={},explanation_lag_ns=None)):
+            r=unified(self.record(),b'')
+        self.assertEqual(r['relations'][0]['relation'],'cpu_execution_overlap')
+        self.assertEqual(r['relations'][0]['causal'],'NOT_ESTABLISHED')
+
     def test_selection_and_contract(self):
         req=dict(version=1,op='start',collector='cpu',cpus=[0,1],targets=['1'],nonce='test')
         validate(req)

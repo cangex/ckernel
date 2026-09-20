@@ -18,8 +18,8 @@ MAX_RELATIONS=128
 def analyze(record,raw):
     collector=record['collector']; base=explain(record,raw); relations=[]; omitted=0
     specialist=None
-    if collector in ('sync','counter','allocator','alloc_backend','page_backend','filesystem','net','block','rwsem'):
-        module=__import__(('allocator' if collector=='alloc_backend' else collector)+'_report')
+    if collector in ('sync','counter','allocator','alloc_backend','page_backend','filesystem','net','block','rwsem','qdisc','cpu'):
+        module=__import__(({'alloc_backend':'allocator','qdisc':'queue'}.get(collector,collector))+'_report')
         specialist=module.analyze(record,raw)
     quality=specialist['quality'] if specialist else base['quality']
     scope=specialist['scope_audit'] if specialist else audit(record,raw)
@@ -49,6 +49,24 @@ def analyze(record,raw):
                     add(f.get('observation',f['kind']),f.get('evidence','E1'),[f.get('id'),f.get('generation')],
                         dict(kind=f.get('observation',f['kind'])),[],f.get('interval_ns'),f.get('stack_leaf_to_root',[]),
                         ['external pressure producer not identified'],source_finding=f)
+        elif collector=='cpu':
+            for f in specialist['associations']:
+                add('cpu_execution_overlap','E1',f['waiter'],dict(kind='boot_cpu',cpu=f['cpu']),
+                    [f['executor']],[f['begin_ns'],f['end_ns']],[],
+                    ['CPU execution during runnable off-CPU bracket, not a causal blocker; quota/eligibility separate'],source_finding=f)
+            for f in specialist['background']:
+                add('background_execution','E1',None,dict(kind='work_execution',address=f['object'],function=f['function']),
+                    [f['executor']],[f['begin_ns'],f['end_ns']],[],
+                    ['worker is not submitting container; partial observed CPU slices exclude observed IRQ only'],source_finding=f)
+        elif collector=='qdisc':
+            for f in specialist['shared_resources']:
+                add('public_queue_participation','E1',None,f['resource'],f['containers'],None,[],
+                    ['queue participation is not a holder or causal blocker; packet owner and device completion unknown'],role=f['role'])
+            for f in specialist['samples']:
+                s=f['sample']
+                if not f['backlog_observed']: continue
+                add('queue_backlog_observation','E1',f['actor'],specialist['scope_audit']['queue_selection'],[],
+                    [s['begin_ns'],s['end_ns']],[],['occupancy snapshot is not packet residence or pure spin time'],source_finding=f)
         elif collector=='sync':
             for f in specialist['candidates']:
                 add('wait_interval_only','E1',[f['container_id'],f['generation'],f['task_id']],
@@ -198,7 +216,9 @@ def markdown(report):
         'socket_holder_waiter':'Socket逻辑锁等待','backlog_service_release':'backlog排队、服务与释放',
         'tcp_send_allocation':'TCP发送缓冲区申请与释放来源',
         'block_request_episode':'块请求排队与服务','block_tag_wait':'块请求槽位等待','rwsem_holder_waiter':'读写锁已观察持有与等待',
-        'dirty_throttle_pause':'脏页限流暂停'}
+        'dirty_throttle_pause':'脏页限流暂停', 'cpu_execution_overlap':'等待期间的同核执行关联',
+        'background_execution':'后台工作执行，来源未确定',
+        'public_queue_participation':'共同使用同一公共发送队列', 'queue_backlog_observation':'发送队列积压观察'}
     lines=['# 容器周期Profile解释报告','','会话 `%s`，专项 `%s`，证据质量 **%s**。'%(report['session_id'],report['collector'],report['quality']['status']),
         '这是受限路径上的观察报告，不是总干扰率或生产性能认证。','','## 已观察关系']
     for r in report['relations'][:16]:
