@@ -48,6 +48,7 @@ struct capture {
 	int filesystem_filter_fd;
 	unsigned long long filesystem_before[6];
 	int filesystem_audit_ready;
+	uint64_t filesystem_poll_ns,filesystem_poll_entries;
 };
 
 static int filesystem_audit(unsigned long long sum[6])
@@ -96,6 +97,7 @@ static int prepare_filesystem_filter(struct capture *c)
 	cis_report(ctx,"filesystem_source_filter",NULL,detail);
 	if(filesystem_audit(c->filesystem_before)) return -EIO;
 	c->filesystem_audit_ready=1;
+	c->filesystem_poll_ns=cis_clock_ns(); c->filesystem_poll_entries=c->filesystem_before[0];
 	return 0;
 }
 
@@ -906,6 +908,19 @@ int cis_capture_poll(struct cis_context *ctx)
 	int i,ret;
 	char detail[512];
 	if(!c) return 0;
+	/* Count native selection/sampling entry cost, including callers that
+	 * never reach BPF. A source budget stop detaches the real producer. */
+	if(c->filesystem_audit_ready && now-c->filesystem_poll_ns>=100000000ULL) {
+		unsigned long long values[6];
+		if(filesystem_audit(values) || values[0]<c->filesystem_poll_entries) return -EIO;
+		if((values[0]-c->filesystem_poll_entries)*1000000000.0/(now-c->filesystem_poll_ns)>ctx->entry_rate_limit) {
+			snprintf(detail,sizeof(detail),"configured_limit=%u delta_entries=%llu interval_ns=%llu source=filesystem_native detaching_collectors=1",
+				ctx->entry_rate_limit,values[0]-(unsigned long long)c->filesystem_poll_entries,
+				(unsigned long long)(now-c->filesystem_poll_ns));
+			cis_report(ctx,"entry_budget_disable",NULL,detail); return -E2BIG;
+		}
+		c->filesystem_poll_ns=now; c->filesystem_poll_entries=values[0];
+	}
 	ret=perf_buffer__poll(c->ring,0);
 	if(ret<0 && ret!=-EINTR) return ret;
 	/* Ready buffers stay prompt; periodically drain records below the wakeup watermark. */
