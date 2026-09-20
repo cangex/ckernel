@@ -71,7 +71,7 @@ def worker_roots(registry, targets, collector):
     if len(registry) > MAX_ROOTS or any(key not in registry for key in targets):
         raise ValueError('invalid identity registry')
     keys = list(targets)
-    if collector in ('owner','fd','net','block','rwsem','slub','qdisc'):
+    if collector in ('owner','fd','net','block','rwsem','slub','qdisc','cpu'):
         keys += sorted(set(registry) - set(targets))
     return {key: dict(registry[key], session_target=key in targets) for key in keys}
 
@@ -131,7 +131,7 @@ def validate(request):
     op = request.get('op')
     fields = {'register': {'path'}, 'unregister': {'target'}, 'status': {'session'},
               'report': {'session'}, 'cancel': {'session'}, 'stop': set(), 'recover': set(),
-              'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject', 'objects', 'backend', 'filesystem', 'queue'},
+              'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject', 'objects', 'backend', 'filesystem', 'queue', 'cpus'},
               'schedule_configure': {'plan'}, 'schedule_enable': set(),
               'schedule_pause': set(), 'schedule_status': {'offset'},
               'survey_epoch': set(), 'survey_report': {'target'},
@@ -142,6 +142,13 @@ def validate(request):
     if op == 'start':
         if request.get('collector') not in collector_manifest.COLLECTORS:
             raise ValueError('unsupported collector')
+        if request['collector']=='cpu':
+            cpus=request.get('cpus')
+            if (not isinstance(cpus,list) or not 1<=len(cpus)<=8 or
+                    any(type(v) is not int or not 0<=v<512 for v in cpus) or len(set(cpus))!=len(cpus)):
+                raise ValueError('explicit 1..8 distinct CPU IDs required')
+        elif 'cpus' in request:
+            raise ValueError('CPU selection requires cpu collector')
         if request['collector']=='filesystem':
             path=request.get('filesystem')
             if not isinstance(path,str) or not path.startswith('/') or not 1<len(path)<=4096 or '\0' in path:
@@ -512,13 +519,14 @@ class Controller:
                       backend_selection=request.get('backend'),
                       filesystem_selection=request.get('filesystem'),
                       queue_selection=request.get('queue'),
+                      cpu_selection=request.get('cpus'),
                       inventory=None, receipt=None, cancellation_requested=False,
                       nonce_epoch=request.get('nonce_epoch'), retention_managed=bool(self.schedule),
                       survey_epoch=self.survey_epoch, scheduled=planned,
                       root_identities={key: {field: self.roots[key][field] for field in ('id', 'generation')}
                                        for key in request['targets']},
                       owner_identities={key: {field: root[field] for field in ('id', 'generation', 'session_target')}
-                                        for key, root in identities.items()} if request['collector'] in ('owner','fd','net','block','rwsem','slub','qdisc') else {},
+                                        for key, root in identities.items()} if request['collector'] in ('owner','fd','net','block','rwsem','slub','qdisc','cpu') else {},
                       identity_count=len(identities), identity_protocol=2,
                       source_identity={key: self.manifest[key] for key in ('controller_sha256', 'worker_sha256',
                                        'residue_sha256', 'bpf_sha256', 'support_sha256', 'kernel_release', 'kernel_notes_sha256',
@@ -600,6 +608,8 @@ class Controller:
                 command += ['f:'+str(filesystem_fd)]
             if request['collector']=='qdisc':
                 command += ['q:%d:%d'%(request['queue']['ifindex'],request['queue']['tx_queue'])]
+            if request['collector']=='cpu':
+                command += ['c:'+','.join(str(v) for v in request['cpus'])]
             command += ['%s:%d:%d:%d' % ('t' if root['session_target'] else 'i', root['fd'],
                                        root['id'], root['generation']) for root in roots]
             child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots],

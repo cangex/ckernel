@@ -41,6 +41,12 @@ static inline int cis_profile_program(unsigned int profile, const char *name)
 		return !strcmp(name, "filesystem");
 	if (profile == 16)
 		return !strcmp(name, "qdisc_state");
+	if (profile == 17)
+		return !strcmp(name,"cpu_switch") || !strcmp(name,"cpu_migrate") ||
+		       !strcmp(name,"cpu_wait") || !strcmp(name,"cpu_irq_begin") ||
+		       !strcmp(name,"cpu_irq_end") || !strcmp(name,"cpu_soft_begin") ||
+		       !strcmp(name,"cpu_soft_end") || !strcmp(name,"cpu_work_begin") ||
+		       !strcmp(name,"cpu_work_end");
 	if (profile == 9)
 		return !strcmp(name, "net_state") || !strcmp(name, "net_release") || !strcmp(name, "net_tx");
 	if (profile == 10)
@@ -57,13 +63,15 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 {
 	if (!profile)
 		return 1;
-	if (profile < 1 || profile > 16)
+	if (profile < 1 || profile > 17)
 		return 0;
 	if (!strcmp(name, "session_window") || !strcmp(name, "roots") ||
 	    !strcmp(name, "events") || !strcmp(name, "stats"))
 		return 1;
 	if (profile == 3 || profile == 16)
 		return !strcmp(name, "targets");
+	if (profile == 17)
+		return !strcmp(name,"targets") || !strcmp(name,"cpu_selected");
 	if (profile == 14 || profile == 15)
 		return !strcmp(name,"targets") || !strcmp(name,"stacks");
 	if (profile == 8 && (!strcmp(name, "alloc_live") || !strcmp(name, "maple_pending")))

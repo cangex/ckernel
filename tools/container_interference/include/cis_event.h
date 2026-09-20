@@ -18,6 +18,7 @@
 #define CIS_DIAG_PAGE_BACKEND 1024
 #define CIS_DIAG_FILESYSTEM 2048
 #define CIS_DIAG_QDISC 4096
+#define CIS_DIAG_CPU 8192
 #define CIS_OWNER_EVENT 12
 #define CIS_COUNTER_EVENT 13
 #define CIS_ALLOC_EVENT 14
@@ -36,6 +37,7 @@
 #define CIS_BLOCK_POOL_EVENT 27
 #define CIS_DIRTY_PAUSE_EVENT 28
 #define CIS_QDISC_EVENT 29
+#define CIS_CPU_EVENT 30
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -62,6 +64,13 @@ struct cis_qdisc_event {
 	struct cis_qdisc_data sample;
 	__u64 actor_id, actor_generation, task_start;
 	__u64 socket_id, socket_generation;
+};
+struct cis_cpu_actor { __u64 tid, start, id, generation; };
+struct cis_cpu_event {
+	struct cis_event base;
+	struct cis_cpu_actor actor, next;
+	__u64 value, function;
+	__u32 phase, destination;
 };
 struct cis_work_state { struct cis_event queued, active; __u32 queued_valid, active_valid; };
 struct cis_pending_key { __u64 tid, object, task_start_ns; __u32 type, reserved; };

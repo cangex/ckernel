@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 38
+#define CIS_DIAGNOSTIC_LINKS 47
 #include "include/cis_backend_selection.h"
 #include <sys/sysmacros.h>
 #include <sys/stat.h>
@@ -289,6 +289,18 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	char detail[768];
 	const char *symbol;
 	(void)cpu;
+	if(size>=sizeof(struct cis_cpu_event) && size<=sizeof(struct cis_cpu_event)+7 && e->type==CIS_CPU_EVENT) {
+		struct cis_cpu_event *v=data;
+		snprintf(detail,sizeof(detail),"protocol=1 time_ns=%llu cpu=%u phase=%u tid=%llu task_start=%llu actor_id=%llu actor_generation=%llu next_tid=%llu next_start=%llu next_id=%llu next_generation=%llu value=%llu flags=%u destination=%u object=%llu function=%llu",
+			(unsigned long long)e->time_ns,e->cpu,v->phase,
+			(unsigned long long)v->actor.tid,(unsigned long long)v->actor.start,
+			(unsigned long long)v->actor.id,(unsigned long long)v->actor.generation,
+			(unsigned long long)v->next.tid,(unsigned long long)v->next.start,
+			(unsigned long long)v->next.id,(unsigned long long)v->next.generation,
+			(unsigned long long)v->value,e->flags,v->destination,
+			(unsigned long long)e->object,(unsigned long long)v->function);
+		cis_report(ctx,"CPU_POINT",NULL,detail); return;
+	}
 	if(size>=sizeof(struct cis_qdisc_event) && size<=sizeof(struct cis_qdisc_event)+7 && e->type==CIS_QDISC_EVENT) {
 		struct cis_qdisc_event *v=data;
 		struct cis_qdisc_data *s=&v->sample;
@@ -604,7 +616,10 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
 		{"block_tag",256},{"block_link",256},
 		{"wb_dirty",256},{"wb_begin",256},{"wb_end",256},{"wb_pause",256},
-		{"rwsem_state",512},{"page_backend",1024},{"filesystem",2048},{"qdisc_state",4096}};
+		{"rwsem_state",512},{"page_backend",1024},{"filesystem",2048},{"qdisc_state",4096},
+		{"cpu_switch",8192},{"cpu_migrate",8192},{"cpu_wait",8192},
+		{"cpu_irq_begin",8192},{"cpu_irq_end",8192},{"cpu_soft_begin",8192},{"cpu_soft_end",8192},
+		{"cpu_work_begin",8192},{"cpu_work_end",8192}};
 	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
@@ -815,6 +830,27 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 	if(bpf_object__load(c->object)) goto fail;
 	c->roots=mapfd(c,"roots"); c->targets=mapfd(c,"targets"); c->pending=mapfd(c,"pending");
 	c->stacks=mapfd(c,"stacks"); c->stats=mapfd(c,"stats");
+	if(ctx->session_collector==17) {
+		int fd=mapfd(c,"cpu_selected");
+		__u8 selected=1,readback;
+		stage="cpu_selection";
+		if(!ctx->selected_cpu_count || ctx->selected_cpu_count>8 || fd<0) goto fail;
+		for(i=0;i<(int)ctx->selected_cpu_count;i++) {
+			char path[128];
+			FILE *online;
+			int value=1;
+			snprintf(path,sizeof(path),"/sys/devices/system/cpu/cpu%u",ctx->selected_cpus[i]);
+			if(access(path,F_OK)) goto fail;
+			snprintf(path,sizeof(path),"/sys/devices/system/cpu/cpu%u/online",ctx->selected_cpus[i]);
+			online=fopen(path,"r");
+			if(online) { int ok=fscanf(online,"%d",&value)==1; fclose(online); if(!ok || value!=1) goto fail; }
+			else if(errno!=ENOENT) goto fail;
+			if(bpf_map_update_elem(fd,&ctx->selected_cpus[i],&selected,BPF_NOEXIST) ||
+			   bpf_map_lookup_elem(fd,&ctx->selected_cpus[i],&readback) || readback!=1) goto fail;
+			snprintf(detail,sizeof(detail),"cpu=%u count=%u readback=1",ctx->selected_cpus[i],ctx->selected_cpu_count);
+			cis_report(ctx,"cpu_selection",NULL,detail);
+		}
+	}
 	if(ctx->session_collector==7 && ctx->selected_object_count) {
 		int fd=mapfd(c,"counter_selected"), actors=mapfd(c,"counter_actors");
 		__u32 slot, readback;

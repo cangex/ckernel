@@ -5,10 +5,10 @@ import time
 
 
 def expected_fields(version, collector):
-    if version not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19'):
+    if version not in tuple(str(v) for v in range(1,21)):
         raise ValueError('unsupported source-switch version')
     v = int(version)
-    if v < {'counter':2, 'allocator':3, 'alloc_backend':3, 'net':5, 'block':6, 'rwsem':7, 'slub':8, 'page_backend':16, 'filesystem':17, 'qdisc':19}.get(collector, 1):
+    if v < {'counter':2, 'allocator':3, 'alloc_backend':3, 'net':5, 'block':6, 'rwsem':7, 'slub':8, 'page_backend':16, 'filesystem':17, 'qdisc':19, 'cpu':20}.get(collector, 1):
         raise ValueError('unsupported source-switch version')
     result = dict(version=version, owner=str(int(collector=='owner')), fd=str(int(collector=='fd')))
     if v >= 2: result['counter'] = str(int(collector=='counter'))
@@ -31,6 +31,10 @@ def expected_fields(version, collector):
     if v >= 17: result.update(filesystem=str(int(collector=='filesystem')),filesystem_filter=str(int(collector=='filesystem')))
     if v >= 18: result['wb_pause'] = str(int(collector=='block'))
     if v >= 19: result.update(qdisc=str(int(collector=='qdisc')),qdisc_filter=str(int(collector=='qdisc')))
+    if v >= 20:
+        result.update(sched_switch=str(int(collector in ('cpu','owner','fd','slub'))),
+                      sched_migrate=str(int(collector=='cpu')),sched_wait=str(int(collector in ('cpu','sched'))))
+        result.update({k:str(int(collector=='cpu')) for k in ('irq_begin','irq_end','soft_begin','soft_end','work_begin','work_end')})
     return result
 
 

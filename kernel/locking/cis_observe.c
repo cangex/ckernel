@@ -28,6 +28,17 @@
 #include <linux/cis_rwsem.h>
 #include <linux/cis_slub.h>
 
+DECLARE_TRACEPOINT(sched_switch);
+DECLARE_TRACEPOINT(sched_migrate_task);
+DECLARE_TRACEPOINT(sched_stat_wait);
+DECLARE_TRACEPOINT(irq_handler_entry);
+DECLARE_TRACEPOINT(irq_handler_exit);
+DECLARE_TRACEPOINT(softirq_entry);
+DECLARE_TRACEPOINT(softirq_exit);
+DECLARE_TRACEPOINT(workqueue_execute_start);
+DECLARE_TRACEPOINT(workqueue_execute_end);
+#define CIS_CPU_ON(name) static_key_enabled(&__tracepoint_##name.key)
+
 static DEFINE_PER_CPU(bool, cis_in_trace);
 static DEFINE_PER_CPU(unsigned long, cis_skipped);
 static DEFINE_PER_CPU(unsigned long, cis_gate_filtered);
@@ -234,7 +245,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=19 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u page_backend=%u filesystem=%u filesystem_filter=%u wb_pause=%u qdisc=%u qdisc_filter=%u\n",
+	seq_printf(m, "version=20 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u page_backend=%u filesystem=%u filesystem_filter=%u wb_pause=%u qdisc=%u qdisc_filter=%u",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -249,6 +260,12 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled(), cis_backend_active(), trace_cis_page_backend_enabled(),
 		   cis_fs_source_enabled(), cis_fs_active(), CIS_BLOCK_ON(cis_writeback_pause),
 		   cis_qdisc_source_enabled(), cis_qdisc_active());
+	seq_printf(m, " sched_switch=%u sched_migrate=%u sched_wait=%u irq_begin=%u irq_end=%u soft_begin=%u soft_end=%u work_begin=%u work_end=%u\n",
+		   CIS_CPU_ON(sched_switch), CIS_CPU_ON(sched_migrate_task),
+		   CIS_CPU_ON(sched_stat_wait), CIS_CPU_ON(irq_handler_entry),
+		   CIS_CPU_ON(irq_handler_exit), CIS_CPU_ON(softirq_entry),
+		   CIS_CPU_ON(softirq_exit), CIS_CPU_ON(workqueue_execute_start),
+		   CIS_CPU_ON(workqueue_execute_end));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);

@@ -148,7 +148,14 @@ int main(void) {
     assert(!cis_profile_map(16, "net_skb"));
     assert(cis_profile_program(16, "qdisc_state"));
     assert(!cis_profile_program(16, "net_state"));
-    assert(!cis_profile_map(17, "roots"));
+    assert(cis_profile_map(17, "roots"));
+    assert(cis_profile_map(17, "cpu_selected"));
+    assert(!cis_profile_map(17, "stacks"));
+    assert(!cis_profile_map(17, "work_items"));
+    assert(cis_profile_program(17, "cpu_switch"));
+    assert(cis_profile_program(17, "cpu_work_end"));
+    assert(!cis_profile_program(17, "work_queue"));
+    assert(!cis_profile_map(18, "roots"));
     return 0;
 }
 '''

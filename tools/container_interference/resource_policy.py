@@ -2,8 +2,8 @@
 """Admission policy, not evidence that a configured backend is contended."""
 from periodic_plan import digest
 
-SCHEMA = 'cis-public-resource-policy-v4'
-DEFAULT = frozenset(('ip', 'sched', 'reclaim', 'counter', 'alloc_backend', 'slub', 'page_backend', 'block', 'filesystem', 'qdisc'))
+SCHEMA = 'cis-public-resource-policy-v5'
+DEFAULT = frozenset(('ip', 'sched', 'reclaim', 'counter', 'alloc_backend', 'slub', 'page_backend', 'block', 'filesystem', 'qdisc', 'cpu'))
 EXTENSIONS = frozenset(('owner', 'fd', 'sync', 'rwsem', 'allocator', 'net'))
 
 
@@ -13,7 +13,7 @@ def policy(extensions=()):
             len(set(extensions)) != len(extensions)):
         raise ValueError('explicit distinct legacy collector names required')
     return dict(schema=SCHEMA, default=sorted(DEFAULT), extensions=sorted(extensions),
-                automatic=sorted(DEFAULT - {'ip','filesystem','qdisc'}),
+                automatic=sorted(DEFAULT - {'ip','filesystem','qdisc','cpu'}),
                 sharing='candidate only; actual object and interval evidence required')
 
 

@@ -134,6 +134,9 @@ static __always_inline void emit(void *ctx,struct cis_event *e)
 #if CIS_PROFILE == 11
 #include "rwsem_collect.h"
 #endif
+#if CIS_PROFILE == 17
+#include "cpu.bpf.h"
+#endif
 
 #if CIS_PROFILE == 9
 #include "net_tx.bpf.h"
