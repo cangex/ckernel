@@ -13,6 +13,7 @@ from slub_fixture_check import check as fixture
 
 CASES_V1=('shared','private','switch','recreate','native')
 CASES=('shared','private','switch','recreate','unseenHolder','native')
+CASES_SELECTED=CASES+('outsideNode','outsideCache')
 
 
 def check(serial, output):
@@ -21,8 +22,9 @@ def check(serial, output):
     text=raw.decode(); files=extract(text); prefix='/tmp/slub-evidence/'
     value=lambda name: json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     plan=value('plan.json'); result=value('result.json'); permit=value('permit.json')
-    cases=CASES_V1 if plan['schema']=='cis-slub-vm-plan-v1' else CASES
-    if (plan['schema'] not in ('cis-slub-vm-plan-v1','cis-slub-vm-plan-v2') or plan['cases']!=list(cases) or plan['rounds']!=3 or
+    selected=plan['schema']=='cis-slub-vm-plan-v3'
+    cases=CASES_SELECTED if selected else CASES_V1 if plan['schema']=='cis-slub-vm-plan-v1' else CASES
+    if (plan['schema'] not in ('cis-slub-vm-plan-v1','cis-slub-vm-plan-v2','cis-slub-vm-plan-v3') or plan['cases']!=list(cases) or plan['rounds']!=3 or
         plan['eligible_min_overlap_ns']!=100_000 or plan['hold_us']!=5000 or plan['window_ms']!=2000 or
         plan['target_indices']!=[0,1] or plan['registered_roots']!=4 or plan['nodes']!=[0,1]):
         raise ValueError('unexpected frozen plan')
@@ -30,8 +32,9 @@ def check(serial, output):
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_SLUB_FIXTURE_UNLOAD=0' not in text.splitlines(): errors.append('guest_cleanup')
     if any(v in text for v in ('Oops:','Kernel panic','BUG: KASAN:','WARNING: CPU:')): errors.append('kernel_warning')
     if result['source']!=plan['source'] or any(plan['source'][k]!=permit['source'][k] for k in SOURCE_KEYS): errors.append('source_binding')
-    if plan['schema']=='cis-slub-vm-plan-v2' and plan.get('recreated_watch')!='target warmup before non-target holder':
+    if plan['schema'] in ('cis-slub-vm-plan-v2','cis-slub-vm-plan-v3') and plan.get('recreated_watch')!='target warmup before non-target holder':
         raise ValueError('recreated watch precondition')
+    if selected and plan.get('selection')!=dict(cache='cis_slub_fixture',nodes=[0]): raise ValueError('source selection plan')
     order=[(r,c,e) for r in range(3) for c in cases for e in ((False,True) if r%2==0 else (True,False))]
     if len(result['states'])!=len(order): errors.append('incomplete_matrix')
     for r,c,e in order:
@@ -47,6 +50,7 @@ def check(serial, output):
             events=[json.loads(line) for line in raw_events.splitlines()]
             if any(str(event.get('session_id'))!=str(sid) for event in events): errors.append('event_binding_'+label)
             if record['collector']!='slub' or record['nonce']!=label.replace('-','') or record['targets']!=state['targets']: errors.append('capture_binding_'+label)
+            if selected and record.get('backend_selection')!=dict(cache='cis_not_selected' if c=='outsideCache' else 'cis_slub_fixture',nodes=[0]): errors.append('cache_node_selection_'+label)
             if any(record.get(k)!=plan['source'][k] for k in SOURCE_KEYS): errors.append('record_source_'+label)
             quality=assess(record); scope=audit(record,raw_events); window=record['window']
             if quality['status']!='PASS' or scope['status']!='PASS': errors.append('capture_quality_'+label)

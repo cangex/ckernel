@@ -15,7 +15,7 @@ from source_switches import observe
 CASES = ('shared', 'private', 'switch', 'recreate', 'unseenHolder', 'native')
 
 
-def run():
+def run(selected=False):
     os.umask(0o077); os.sched_setaffinity(0, {7})
     env = admission.environment(); admission.check_environment(env)
     out = Path('/tmp/slub-evidence'); out.mkdir(mode=0o700)
@@ -28,11 +28,13 @@ def run():
     args = SimpleNamespace(worker='/profile/session-worker', residue='/profile/session-residue', bpf='/profile/cis.bpf.o')
     source = source_manifest(args, env['boot_id']); permit = admission.create(source, env, time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit, indent=2))
-    plan = dict(schema='cis-slub-vm-plan-v2', cases=list(CASES), rounds=3, source=source,
+    cases=CASES+('outsideNode','outsideCache') if selected else CASES
+    plan = dict(schema='cis-slub-vm-plan-v3' if selected else 'cis-slub-vm-plan-v2', cases=list(cases), rounds=3, source=source,
         window_ms=2000, hold_us=5000, target_indices=[0,1], registered_roots=4,
         eligible_min_overlap_ns=100_000, cpus=[0,1,2,3], nodes=[0,1],
         order='OFF_ON,ON_OFF,OFF_ON', recreated_watch='target warmup before non-target holder',
         scope='controlled real node-lock truth; native operation bridge and unobserved acquire separate')
+    if selected: plan['selection']=dict(cache='cis_slub_fixture',nodes=[0])
     (out/'plan.json').write_text(json.dumps(plan, indent=2))
     endpoint = '/run/cis-slub.sock'; log = (out/'controller.log').open('x')
     requests = (out/'requests.jsonl').open('x')
@@ -72,7 +74,7 @@ def run():
         registered = [request('register', path=str(p))['target'] for p in roots]
         targets = registered[:2]; observe(None)
         for repeat in range(3):
-            for case in CASES:
+            for case in cases:
                 for enabled in ((False,True) if repeat%2==0 else (True,False)):
                     label = '%s%d-%s'%(case,repeat,'on' if enabled else 'off')
                     token += 1; jobs=[]; begin=len(children); sid=None; window=None
@@ -86,7 +88,8 @@ def run():
                         children.append(p); return p
 
                     if enabled:
-                        sid=request('start',collector='slub',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
+                        selection=dict(backend=dict(cache='cis_not_selected' if case=='outsideCache' else 'cis_slub_fixture',nodes=[0])) if selected else {}
+                        sid=request('start',collector='slub',targets=targets,nonce=label.replace('-',''),window_ms=2000,**selection)['session_id']
                         window=wait(sid,'window')['window']; active=observe('slub')
                         delay=(window['start_ns']+20_000_000-time.monotonic_ns())/1e9
                         if delay>0: time.sleep(delay)
@@ -97,8 +100,9 @@ def run():
                     else:
                         # Start the waiter first. Its bounded in-kernel rendezvous
                         # observes a real acquisition before attempting the lock.
-                        w=start('waiter0',1,node=1 if case=='private' else 0,wait_holders=1)
-                        h=start('holder0',2 if case=='unseenHolder' else 0,hold=5000); finish(h); finish(w)
+                        node=1 if case=='outsideNode' else 0
+                        w=start('waiter0',1,node=1 if case=='private' else node,wait_node=node,wait_holders=1)
+                        h=start('holder0',2 if case=='unseenHolder' else 0,node=node,hold=5000); finish(h); finish(w)
                         if case in ('switch','recreate'):
                             token+=1
                             finish(start('reset2',0,command='recreate' if case=='recreate' else 'reset'))

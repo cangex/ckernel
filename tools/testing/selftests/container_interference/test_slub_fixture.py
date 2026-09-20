@@ -58,5 +58,19 @@ class SlubFixture(unittest.TestCase):
         a[2]['0']=a[2]['0'].replace('release_ns=500000','release_ns=150000')
         self.assertIn('unobserved_acquire_not_exercised',check(*a)['errors'])
 
+    def test_unselected_cache_is_not_a_zero_event_success_without_truth(self):
+        a=list(self.data()); a[4]='outsideCache'; a[0]=[]
+        self.assertEqual(check(*a)['status'],'PASS')
+        a[2]['0']=a[2]['0'].replace('release_ns=500000','release_ns=150000')
+        self.assertIn('unselected_contended_operation_not_exercised',check(*a)['errors'])
+
+    def test_unselected_node_must_not_emit_holders(self):
+        a=list(self.data()); a[4]='outsideNode'
+        for j in a[1]: j['arguments']['node']=1; j['arguments']['wait_node']=1
+        a[2]={k:v.replace('node=0','node=1') for k,v in a[2].items()}
+        self.assertIn('unselected_operations_emitted',check(*a)['errors'])
+        a[0]=[]
+        self.assertEqual(check(*a)['status'],'PASS')
+
 
 if __name__=='__main__': unittest.main()

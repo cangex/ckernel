@@ -40,6 +40,15 @@ def check(events, jobs, logs, identities, case, window):
     if report['loss_or_recursion_gap'] or report['cache_identity_errors']: errors.append('source_or_identity_gap')
     owner_rows=[fields(e['detail']) for e in events if e.get('kind')=='OWNER']
     caches={r['cache'] for r in operations}
+    if case in ('outsideNode','outsideCache'):
+        if any(r['node']!=(1 if case=='outsideNode' else 0) for r in operations): errors.append('unselected_truth_node')
+        if any(e['phase'] in (2,3,4) for e in owner_rows) or report['edges']: errors.append('unselected_operations_emitted')
+        overlaps=[min(w['acquired_ns'],h['release_ns'])-max(w['begin_ns'],h['acquired_ns'])
+            for w in operations for h in operations if w['task']!=h['task'] and w['object']==h['object']]
+        if not overlaps or max(overlaps)<100_000: errors.append('unselected_contended_operation_not_exercised')
+        return dict(status='FAIL' if errors else 'PASS',errors=sorted(set(errors)),operations=len(operations),
+                    selected_cache_node_negative=True,edges=len(report['edges']),eligible=0,captured_eligible=0,
+                    outside_selection_overlap_ns=max(overlaps,default=0),scope='unselected real node must not produce holder claims')
     if not owner_rows or not any(e.get('resource')==4 and e.get('cache') in caches for e in owner_rows):
         errors.append('no_native_node_events')
     native_stacks=[e.get('detail','').split(' leaf_to_root=',1)[1].split('>')
