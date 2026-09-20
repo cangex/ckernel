@@ -23,7 +23,12 @@ CONTRACT={
         pending=['受控rwsem不代表所有混合资源来源','完整异步后台与内核内存成本','真实应用竞争发生率']),
     'fd': dict(name='FD表锁',collector='fd',discovered='已选定files_struct锁路径',
         object='对象地址、RETIRE及新watch边界',participants='观察到的持有/等待任务及容器',
-        pending=['固定fixture调用分母已有独立统计；不等于真实阻塞关系召回','64事件前缀之外的覆盖与密集路径入口成本']),
+        pending=['固定fixture调用分母已有独立统计；不等于真实阻塞关系召回','版本化有界前缀之外的覆盖与密集路径入口成本']),
+    'fd_guard': dict(name='FD高事件率采集保护',collector='fd',
+        discovered='超过固定源入口预算后卸载采集，独立验证两侧业务继续',
+        object='FD专项源开关和拒收的截断会话，不是持有者正例',
+        participants='保护通过不等于密集FD关系采集可用',
+        pending=['不代表所有容量路径','完整源端和异步后台成本']),
     'counter': dict(name='page_counter',collector='counter',discovered='实际叶/祖先更新与限额回滚',
         object='初始化代次、地址和字段',participants='共同更新者，不是锁持有者',
         pending=['选定祖先汇总已做采样事件级验证；高事件率待测','全量更新计数不由采样推算','硬件cacheline证据（条件项）']),
@@ -117,6 +122,7 @@ CONTRACT={
 
 VERIFIERS={
     'sync': ('sync_vm_check','sync',{}), 'fd':('fd_vm_check','fd',{}),
+    'fd_guard':('fd_guard_check','fd_guard',{}),
     'counter':('counter_vm_check','counter',{}),
     'allocator':('allocator_vm_check','allocator',{}),
     'maple_context':('allocator_vm_check','maple_context',dict(maple=True)),
@@ -193,6 +199,14 @@ def replay(index,base,output):
                         len(v['result'].get('post_detach_operations',[]))!=2 or
                         min(v['result']['post_detach_operations'])<=0 for v in selected)):
                     raise ValueError('rejected dense capture and continued business required')
+            if key=='fd_guard':
+                selected=checked.get('cases',[])
+                if (len(selected)!=3 or {v.get('label') for v in selected}!={'storm0','storm1','storm2'} or
+                        any(v.get('capture_status')!='PARTIAL' or len(v.get('rates',[]))!=1 or
+                            v['rates'][0].get('configured_limit')!=200000 or
+                            len(v.get('post_detach_operations',[]))!=2 or
+                            min(v['post_detach_operations'])<=0 for v in selected)):
+                    raise ValueError('rejected FD entry-rate capture and continued business required')
             if key=='net_tx':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
                 if len(selected)!=3 or any(not v.get('result',{}).get('tx') or

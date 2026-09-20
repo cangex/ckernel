@@ -9,6 +9,22 @@ from coverage_matrix import validate_index,CONTRACT,VERIFIERS,markdown,replay
 
 
 class CoverageTests(unittest.TestCase):
+    def test_fd_guard_preserves_rejection_and_business_progress(self):
+        checked=dict(status='PASS',cases=[dict(label='storm%d'%i,capture_status='PARTIAL',
+            rates=[dict(configured_limit=200000)],post_detach_operations=[100,200]) for i in range(3)])
+        module=SimpleNamespace(__file__=__file__,verify=lambda *a,**k:checked)
+        with tempfile.TemporaryDirectory() as tmp,patch('coverage_matrix.importlib.import_module',return_value=module):
+            base=Path(tmp); (base/'serial.log').write_bytes(b'fixture')
+            row=dict(name='fdguard',serial='serial.log',sha256=hashlib.sha256(b'fixture').hexdigest(),verifier='fd_guard')
+            def check(name):
+                return replay(dict(schema='cis-coverage-input-v1',cohorts=[row]),base,base/name)['evidence'][0]['status']
+            self.assertEqual(check('guard'),'PASS_SCOPED')
+            checked['cases'][0]['capture_status']='COMPLETE'
+            self.assertEqual(check('not-rejected'),'FAIL')
+            checked['cases'][0].update(capture_status='PARTIAL',post_detach_operations=[100,0])
+            self.assertEqual(check('stopped-business'),'FAIL')
+        self.assertNotEqual(VERIFIERS['fd_guard'][1],VERIFIERS['fd'][1])
+
     def test_presubmit_cancellation_cannot_certify_inflight_abort(self):
         checked=dict(status='PASS',fixture='inflight',states=[dict(label='%s-block-r%d'%(case,i),
             result=dict(driver_requests=2,canceled_before_submit=False,driver_aborted_inflight=case=='abort',
@@ -105,4 +121,4 @@ class CoverageTests(unittest.TestCase):
 
     def test_fd_call_denominator_cannot_be_upgraded_to_wait_recall(self):
         self.assertIn('不等于真实阻塞关系召回','；'.join(CONTRACT['fd']['pending']))
-        self.assertIn('64事件前缀','；'.join(CONTRACT['fd']['pending']))
+        self.assertIn('有界前缀','；'.join(CONTRACT['fd']['pending']))
