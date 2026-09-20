@@ -87,6 +87,25 @@ static __noinline void net_tx_release(void *ctx, struct cis_net_sample *sample)
 	struct cis_bpf_stats *s = statistics();
 	struct task_struct *task = (void *)bpf_get_current_task();
 	struct cis_identity id = {};
+	struct cis_net_free_key key = { .skb = skb };
+	u32 phase = BPF_CORE_READ(sample, phase);
+
+	if (phase == 12) {
+		key.release_ns = BPF_CORE_READ(sample, release_start_ns);
+		saved = bpf_map_lookup_elem(&net_tx_free, &key);
+		if (!saved) return;
+		e = *saved;
+		bpf_map_delete_elem(&net_tx_free, &key);
+		if (!same_window(&e.base, CIS_DIAG_NET, now)) { COUNT(s, expired); return; }
+		e.phase = 7; e.base.time_ns = now;
+		e.release_backend_ns = BPF_CORE_READ(sample, release_backend_ns);
+		e.release_flags = BPF_CORE_READ(sample, flags);
+		if (e.release_backend_ns < key.release_ns || now < e.release_backend_ns ||
+		    BPF_CORE_READ(sample, context) != e.base.flags) { COUNT(s, rejected); return; }
+		tx_emit(ctx, &e);
+		return;
+	}
+	if (phase != 9) { COUNT(s, rejected); return; }
 
 	saved = bpf_map_lookup_elem(&net_tx_live, &skb);
 	if (!saved) return;
@@ -94,6 +113,8 @@ static __noinline void net_tx_release(void *ctx, struct cis_net_sample *sample)
 	bpf_map_delete_elem(&net_tx_live, &skb);
 	if (!same_window(&e.base, CIS_DIAG_NET, now)) { COUNT(s, expired); return; }
 	e.phase = 5; e.base.time_ns = now;
+	e.release_ns = now;
+	e.release_flags = BPF_CORE_READ(sample, flags);
 	e.base.cpu = bpf_get_smp_processor_id();
 	e.base.flags = BPF_CORE_READ(sample, context);
 	e.base.stack_id = bpf_get_stackid(ctx, &stacks, 0);
@@ -102,6 +123,13 @@ static __noinline void net_tx_release(void *ctx, struct cis_net_sample *sample)
 		e.actor_tid = bpf_get_current_pid_tgid();
 		e.actor_start = BPF_CORE_READ(task, start_boottime);
 		if (identity(task, &id)) { e.actor_id = id.id; e.actor_generation = id.generation; }
+	}
+	if (e.release_flags & 1) {
+		key.release_ns = now;
+		if (BPF_CORE_READ(sample, release_start_ns) != now ||
+		    bpf_map_update_elem(&net_tx_free, &key, &e, BPF_NOEXIST)) {
+			COUNT(s, rejected); return;
+		}
 	}
 	tx_emit(ctx, &e);
 }

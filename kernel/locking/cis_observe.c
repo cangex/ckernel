@@ -702,6 +702,8 @@ static DEFINE_PER_CPU(unsigned long, cis_tx_callback_ns);
 static DEFINE_PER_CPU(unsigned long, cis_tx_callback_max_ns);
 static DEFINE_PER_CPU(unsigned long, cis_tx_irq_filtered);
 static DEFINE_PER_CPU(unsigned long, cis_tx_nested_skipped);
+static DEFINE_PER_CPU(unsigned long, cis_net_release_ends);
+static DEFINE_PER_CPU(unsigned long, cis_net_release_callback_ns);
 
 static int cis_net_audit_show(struct seq_file *m, void *unused)
 {
@@ -709,18 +711,19 @@ static int cis_net_audit_show(struct seq_file *m, void *unused)
 
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
-	seq_printf(m, "version=4 active=%u release_active=%u tx_active=%u shift=%u source_counter_bytes_per_cpu=%zu snapshot=non_atomic\n",
+	seq_printf(m, "version=5 active=%u release_active=%u tx_active=%u shift=%u source_counter_bytes_per_cpu=%zu snapshot=non_atomic\n",
 		trace_cis_net_state_enabled(), trace_cis_net_skb_release_enabled(),
-		trace_cis_net_tx_enabled(), min(net_shift, 16U), 12 * sizeof(unsigned long));
+		trace_cis_net_tx_enabled(), min(net_shift, 16U), 14 * sizeof(unsigned long));
 	for_each_possible_cpu(cpu)
-		seq_printf(m, "cpu=%d entries=%lu eligible=%lu selected=%lu releases=%lu skipped=%lu tx_entries=%lu tx_selected=%lu tx_callbacks=%lu tx_callback_ns=%lu tx_callback_max_ns=%lu tx_irq_filtered=%lu tx_nested_skipped=%lu\n", cpu,
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu selected=%lu releases=%lu skipped=%lu tx_entries=%lu tx_selected=%lu tx_callbacks=%lu tx_callback_ns=%lu tx_callback_max_ns=%lu tx_irq_filtered=%lu tx_nested_skipped=%lu release_ends=%lu release_callback_ns=%lu\n", cpu,
 			READ_ONCE(per_cpu(cis_net_entries, cpu)), READ_ONCE(per_cpu(cis_net_eligible, cpu)),
 			READ_ONCE(per_cpu(cis_net_selected, cpu)), READ_ONCE(per_cpu(cis_net_releases, cpu)),
 			READ_ONCE(per_cpu(cis_net_skipped, cpu)),
 			READ_ONCE(per_cpu(cis_tx_entries, cpu)), READ_ONCE(per_cpu(cis_tx_selected, cpu)),
 			READ_ONCE(per_cpu(cis_tx_callbacks, cpu)), READ_ONCE(per_cpu(cis_tx_callback_ns, cpu)),
 			READ_ONCE(per_cpu(cis_tx_callback_max_ns, cpu)),
-			READ_ONCE(per_cpu(cis_tx_irq_filtered, cpu)), READ_ONCE(per_cpu(cis_tx_nested_skipped, cpu)));
+			READ_ONCE(per_cpu(cis_tx_irq_filtered, cpu)), READ_ONCE(per_cpu(cis_tx_nested_skipped, cpu)),
+			READ_ONCE(per_cpu(cis_net_release_ends, cpu)), READ_ONCE(per_cpu(cis_net_release_callback_ns, cpu)));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_net_audit);
@@ -848,9 +851,10 @@ out:
 }
 EXPORT_SYMBOL_GPL(__cis_net_event);
 
-void __cis_net_skb_release(struct sk_buff *skb)
+void __cis_net_skb_release(struct sk_buff *skb, struct cis_net_sample *backend)
 {
 	struct cis_net_sample sample;
+	u64 begin;
 
 	preempt_disable();
 	this_cpu_inc(cis_net_releases);
@@ -862,12 +866,52 @@ void __cis_net_skb_release(struct sk_buff *skb)
 	this_cpu_write(cis_in_trace, true);
 	sample = (struct cis_net_sample) { .time_ns = ktime_get_ns(),
 		.skb = skb, .phase = CIS_CN_SKB_RELEASE, .context = cis_net_context() };
+	if (backend) {
+		sample.release_start_ns = sample.time_ns;
+		sample.flags = CIS_RELEASE_BACKEND |
+			(skb->cloned ? CIS_RELEASE_CLONED : 0) |
+			(skb_is_gso(skb) ? CIS_RELEASE_GSO : 0) |
+			(skb_is_nonlinear(skb) ? CIS_RELEASE_NONLINEAR : 0) |
+			(skb->fclone == SKB_FCLONE_ORIG ? CIS_RELEASE_FCLONE_ORIG : 0) |
+			(skb->fclone == SKB_FCLONE_CLONE ? CIS_RELEASE_FCLONE_CLONE : 0);
+	}
+	begin = ktime_get_ns();
 	trace_cis_net_skb_release(&sample);
+	this_cpu_add(cis_net_release_callback_ns, ktime_get_ns() - begin);
+	if (backend) {
+		*backend = sample;
+		backend->release_backend_ns = ktime_get_ns();
+	}
 	this_cpu_write(cis_in_trace, false);
 out:
 	preempt_enable();
 }
 EXPORT_SYMBOL_GPL(__cis_net_skb_release);
+
+void __cis_net_skb_release_end(struct cis_net_sample *sample, bool returned)
+{
+	u64 now = ktime_get_ns(), begin;
+
+	preempt_disable();
+	this_cpu_inc(cis_net_release_ends);
+	if (in_nmi() || this_cpu_read(cis_in_trace)) {
+		this_cpu_inc(cis_net_skipped);
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	/* No dereference of sample->skb after native free. */
+	sample->time_ns = now;
+	sample->phase = CIS_CN_SKB_RELEASE_END;
+	sample->context = cis_net_context();
+	sample->flags |= returned ? CIS_RELEASE_HEADER_RETURNED : CIS_RELEASE_PAIR_RETAINED;
+	this_cpu_write(cis_in_trace, true);
+	begin = ktime_get_ns();
+	trace_cis_net_skb_release(sample);
+	this_cpu_add(cis_net_release_callback_ns, ktime_get_ns() - begin);
+	this_cpu_write(cis_in_trace, false);
+out:
+	preempt_enable();
+}
 EXPORT_TRACEPOINT_SYMBOL_GPL(cis_net_state);
 EXPORT_TRACEPOINT_SYMBOL_GPL(cis_net_skb_release);
 #endif

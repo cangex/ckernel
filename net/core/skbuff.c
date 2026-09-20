@@ -964,10 +964,11 @@ static void skb_free_head(struct sk_buff *skb, bool napi_safe)
 	}
 }
 
-static void skb_release_data(struct sk_buff *skb, enum skb_drop_reason reason,
+static bool skb_release_data(struct sk_buff *skb, enum skb_drop_reason reason,
 			     bool napi_safe)
 {
 	struct skb_shared_info *shinfo = skb_shinfo(skb);
+	bool returned = false;
 	int i;
 
 	if (skb->cloned &&
@@ -991,6 +992,7 @@ free_head:
 		kfree_skb_list_reason(shinfo->frag_list, reason);
 
 	skb_free_head(skb, napi_safe);
+	returned = true;
 exit:
 	/* When we clone an SKB we copy the reycling bit. The pp_recycle
 	 * bit is only set on the head though, so in order to avoid races
@@ -1002,19 +1004,20 @@ exit:
 	 * dataref set to 0, which will trigger the recycling
 	 */
 	skb->pp_recycle = 0;
+	return returned;
 }
 
 /*
  *	Free an skbuff by memory without cleaning the state.
  */
-static void kfree_skbmem(struct sk_buff *skb)
+static bool kfree_skbmem(struct sk_buff *skb)
 {
 	struct sk_buff_fclones *fclones;
 
 	switch (skb->fclone) {
 	case SKB_FCLONE_UNAVAILABLE:
 		kmem_cache_free(skbuff_cache, skb);
-		return;
+		return true;
 
 	case SKB_FCLONE_ORIG:
 		fclones = container_of(skb, struct sk_buff_fclones, skb1);
@@ -1032,9 +1035,10 @@ static void kfree_skbmem(struct sk_buff *skb)
 		break;
 	}
 	if (!refcount_dec_and_test(&fclones->fclone_ref))
-		return;
+		return false;
 fastpath:
 	kmem_cache_free(skbuff_fclone_cache, fclones);
+	return true;
 }
 
 void skb_release_head_state(struct sk_buff *skb)
@@ -1051,13 +1055,24 @@ void skb_release_head_state(struct sk_buff *skb)
 }
 
 /* Free everything but the sk_buff shell. */
+static void skb_release_all_sample(struct sk_buff *skb, enum skb_drop_reason reason,
+				   bool napi_safe, struct cis_net_sample *sample)
+{
+	bool returned;
+
+	cis_net_skb_release(skb, sample);
+	skb_release_head_state(skb);
+	if (likely(skb->head)) {
+		returned = skb_release_data(skb, reason, napi_safe);
+		if (IS_ENABLED(CONFIG_CIS_OBSERVE_NET) && sample && sample->release_start_ns)
+			sample->flags |= returned ? CIS_RELEASE_DATA_RETURNED : CIS_RELEASE_DATA_RETAINED;
+	}
+}
+
 static void skb_release_all(struct sk_buff *skb, enum skb_drop_reason reason,
 			    bool napi_safe)
 {
-	cis_net_skb_release(skb);
-	skb_release_head_state(skb);
-	if (likely(skb->head))
-		skb_release_data(skb, reason, napi_safe);
+	skb_release_all_sample(skb, reason, napi_safe, NULL);
 }
 
 /**
@@ -1071,8 +1086,13 @@ static void skb_release_all(struct sk_buff *skb, enum skb_drop_reason reason,
 
 void __kfree_skb(struct sk_buff *skb)
 {
-	skb_release_all(skb, SKB_DROP_REASON_NOT_SPECIFIED, false);
-	kfree_skbmem(skb);
+	struct cis_net_sample sample;
+	bool returned;
+
+	skb_release_all_sample(skb, SKB_DROP_REASON_NOT_SPECIFIED, false, &sample);
+	returned = kfree_skbmem(skb);
+	/* Only the frozen token is used after skb memory can have been reused. */
+	cis_net_skb_release_end(&sample, returned);
 }
 EXPORT_SYMBOL(__kfree_skb);
 

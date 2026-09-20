@@ -61,7 +61,7 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 	if (profile == 9)
 		return !strcmp(name, "targets") || !strcmp(name, "stacks") ||
 		       !strcmp(name, "net_watched") || !strcmp(name, "net_skb") || !strcmp(name, "net_service") ||
-		       !strcmp(name, "net_tx_live") || !strcmp(name, "net_tx_pending");
+		       !strcmp(name, "net_tx_live") || !strcmp(name, "net_tx_pending") || !strcmp(name, "net_tx_free");
 	if (profile == 10)
 		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"block_watched") || !strcmp(name,"tag_pending") || !strcmp(name,"wb_pending");
 	if (profile == 11)

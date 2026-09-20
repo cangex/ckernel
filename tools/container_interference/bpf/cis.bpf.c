@@ -37,6 +37,7 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __typ
 #if CIS_PROFILE == 9
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u64); __type(value,struct cis_net_tx_event); } net_tx_live SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,struct cis_maple_key); __type(value,struct cis_net_tx_event); } net_tx_pending SEC(".maps");
+struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,struct cis_net_free_key); __type(value,struct cis_net_tx_event); } net_tx_free SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,64); __type(key,__u64); __type(value,struct cis_watch); } net_watched SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,__u64); __type(value,struct cis_net_event); } net_skb SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,256); __type(key,struct cis_net_service_key); __type(value,struct cis_net_event); } net_service SEC(".maps");
@@ -214,6 +215,7 @@ int net_release(struct bpf_raw_tracepoint_args *ctx)
 	struct cis_bpf_stats *s = statistics();
 	COUNT(s, received);
 	net_tx_release(ctx, sample);
+	if (BPF_CORE_READ(sample, phase) != 9) return 0;
 	queued = bpf_map_lookup_elem(&net_skb, &skb);
 	if (!queued) return 0;
 	e = *queued;

@@ -200,12 +200,13 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 		char d[1100];
 		r=cis_registry_lookup(ctx,e->id,e->generation);
 		if(!r) {ctx->unknown++;return;}
-		snprintf(d,sizeof(d),"protocol=2 sample_time_ns=%llu begin_ns=%llu alloc_ns=%llu backend_ns=%llu tid=%llu task_start=%llu skb=0x%llx cookie=%llu socket=0x%llx phase=%u context=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu cpu=%u netns=%u gfp=%u requested=%u stack_id=%d",
+		snprintf(d,sizeof(d),"protocol=3 sample_time_ns=%llu begin_ns=%llu alloc_ns=%llu backend_ns=%llu tid=%llu task_start=%llu skb=0x%llx cookie=%llu socket=0x%llx phase=%u context=%u actor_tid=%llu actor_start=%llu actor_id=%llu actor_generation=%llu cpu=%u netns=%u gfp=%u requested=%u stack_id=%d release_ns=%llu release_backend_ns=%llu release_flags=%u",
 			(unsigned long long)e->time_ns,(unsigned long long)e->sequence_ns,(unsigned long long)e->duration_ns,(unsigned long long)v->backend_ns,
 			(unsigned long long)e->tid,(unsigned long long)v->task_start,(unsigned long long)e->object,
 			(unsigned long long)v->cookie,(unsigned long long)v->socket,v->phase,e->flags,
 			(unsigned long long)v->actor_tid,(unsigned long long)v->actor_start,(unsigned long long)v->actor_id,
-			(unsigned long long)v->actor_generation,e->cpu,v->netns,v->gfp,v->requested,e->stack_id);
+			(unsigned long long)v->actor_generation,e->cpu,v->netns,v->gfp,v->requested,e->stack_id,
+			(unsigned long long)v->release_ns,(unsigned long long)v->release_backend_ns,v->release_flags);
 		cis_report(ctx,"NET_TX",r,d);return;
 	}
 	if(size>=sizeof(struct cis_net_event) && size<=sizeof(struct cis_net_event)+7 && e->type==CIS_NET_EVENT) {

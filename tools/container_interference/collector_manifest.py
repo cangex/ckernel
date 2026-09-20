@@ -82,6 +82,9 @@ COLLECTORS['net']['maps'] += ['net_tx_live', 'net_tx_pending']
 COLLECTORS['net']['source_filter'] += '; protocol 2 entry-frozen TCP send requester and 256 original skb-header lifetimes; fclone backend clock after identity callback, memory admission and release executor separate; no packet payload origin, clone lineage or allocator lock holder inference'
 LEGACY_NET_TX = deepcopy(COLLECTORS['net'])
 COLLECTORS['net']['source_filter'] += '; TCP send allocation begins are process-context only; IRQ-only entries separately counted as outside scope; true recursion and admitted-lifetime gaps still reject quality'
+LEGACY_NET_PROCESS = deepcopy(COLLECTORS['net'])
+COLLECTORS['net']['maps'].append('net_tx_free')
+COLLECTORS['net']['source_filter'] += '; protocol 3 bounded original-header __kfree_skb backend-return tokens; shared data and fclone retention explicit; bulk/NAPI/morph entry alone never implies backend completion'
 COLLECTORS['allocator']['programs'].append('maple_context')
 COLLECTORS['allocator']['maps'].append('maple_pending')
 COLLECTORS['allocator']['source_filter'] += '; 256 task-start keyed Maple allocation brackets join sampled backend calls to destination tree addresses; no lifetime across brackets or inferred tree owner'
@@ -144,7 +147,7 @@ def validate_record_inventory(record):
             raise ValueError('unproven historical FD contract')
         expected=candidate
     if name=='net' and record.get('collector_contract_sha256')!=digest(expected) and record.get('collector_contract_sha256') is not None:
-        for historical in (LEGACY_NET_TX,LEGACY_NET,LEGACY_NET_USE_ONLY):
+        for historical in (LEGACY_NET_PROCESS,LEGACY_NET_TX,LEGACY_NET,LEGACY_NET_USE_ONLY):
             candidate=contract(name)
             for key,value in historical.items(): candidate[key]=deepcopy(value)
             if record.get('collector_contract_sha256')==digest(candidate):

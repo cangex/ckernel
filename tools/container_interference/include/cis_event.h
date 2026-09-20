@@ -103,7 +103,10 @@ struct cis_net_tx_event {
 	__u64 cookie, socket, backend_ns, task_start;
 	__u64 actor_id, actor_generation, actor_tid, actor_start;
 	__u32 phase, netns, gfp, requested;
+	__u64 release_ns, release_backend_ns;
+	__u32 release_flags, reserved;
 };
+struct cis_net_free_key { __u64 skb, release_ns; };
 struct cis_block_event {
 	/* BLOCK does not sample IP/weight: base.ip/weight hold the immutable
 	 * submitter id/generation, base.flags its task flags, base.reserved the
