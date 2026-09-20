@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import prototype_admission
 from session import source_manifest
-from explain import explain
+from explain import explain, MAX_AUDIT_FINDINGS
 from fd_check import check
 from fd_population_check import POPULATION_PLAN, check_population
 from collector_audit import audit as scope_audit
@@ -112,7 +112,10 @@ def run(suite='basic'):
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 raw=(out/'records'/(sid+'.jsonl')).read_bytes()
                 report=explain(record,raw);scope=scope_audit(record,raw)
-                truth=check(report,[(out/name).read_text() for name in names],case)
+                complete_report=explain(record,raw,finding_limit=MAX_AUDIT_FINDINGS)
+                truth=check(complete_report,[(out/name).read_text() for name in names],case)
+                truth['summary_omitted_findings']=report['omitted_findings']
+                truth['audit_finding_limit']=MAX_AUDIT_FINDINGS
                 population=check_population([(out/name).read_text() for name in names],raw,window,case,plan['population'])
                 (out/(label+'-boundaries.json')).write_text(json.dumps(dict(logs=names,groups=boundaries,
                     active_sources=active_sources,idle_sources=observe()),indent=2))

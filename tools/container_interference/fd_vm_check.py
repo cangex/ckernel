@@ -10,7 +10,7 @@ from session_check import extract
 from prototype_admission import SOURCE_KEYS
 from collector_manifest import validate_inventory
 from collector_audit import audit
-from explain import explain
+from explain import explain, MAX_AUDIT_FINDINGS
 from fd_check import check
 from fd_population_check import check_population
 from owner_report import fields
@@ -100,7 +100,10 @@ def verify(serial, output):
         kind=label[:-1]
         names=([label+'g%d-%d.log'%(g,i) for g in range(4) for i in range(2)] if kind=='reuse'
                else [label+'-%d.log'%i for i in range(2)])
-        truth=check(report,[files[prefix+name] for name in names],kind)
+        complete_report=explain(row,capture,finding_limit=MAX_AUDIT_FINDINGS)
+        truth=check(complete_report,[files[prefix+name] for name in names],kind)
+        truth['summary_omitted_findings']=report['omitted_findings']
+        truth['audit_finding_limit']=MAX_AUDIT_FINDINGS
         population=check_population([files[prefix+name] for name in names],capture,row['window'],kind,plan.get('population'))
         retirement=None
         if collector=='fd':

@@ -4,12 +4,48 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'container_interference'))
 from fd_check import check
+from explain import explain, MAX_FINDINGS, MAX_AUDIT_FINDINGS
 
 
 class FDTruthCheck(unittest.TestCase):
+    def test_summary_cannot_certify_omitted_relations(self):
+        report,logs=self.fixture()
+        report.update(omitted_findings=1,finding_count=2)
+        result=check(report,logs,'threads')
+        self.assertIn('omitted_relations_not_audited',result['errors'])
+        self.assertIn('incomplete_relation_population',result['errors'])
+
+    def test_default_explanation_limit_unchanged_and_audit_is_bounded(self):
+        self.assertEqual(MAX_FINDINGS,128)
+        self.assertEqual(MAX_AUDIT_FINDINGS,4096)
+        for limit in (0,-1,4097,True,1.5,'4096'):
+            with self.assertRaisesRegex(ValueError,'bounded explanation'):
+                explain({},b'',finding_limit=limit)
+
+    def test_full_offline_audit_retains_edges_hidden_by_summary(self):
+        record=dict(session_id=1,collector='fd',finalized=True,
+                    root_identities={'root':dict(id=7,generation=1)},
+                    window=dict(start_ns=1,end_ns=1000))
+        edge=dict(level='E2',resource='files_struct_lock',holder=[7,1,41,1],
+                  waiter=[7,1,42,2],wait_begin_ns=10,wait_end_ns=20)
+        owner=dict(edges=[edge]*248,incomplete_intervals=0,bounded_prefix_limits=0)
+        with patch('explain.assess',return_value=dict(status='PASS')), \
+                patch('explain.owner_analyze',return_value=owner), \
+                patch('explain.recommend',return_value=[]):
+            summary=explain(record,b'')
+            full=explain(record,b'',finding_limit=MAX_AUDIT_FINDINGS)
+        self.assertEqual((len(summary['findings']),summary['omitted_findings']),(128,120))
+        self.assertEqual((len(full['findings']),full['omitted_findings']),(248,0))
+        report,logs=self.fixture()
+        edge=report['findings'][0]
+        report['findings']=[edge]*129+[dict(edge,holder=[7,1,(42<<32)|99,1])]
+        result=check(report,logs,'threads')
+        self.assertIn('owner_or_waiter_not_independently_bracketed',result['errors'])
+
     def fixture(self):
         logs=[]
         for container in range(2):

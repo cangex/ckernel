@@ -17,6 +17,9 @@ def check(report, logs, case):
         truth += [json.loads(line.split(' ',1)[1]) for line in text.splitlines() if line.startswith('CIS_FD_TRUTH ')]
     if len(logs)!=(8 if case=='reuse' else 2): errors.append('container_count')
     if report['quality']['status']!='PASS': errors.append('capture_quality')
+    if report.get('omitted_findings',0): errors.append('omitted_relations_not_audited')
+    if report.get('finding_count',len(report['findings']))!=len(report['findings']):
+        errors.append('incomplete_relation_population')
     count=1 if case in ('private','cross') else 2
     if any(row['threads']!=count or row['native']!=int(case=='native') for row in summaries): errors.append('workload_configuration')
     if len(truth)!=(0 if case=='native' else 16*count*len(logs)): errors.append('truth_count')

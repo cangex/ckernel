@@ -16,6 +16,7 @@ from diagnosis_plan import recommend
 
 MAX_BYTES = 16*1024*1024
 MAX_FINDINGS = 128
+MAX_AUDIT_FINDINGS = 4096
 
 
 def analysis_source():
@@ -31,7 +32,10 @@ def within_window(record, begin, end):
             lo <= begin <= end <= hi and lo < hi)
 
 
-def explain(record, raw):
+def explain(record, raw, *, finding_limit=MAX_FINDINGS):
+    # Offline fixture audits must not silently validate only the UI summary.
+    if type(finding_limit) is not int or not 1 <= finding_limit <= MAX_AUDIT_FINDINGS:
+        raise ValueError('bounded explanation finding limit required')
     if len(raw) > MAX_BYTES:
         raise ValueError('raw explanation input exceeds session limit')
     sid = str(record['session_id'])
@@ -127,9 +131,9 @@ def explain(record, raw):
         analysis_source_sha256=analysis_source(),
         source=record.get('source_identity'), raw_sha256=hashlib.sha256(raw).hexdigest(),
         window=record.get('window'), admission_policy=record.get('admission_policy', 'strict'),
-        quality=quality, findings=findings[:MAX_FINDINGS], candidates=candidates,
+        quality=quality, findings=findings[:finding_limit], candidates=candidates,
         unknown=unknown[:MAX_FINDINGS], finding_count=len(findings),
-        omitted_findings=max(0,len(findings)-MAX_FINDINGS), unknown_count=len(unknown),
+        omitted_findings=max(0,len(findings)-finding_limit), unknown_count=len(unknown),
         raw_counts=dict(Counter(e.get('kind', 'unknown') for e in events)),
         performance_certification='NOT_ACCEPTED', total_interference_ns=None,
         explained_at_ns=explained,analysis_boot_id=analysis_boot,same_clock_as_capture=same_clock,
