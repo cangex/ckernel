@@ -100,24 +100,25 @@ def run(args):
     if args.label == 'x1-rwsem-overflow': command[-1] += ' cis_rwsem_test=overflow'
     if args.label == 'x7-rwsem-joint': command[-1] += ' cis_rwsem_test=joint'
     disks=[]
-    if args.label in ('x5-block','x5-writeback','x7-mixed','y3-filesystem'):
+    if args.label in ('x5-block','x5-writeback','x7-mixed','y3-filesystem','y4-io'):
         for i in range(2):
             path=initrd.parent/(stamp+'-disk%d.raw'%i)
             fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR|os.O_NOFOLLOW,0o600)
-            size=(128 if args.label=='y3-filesystem' else 64 if args.label=='x5-writeback' else 16)<<20
+            size=(128 if args.label in ('y3-filesystem','y4-io') else 64 if args.label=='x5-writeback' else 16)<<20
             try: os.ftruncate(fd,size)
             finally: os.close(fd)
-            if args.label in ('x5-writeback','y3-filesystem'):
+            if args.label in ('x5-writeback','y3-filesystem','y4-io'):
                 # Only this just-created regular scratch file, never a host device.
-                features=['-O','^orphan_file' if i==0 else 'orphan_file'] if args.label=='y3-filesystem' else []
+                features=['-O','^orphan_file' if i==0 else 'orphan_file'] if args.label in ('y3-filesystem','y4-io') else []
                 subprocess.run([args.mke2fs,'-t','ext4','-F','-q','-E','lazy_itable_init=0,lazy_journal_init=0',*features,str(path)],check=True)
             disks.append(dict(path=str(path),bytes=size,before_sha256=sha(path),
-                              filesystem='ext4' if args.label in ('x5-writeback','y3-filesystem') else None))
-            if args.label=='y3-filesystem':
+                              filesystem='ext4' if args.label in ('x5-writeback','y3-filesystem','y4-io') else None))
+            if args.label in ('y3-filesystem','y4-io'):
                 disks[-1]['features']=subprocess.check_output([args.dumpe2fs,'-h',str(path)],text=True,stderr=subprocess.DEVNULL)
                 disks[-1]['tool_paths']=dict(mke2fs=args.mke2fs,dumpe2fs=args.dumpe2fs)
-            disk_serial=',serial=cis-y3-fs%d'%i if args.label=='y3-filesystem' else ''
-            command += ['-drive','file=%s,format=raw,if=none,id=cis%d,cache=writeback,aio=threads'%(path,i),
+            disk_serial=',serial=cis-y3-fs%d'%i if args.label in ('y3-filesystem','y4-io') else ''
+            throttle=',bps_wr=33554432' if args.label=='y4-io' else ''
+            command += ['-drive','file=%s,format=raw,if=none,id=cis%d,cache=writeback,aio=threads'%(path,i)+throttle,
                         '-device','virtio-blk-device,drive=cis%d'%i+disk_serial]
     manifest = dict(command=command, disposable_disks=disks,image_sha256=sha(image), initrd_sha256=sha(initrd),
                     source_diagnostics=args.source_diagnostics,performance_eligible=not args.source_diagnostics,
@@ -176,7 +177,7 @@ if __name__ == '__main__':
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
     parser.add_argument('--source-diagnostics', action='store_true',
                         help='bounded recursion troubleshooting; not a performance cohort')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-maple','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x4-net-quota','x4-net-reuse','x4-net-capacity','x4-net-txfailure','x4-net-txadmission','x4-net-txrelease','x4-net-guard','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint','x7-mixed','y0-public','y0-backend','y1-topology','y2-memory','y2-page-fixture','y2-allocator','y3-filesystem'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-maple','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x4-net-quota','x4-net-reuse','x4-net-capacity','x4-net-txfailure','x4-net-txadmission','x4-net-txrelease','x4-net-guard','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint','x7-mixed','y0-public','y0-backend','y1-topology','y2-memory','y2-page-fixture','y2-allocator','y3-filesystem','y4-io'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     parser.add_argument('--mke2fs', default='mkfs.ext4', help='isolated versioned image formatter, no host installation')
     parser.add_argument('--dumpe2fs', default='dumpe2fs', help='matching isolated image feature inspector')
