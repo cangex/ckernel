@@ -11,7 +11,7 @@ import time
 from types import SimpleNamespace
 
 import prototype_admission as admission
-from joint_vm_check import cohort_collectors
+from joint_vm_check import cohort_collectors, cohort_nonce
 from owner_report import fields
 from session import source_manifest
 from source_switches import observe
@@ -114,7 +114,7 @@ def run(group='common'):
             if any(p.poll() is not None for p in running): raise ValueError('workload exited before capture')
             sid=None; report=None; record=None; selected=[targets[i] for i in plan['targets_by_round'][round_number]]
             if mode!='off':
-                sid=request('start',collector=mode,targets=selected,nonce=label)['session_id']
+                sid=request('start',collector=mode,targets=selected,nonce=cohort_nonce(label))['session_id']
                 active=wait(sid,'window'); switches=observe(mode); done=wait(sid,'finalized')
                 record=json.loads((out/'records'/(sid+'.json')).read_text())
                 if not done.get('objects_absent') or done['state']=='FAULTED': raise ValueError('unverified capture cleanup')

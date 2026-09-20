@@ -1,9 +1,20 @@
 # SPDX-License-Identifier: GPL-2.0
 import unittest
-from joint_vm_check import workload,cpu_snapshot,cohort_collectors
+from joint_vm_check import workload,cpu_snapshot,cohort_collectors,cohort_nonce
+from session import validate
 
 
 class JointValidation(unittest.TestCase):
+    def test_new_cohort_nonces_obey_protocol_without_collisions(self):
+        for group in ('public', 'backend-compare'):
+            labels=[m+str(r) for r in range(3)
+                    for m in cohort_collectors('cis-y0-joint-plan-v1',group)]
+            nonces=[cohort_nonce(v) for v in labels]
+            self.assertEqual(len(nonces),len(set(nonces)))
+            for label in labels:
+                validate(dict(version=1,op='start',collector=label[:-1],
+                              targets=['1:1'],nonce=cohort_nonce(label)))
+
     def test_old_cohort_does_not_gain_new_collector_credit(self):
         self.assertNotIn('slub',cohort_collectors('cis-x7-joint-plan-v1'))
         self.assertIn('slub',cohort_collectors('cis-x7-joint-plan-v2'))

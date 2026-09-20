@@ -19,6 +19,10 @@ JOINT_COLLECTORS_V1 = ('ip','owner','fd','sched','reclaim','sync','counter','all
 JOINT_COLLECTORS = JOINT_COLLECTORS_V1 + ('slub',)
 
 
+def cohort_nonce(label):
+    return label.replace('_', '')
+
+
 def cohort_collectors(schema, group=None):
     if schema == 'cis-y0-joint-plan-v1' and group == 'public':
         return ('ip','counter','alloc_backend','slub','sched','reclaim','block')
@@ -100,7 +104,7 @@ def check(serial,output):
         cost=None; relations=[]
         if mode!='off':
             sid=evidence['session_id']; record=value('records/'+sid+'.json')
-            if record['collector']!=mode or record['nonce']!=label or record['targets']!=evidence['targets']: errors.append('record_binding_'+label)
+            if record['collector']!=mode or record['nonce']!=cohort_nonce(label) or record['targets']!=evidence['targets']: errors.append('record_binding_'+label)
             if any(record.get(k)!=plan['source'][k] for k in SOURCE_KEYS): errors.append('record_source_'+label)
             capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode(); report=analyze(record,capture)
             if report['quality']['status']!='PASS' or report['scope_audit'].get('status','PASS')!='PASS': errors.append('capture_quality_'+label)
