@@ -21,7 +21,7 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     lease_tests=value('lease-checks.json')
     if lease_tests.get('status')!='PASS' or lease_tests.get('checks')!=[
-            'invalid_input','invalid_fd','non_ext4_rejected','exclusive','immutable',
+            'invalid_input','invalid_fd','non_ext4_rejected','exclusive','immutable','read_offset_rejected',
             'inherited_fd_not_authority','new_lease_generation']:
         errors.append('lease_control')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_FILESYSTEM_UNLOAD=0' not in text.splitlines():

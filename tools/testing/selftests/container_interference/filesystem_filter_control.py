@@ -27,10 +27,12 @@ def check():
         denied(lambda:os.write(fd,b'999999\n'),errno.EBADF); checks.append('invalid_fd')
         denied(lambda:os.write(fd,str(proc).encode()),errno.EINVAL); checks.append('non_ext4_rejected')
         denied(lambda:os.open(endpoint,os.O_RDWR),errno.EBUSY); checks.append('exclusive')
-        os.write(fd,('%d\n'%directory).encode()); row=fields(os.read(fd,160).decode())
+        os.write(fd,('%d\n'%directory).encode())
+        denied(lambda:os.write(fd,('%d\n'%directory).encode()),errno.EBUSY); checks.append('immutable')
+        row=fields(os.read(fd,160).decode())
         if row.get('version')!=1 or not row.get('lease'): raise ValueError('lease readback')
         generations.append(row['lease'])
-        denied(lambda:os.write(fd,('%d\n'%directory).encode()),errno.EBUSY); checks.append('immutable')
+        denied(lambda:os.write(fd,('%d\n'%directory).encode()),errno.EINVAL); checks.append('read_offset_rejected')
         child=os.fork()
         if not child:
             try:
