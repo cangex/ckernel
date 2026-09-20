@@ -321,6 +321,8 @@ def replay(index,base,output):
             evidence=[e['name'] for e in cohort],causal='NOT_ESTABLISHED',production='NOT_ACCEPTED'))
     prototype=assess_prototype(evidence)
     return dict(schema='cis-coverage-matrix-v1',status=prototype['status'],rows=matrix,evidence=evidence,
+        audit_source_sha256={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                             for name in ('coverage_matrix.py','prototype_contract.py')},
         x7_complete=prototype['x7_complete'],prototype_contract=prototype,
         remaining_joint=[name+': '+item for name,stage in prototype['stages'].items() for item in stage['missing']],
         interpretation='PASS_SCOPED仅证明对应原始批次及支持范围；不继承为未来版本通过，不将unknown算PASS')
