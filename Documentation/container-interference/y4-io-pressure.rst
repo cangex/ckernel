@@ -1,7 +1,9 @@
 Y4 public I/O pressure additions
 ===============================
 
-Status: implementation in progress, not runtime accepted.
+Status: PASS_SCOPED for the bounded implementation and isolated runtime cases
+in y4-validation-20260920.rst. Complete tag occupancy, causal blockers and Y7
+combined overhead are not accepted by that result.
 
 The existing bounded block collector retains request submitter, issue-local
 bio billing, writeback executor and writeback memcg separately. Two additions
