@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 
 from explain import explain
@@ -152,6 +153,16 @@ def analyze(record,raw):
             'resource address must not be joined across boot/session without verified lifetime',
             'empty findings or rejected quality do not prove interference absent',
             'this report does not infer E3 from any hotspot or interval overlap'])
+    # The base summary is built before specialist analysis.  Timestamp the
+    # complete in-memory explanation, not that earlier intermediate result.
+    finished=time.monotonic_ns()
+    end=(record.get('window') or {}).get('end_ns')
+    same_clock=base.get('same_clock_as_capture') is True
+    result['timing'].update(explained_at_ns=finished,
+        analysis_boot_id=base.get('analysis_boot_id'),same_clock_as_capture=same_clock,
+        explanation_boundary='unified_analysis_complete_before_serialization',
+        explanation_lag_ns=finished-end if same_clock and isinstance(end,int) and finished>=end else None,
+        base_explanation_lag_ns=base.get('explanation_lag_ns'))
     return result
 
 

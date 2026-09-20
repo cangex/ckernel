@@ -16,6 +16,35 @@ from survey import summarize
 from unified_report import analyze
 
 
+def saved_timing(record,raw,saved):
+    """Keep guest timing separate from this verifier's offline replay clock."""
+    if (saved.get('schema')!='cis-explanation-v2' or
+            any(saved.get(k)!=record.get(k) for k in ('boot_id','session_id','collector','window')) or
+            saved.get('raw_sha256')!=hashlib.sha256(raw).hexdigest() or
+            saved.get('quality',{}).get('status')!='PASS'):
+        raise ValueError('saved explanation identity or raw evidence mismatch')
+    timing=saved['timing']; base=saved['base']
+    modern='explanation_boundary' in timing
+    clock=timing if modern else base
+    end=record['window']['end_ns']; finished=clock.get('explained_at_ns')
+    if (clock.get('analysis_boot_id')!=record['boot_id'] or
+            clock.get('same_clock_as_capture') is not True or
+            not isinstance(finished,int) or finished<end or
+            timing.get('explanation_lag_ns')!=finished-end):
+        raise ValueError('saved explanation requires matching monotonic capture clock')
+    boundary=timing.get('explanation_boundary','legacy_base_summary_only')
+    if modern and (boundary!='unified_analysis_complete_before_serialization' or
+            finished<base['explained_at_ns']):
+        raise ValueError('unsupported or premature full explanation boundary')
+    diagnosis=(record.get('scheduled') or {}).get('diagnosis',{})
+    if (timing.get('specialist_queue_wait_ns')!=diagnosis.get('queue_wait_ns') or
+            timing.get('sample_age_at_specialist_admit_ns')!=diagnosis.get('sample_age_ns') or
+            timing.get('periodic_wait_ns')!='NOT_INFERRED'):
+        raise ValueError('saved queue timing differs from controller record')
+    return dict(timing,explanation_boundary=boundary,provenance='saved_same_boot_guest_report',
+        includes_serialization_or_delivery=False)
+
+
 def check(text):
     files=extract(text); prefix='/tmp/diagnosis-evidence/'
     def value(path): return json.JSONDecoder().raw_decode(files[prefix+path].lstrip())[0]
@@ -37,12 +66,14 @@ def check(text):
     reference=next(r for r in records if r['session_id']==checks['real_reference']['session'])
     pressure=next(r for r in records if r['session_id']==checks['real_pressure_to_two_candidates']['session'])
     last_end=max(r['window']['end_ns'] for r in records)
+    cpu_starts=[]
     for mode,first in (('syscalls',reference),('cpu',pressure)):
         for role in range(2):
             rows=[fields(r) for r in files[prefix+'%s-%d.log'%(mode,role)].splitlines() if r.startswith('CIS_ROUTE_WORK ')]
             if (len(rows)!=1 or rows[0].get('operations',0)<=0 or
                     not rows[0]['begin_ns']<first['window']['start_ns']<last_end<rows[0]['end_ns']):
                 errors.append('workload_window_coverage')
+            if mode=='cpu' and len(rows)==1: cpu_starts.append(rows[0]['begin_ns'])
     with tempfile.TemporaryDirectory() as tmp:
         for record in records:
             sid=record['session_id']; raw=files[prefix+'records/'+sid+'.jsonl'].encode()
@@ -50,7 +81,9 @@ def check(text):
             if assess(record)['status']!='PASS': errors.append('record_quality')
             report=analyze(record,raw)
             if report['quality']['status']!='PASS' or report['scope_audit'].get('status','PASS')!='PASS': errors.append('explanation_quality')
-            relations[sid]=dict(collector=record['collector'],relations=len(report['relations']),timing=report['timing'])
+            live=saved_timing(record,raw,value(sid+'-explanation.json'))
+            relations[sid]=dict(collector=record['collector'],relations=len(report['relations']),
+                timing=live,offline_replay_timing=report['timing'])
             if record['collector']=='ip':
                 path=Path(tmp)/(sid+'.jsonl'); path.write_bytes(raw)
                 rebuilt=summarize(record,path,previous,plan['min_samples'])
@@ -89,10 +122,24 @@ def check(text):
     if last_queue['auto_started']!=2 or last_queue['enabled'] or last_queue['items']: errors.append('restart_budget')
     if not ops('survey_epoch') or not ops('schedule_pause'): errors.append('cleanup_operations')
     validate_sources(result['idle_sources'],None,max(r['window']['end_ns'] for r in records),2**64-1)
+    candidates=checks['real_pressure_to_two_candidates']['candidates']
+    discovery=[]
+    for candidate in candidates:
+        enqueued=candidate['enqueued_ns']
+        if (candidate['source_session']!=pressure['session_id'] or
+                candidate['source_end_ns']!=pressure['window']['end_ns'] or
+                len(cpu_starts)!=2 or enqueued<pressure['window']['end_ns']):
+            errors.append('candidate_timing_identity'); continue
+        discovery.append(dict(target=candidate['target'],candidate_id=candidate['candidate_id'],
+            pressure_start_ns_range=[min(cpu_starts),max(cpu_starts)],candidate_enqueued_ns=enqueued,
+            pressure_start_to_candidate_ns_range=[enqueued-max(cpu_starts),enqueued-min(cpu_starts)],
+            source_end_to_candidate_ns=enqueued-pressure['window']['end_ns'],
+            meaning='fixture pressure onset to candidate, includes periodic slot wait; not general incident detection'))
     return dict(schema='cis-x6-check-v1',status='FAIL' if errors else 'PASS',errors=sorted(set(errors)),
         records=len(records),automatic=len(automatic),manual=len(manual),reports=relations,
         serial_sha256=hashlib.sha256(text.encode()).hexdigest(),source=plan['source'],
-        performance_certification='NOT_ACCEPTED',periodic_wait='schedule-specific, not explanation lag')
+        performance_certification='NOT_ACCEPTED',periodic_wait='schedule-specific, not explanation lag',
+        discovery_timing=discovery)
 
 
 if __name__=='__main__':

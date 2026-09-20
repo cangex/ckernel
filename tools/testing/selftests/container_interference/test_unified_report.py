@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 import json
 import unittest
+from unittest.mock import patch
 import test_block_report
 import test_counter_report
 import test_net_report
@@ -22,6 +23,31 @@ def encode(rows):
 
 
 class UnifiedReport(unittest.TestCase):
+    def test_timing_covers_specialist_analysis_not_only_base_summary(self):
+        fixture=test_block_report.BlockReport(); record=fixture.record()
+        record['boot_id']='same-boot'
+        from unified_report import explain
+        base=explain(record,b'')
+        base.update(same_clock_as_capture=True,analysis_boot_id='same-boot',explanation_lag_ns=5)
+        end=record['window']['end_ns']
+        with patch('unified_report.explain',return_value=base),patch('unified_report.time.monotonic_ns',return_value=end+100):
+            timing=analyze(record,encode([fixture.row(10,1),fixture.row(20,3),fixture.row(30,5)]))['timing']
+        self.assertEqual(timing['explanation_lag_ns'],100)
+        self.assertEqual(timing['base_explanation_lag_ns'],5)
+        self.assertEqual(timing['explanation_boundary'],'unified_analysis_complete_before_serialization')
+        self.assertEqual(timing['periodic_wait_ns'],'NOT_INFERRED')
+
+    def test_offline_clock_or_negative_interval_cannot_be_live_latency(self):
+        fixture=test_block_report.BlockReport(); record=fixture.record()
+        from unified_report import explain
+        base=explain(record,b'')
+        end=record['window']['end_ns']
+        for same,now in ((False,end+100),(True,end-1)):
+            base['same_clock_as_capture']=same
+            with patch('unified_report.explain',return_value=base),patch('unified_report.time.monotonic_ns',return_value=now):
+                timing=analyze(record,encode([]))['timing']
+            self.assertIsNone(timing['explanation_lag_ns'])
+
     def test_background_billing_is_visible_without_fabricated_dirtier(self):
         f=test_block_report.BlockReport()
         result=analyze(f.record(),encode(f.async_rows(submitter_start=0,actor_start=0)))
