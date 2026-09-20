@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0
 import unittest
+import copy
 from pathlib import Path
 import test_net_tx
 from net_source_audit import delta
+import net_release_check
 
 
 class NetRelease(unittest.TestCase):
@@ -91,6 +93,45 @@ class NetRelease(unittest.TestCase):
         self.assertEqual(r['totals']['release_ends'],1)
         self.assertEqual(r['totals']['release_callback_ns'],10)
         self.assertEqual(r['counter_bytes'],112)
+
+
+class ReleaseTruth(unittest.TestCase):
+    def fixture(self, cloned=False):
+        rows=[]; logs=[]
+        for actor in (0,1):
+            who=actor+1
+            flags=65|(8 if cloned else 0)
+            for time,phase in ((15,1),(20,2),(40,5),(50,7)):
+                args=dict(who=who,skb=77+actor,release_flags=flags if phase==5 else
+                          flags|(2|4 if cloned else 256|512) if phase==7 else 0)
+                rows.append(NetRelease().row(time,phase,**args))
+            r=dict(actor=actor,cookie=21+actor,clone=int(cloned),original=77+actor,
+                   child=177+actor if cloned else 0,data_refs=2 if cloned else 1,
+                   header_refs=2 if cloned else 1,send_begin=9,send_end=21,
+                   inspect_begin=25,inspect_end=30,close_begin=35,close_end=55,
+                   child_begin=60 if cloned else 0,child_end=70 if cloned else 0)
+            logs.append('CIS_NET_RELEASE '+' '.join('%s=%s'%p for p in r.items()))
+        report=test_net_tx.NetTx().run_rows(rows)
+        return ['txclone' if cloned else 'txplain',dict(start_ns=1,end_ns=100),logs,report,
+                [dict(id=1,generation=1),dict(id=2,generation=1)]]
+
+    def test_both_native_reference_outcomes(self):
+        for cloned in (False,True):
+            args=self.fixture(cloned)
+            r=net_release_check.check(*args)
+            self.assertEqual(r['status'],'PASS',r); self.assertEqual(r['matched'],2)
+
+    def test_bad_truth_or_backend_identity_rejected(self):
+        for mutation in ('refs','window','requester','child_owner','missing_end'):
+            args=copy.deepcopy(self.fixture(True))
+            if mutation=='refs': args[2][0]=args[2][0].replace('header_refs=2','header_refs=1')
+            if mutation=='window': args[2][0]=args[2][0].replace('close_end=55','close_end=49')
+            e=args[3]['tx']['episodes'][0]
+            if mutation=='requester': e['requester'][0]=2
+            if mutation=='child_owner':
+                extra=copy.deepcopy(e); extra['skb_address']=177; args[3]['tx']['episodes'].append(extra)
+            if mutation=='missing_end': e['release_backend_status']='UNOBSERVED'
+            self.assertEqual(net_release_check.check(*args)['status'],'FAIL',mutation)
 
 
 if __name__=='__main__': unittest.main()

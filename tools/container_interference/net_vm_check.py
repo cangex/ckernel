@@ -12,6 +12,7 @@ from session_check import extract
 from source_switches import validate
 from net_tx_failure_check import CASES as TX_FAILURE_CASES
 from net_tx_admission_check import CASES as TX_ADMISSION_CASES
+from net_release_check import CASES as TX_RELEASE_CASES
 
 
 def verify(serial,output):
@@ -21,9 +22,12 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     cases=tuple(plan.get('cases',[]))
-    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,TX_FAILURE_CASES,TX_ADMISSION_CASES,('backlog',),('capacity',)): raise ValueError('unsupported frozen case set')
+    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,TX_FAILURE_CASES,TX_ADMISSION_CASES,TX_RELEASE_CASES,('backlog',),('capacity',)): raise ValueError('unsupported frozen case set')
     txfailure=cases==TX_FAILURE_CASES
     txadmission=cases==TX_ADMISSION_CASES
+    txrelease=cases==TX_RELEASE_CASES
+    if txrelease and (plan.get('send_bytes')!=128 or plan.get('tx_release_validation') is not True):
+        errors.append('release_plan')
     if txadmission:
         if (value('tx-memory-original.json')!=value('tx-memory-restored.json') or
                 value('tx-memory-seed.json').get('bytes')!=4<<20 or
@@ -55,7 +59,7 @@ def verify(serial,output):
         errors.append('guest_exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
     if (plan.get('order')!=case_order(cases) or plan.get('rounds')!=3 or
-            plan.get('net_shift')!=0 or plan.get('hold_ms')!=30 or plan.get('operations')!=(24 if txadmission else 8 if txfailure else 4)): errors.append('frozen_plan')
+            plan.get('net_shift')!=0 or plan.get('hold_ms')!=30 or plan.get('operations')!=(1 if txrelease else 24 if txadmission else 8 if txfailure else 4)): errors.append('frozen_plan')
     if cases==('backlog',) and (plan.get('unheld_drain_transfers')!=1 or plan.get('drain_offset_ms')!=450 or
                               plan.get('skb_release_not_bounded_by_recv_return') is not True): errors.append('drain_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS): errors.append('source_binding')
@@ -76,7 +80,10 @@ def verify(serial,output):
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:
             validate(ev['active_sources'],None,0,2**64-1); validate(ev['idle_sources'],None,0,2**64-1)
-        if txadmission:
+        if txrelease:
+            from net_release_check import check as check_release
+            result=check_release(label.split('-')[0],ev['window'],logs,report,identities)
+        elif txadmission:
             from net_tx_admission_check import check as check_tx_admission
             if ev['memory_restored']['tcp_mem'].split()!=value('tx-memory-original.json')['tcp_mem'].split():
                 errors.append('memory_restore_'+label)
@@ -101,7 +108,7 @@ def verify(serial,output):
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result,source_audit=source))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
-        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native TCP memory admission rejection' if txadmission else
+        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native original skb backend return and retained clone' if txrelease else 'native TCP memory admission rejection' if txadmission else
             'native TCP send backend failure and recovery' if txfailure else 'native TCP logical lock fixture only',
         x4_status='INCOMPLETE',performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result

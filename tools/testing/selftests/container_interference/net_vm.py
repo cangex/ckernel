@@ -28,7 +28,7 @@ def tcp_pair():
         except BaseException: client.close(); raise
 
 
-def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,txadmission=False):
+def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,txadmission=False,txrelease=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/net_shift').read_text().strip()!='0':
@@ -58,11 +58,18 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
     if txadmission:
         from net_tx_admission_check import CASES as admission_cases
         cases=admission_cases
+    if txrelease:
+        from net_release_check import CASES as release_cases
+        cases=release_cases
     plan=dict(order=case_order(cases),cases=list(cases),rounds=3,operations=4,roots=2,net_shift=0,
         window_ms=2000,cpu=[0,1],management_cpu=7,memory_max_bytes=64<<20,
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
         scope='logical lock fixture with deliberate bounded sleep while held, not ordinary application cost acceptance')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    if txrelease:
+        plan.update(operations=1,send_bytes=128,tx_release_validation=True,
+                    scope='native TCP_REPAIR original-header release and real retained skb_clone, no wire-delivery claim')
+        (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if txfailure:
         plan.update(operations=8,send_bytes=128,operation_spacing_ms=100,tx_failure_validation=True,
                     scope='native task/cache-filtered failslab, same-socket unmarked recovery and private normal actor',
@@ -133,9 +140,12 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
             client,server=socket.socketpair(socket.AF_UNIX,socket.SOCK_SEQPACKET) if rights else tcp_pair()
             sockets.extend((client,server)); selected=[client,server] if rights else [server,server]
             peers=[]
-            if txfailure or txadmission:
+            if txfailure or txadmission or txrelease:
                 other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server))
                 selected=[server,other_server]; peers=[client,other_client]
+            if txrelease:
+                from net_tx_admission import repair
+                for sock in selected: repair(sock,1<<20)
             if case=='backlog': selected=[server,client]
             if case=='private':
                 other_client,other_server=tcp_pair(); sockets.extend((other_client,other_server)); selected[1]=other_server
@@ -170,12 +180,15 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
                     workload='/net_tx_failure_workload'; extra=[str(peers[i].fileno())]; passed=(fd,peers[i].fileno())
                 if txadmission:
                     workload='/net_tx_admission_workload'; extra=[str(child_channels[i].fileno())]; passed=(fd,child_channels[i].fileno())
+                if txrelease: workload='/net_release_workload'
                 child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case]
                     +(['origin'] if origin else [])+extra,stdout=handle,stderr=handle,pass_fds=passed)
                 children.append(child); running.append(child)
             if txfailure:
                 for sock in sockets: sock.close()
                 sockets.clear()
+            if txrelease:
+                for sock in selected: sock.close()
             if txadmission:
                 for sock in selected+child_channels: sock.close()
                 for channel in channels:
@@ -200,7 +213,10 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
                 if not row.get('objects_absent'): raise ValueError('capture cleanup')
             else: idle=observe(None)
-            if txadmission:
+            if txrelease:
+                from net_release_check import check as check_release
+                result=check_release(case,window,logs,report,identities)
+            elif txadmission:
                 from net_tx_admission_check import check as check_tx_admission
                 result=check_tx_admission(case,window,logs,limited,restored,report,identities)
             elif txfailure:
@@ -253,4 +269,5 @@ if __name__=='__main__':
     group.add_argument('--capacity',action='store_true')
     group.add_argument('--txfailure',action='store_true')
     group.add_argument('--txadmission',action='store_true')
-    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure,a.txadmission)
+    group.add_argument('--txrelease',action='store_true')
+    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure,a.txadmission,a.txrelease)
