@@ -24,6 +24,7 @@ TEST_GEN_PROGS += page_backend_workload
 TEST_GEN_PROGS += page_fixture_workload
 TEST_GEN_PROGS += filesystem_workload
 TEST_GEN_PROGS += io_pressure_workload
+TEST_GEN_PROGS += queue_workload
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
