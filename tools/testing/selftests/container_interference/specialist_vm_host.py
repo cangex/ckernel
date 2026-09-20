@@ -116,8 +116,9 @@ def run(args):
             if args.label=='y3-filesystem':
                 disks[-1]['features']=subprocess.check_output([args.dumpe2fs,'-h',str(path)],text=True,stderr=subprocess.DEVNULL)
                 disks[-1]['tool_paths']=dict(mke2fs=args.mke2fs,dumpe2fs=args.dumpe2fs)
+            serial=',serial=cis-y3-fs%d'%i if args.label=='y3-filesystem' else ''
             command += ['-drive','file=%s,format=raw,if=none,id=cis%d,cache=writeback,aio=threads'%(path,i),
-                        '-device','virtio-blk-device,drive=cis%d'%i]
+                        '-device','virtio-blk-device,drive=cis%d'%i+serial]
     manifest = dict(command=command, disposable_disks=disks,image_sha256=sha(image), initrd_sha256=sha(initrd),
                     source_diagnostics=args.source_diagnostics,performance_eligible=not args.source_diagnostics,
                     host_cpus=cpu_map, manager_cpu=112, host_exclusive=False, scope='isolated_KVM_only',

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import struct
 import subprocess
 import time
 from types import SimpleNamespace
@@ -16,10 +17,29 @@ from y3_filesystem_check import CASES,case_order,check_case
 from filesystem_filter_control import check as check_filter
 
 
+def filesystem_layout():
+    rows=[]
+    for i in range(2):
+        nodes=[p for p in Path('/sys/class/block').glob('vd*')
+               if (p/'serial').read_text().strip()=='cis-y3-fs%d'%i]
+        if len(nodes)!=1: raise ValueError('unique scratch disk identity required')
+        device=Path('/dev')/nodes[0].name
+        with device.open('rb',buffering=0) as stream:
+            stream.seek(1024); sb=stream.read(1024)
+        compat=struct.unpack_from('<I',sb,92)[0]
+        if struct.unpack_from('<H',sb,56)[0]!=0xef53 or bool(compat&0x1000)!=bool(i):
+            raise ValueError('scratch filesystem feature mismatch')
+        if os.stat('/fs%d'%i).st_dev!=device.stat().st_rdev: raise ValueError('scratch mount mismatch')
+        rows.append(dict(serial='cis-y3-fs%d'%i,device=str(device),mount='/fs%d'%i,
+                         uuid=sb[104:120].hex(),compat=compat,orphan_file=bool(compat&0x1000)))
+    return rows
+
+
 def run():
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=admission.environment(); admission.check_environment(env)
     out=Path('/tmp/y3-filesystem-evidence'); out.mkdir(mode=0o700)
+    (out/'filesystem-layout.json').write_text(json.dumps(filesystem_layout(),indent=2))
     (out/'lease-checks.json').write_text(json.dumps(check_filter(),indent=2))
     root=Path('/sys/fs/cgroup/cis-y3-fs'); root.mkdir(); (root/'management').mkdir()
     (root/'management/cgroup.procs').write_text(str(os.getpid()))

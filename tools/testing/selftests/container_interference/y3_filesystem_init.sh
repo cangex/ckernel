@@ -18,11 +18,19 @@ for module in virtio_blk mbcache jbd2 ext4; do
         exit 91
     fi
 done
-if ! mount -t ext4 /dev/vda /fs0 || ! mount -t ext4 /dev/vdb /fs1; then
-    echo CIS_PROFILE_VM_EXIT=92
-    poweroff -f
-    exit 92
-fi
+for index in 0 1; do
+    device=
+    for candidate in /sys/class/block/vd*; do
+        if [ "$(cat "$candidate/serial")" = "cis-y3-fs$index" ]; then
+            device=/dev/$(basename "$candidate")
+        fi
+    done
+    if [ -z "$device" ] || ! mount -t ext4 "$device" "/fs$index"; then
+        echo CIS_PROFILE_VM_EXIT=92
+        poweroff -f
+        exit 92
+    fi
+done
 /usr/bin/python3 /profile/y3_filesystem_vm.py
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"

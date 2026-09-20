@@ -20,9 +20,14 @@ def verify(serial,output):
     output.mkdir(mode=0o700); errors=[]; states=[]; leases=[]
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     lease_tests=value('lease-checks.json')
+    layout=value('filesystem-layout.json')
+    if (len(layout)!=2 or len({r['uuid'] for r in layout})!=2 or
+            any(r.get('serial')!='cis-y3-fs%d'%i or r.get('mount')!='/fs%d'%i or
+                r.get('orphan_file') is not bool(i) or bool(r.get('compat',0)&0x1000)!=bool(i)
+                for i,r in enumerate(layout))): errors.append('scratch_filesystem_identity')
     if lease_tests.get('status')!='PASS' or lease_tests.get('checks')!=[
             'invalid_input','invalid_fd','non_ext4_rejected','exclusive','immutable','read_offset_rejected',
-            'inherited_fd_not_authority','new_lease_generation']:
+            'inherited_fd_not_authority','new_lease_generation','close_attached_and_replace_after_detach']:
         errors.append('lease_control')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or 'CIS_FILESYSTEM_UNLOAD=0' not in text.splitlines():
         errors.append('guest_exit_or_unload')
