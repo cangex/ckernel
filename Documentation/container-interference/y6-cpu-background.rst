@@ -4,6 +4,18 @@ Y6: selected-CPU execution and background intervals
 Implementation contract (scoped VM runtime accepted)
 ----------------------------------------------------
 
+Protocol 3 retains the complete selected-CPU switch/migration/work stream but
+replaces the overlapping sched_stat_wait perf stream with terminal per-CPU,
+per-root count/sum/max aggregates. Eight fixed slots per CPU use the existing
+per-CPU map, adding 352 bytes per possible CPU, independent of container count.
+Unknown identity and exhausted slots have separate count/sum totals and are
+never attributed to a root. No hot global lock or counter is added. Native
+wait sums are completion-accounted, may begin before the window and cannot be
+added to reconstructed switch waits. Per-event native-wait timing is no longer
+provided in protocol 3. Source entry counts still include every callback;
+all entry, CPU, data, memory and cleanup limits remain unchanged. Protocol 2
+raw evidence remains readable for historical validation.
+
 An explicitly selected set of at most eight online CPUs, disjoint from the
 observer's management affinity, is observed for at most the existing bounded
 specialist window. Native scheduler, IRQ, softirq

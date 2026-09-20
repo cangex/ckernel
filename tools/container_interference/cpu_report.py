@@ -147,15 +147,19 @@ def analyze(record,raw):
     if (not isinstance(cpus,list) or not 1<=len(cpus)<=8 or any(type(c) is not int or not 0<=c<512 for c in cpus)
             or len(set(cpus))!=len(cpus)): raise ValueError('CPU selection required')
     base=explain(record,raw); scope=audit(record,raw); rows=[]; selected=[]; excluded=Counter(); irq_totals=[]
+    wait_audit=[];wait_totals=[];protocols=set()
     identities=dict(record.get('root_identities',{})); identities.update(record.get('owner_identities',{}))
     known={(r['id'],r['generation']) for r in identities.values()}
     for line in raw.splitlines():
         r=json.loads(line)
         if r.get('kind')=='cpu_selection': selected.append(fields(r.get('detail','')))
         if r.get('kind')=='cpu_irq_audit': irq_totals.append(fields(r.get('detail','')))
+        if r.get('kind')=='cpu_wait_audit': wait_audit.append(fields(r.get('detail','')))
+        if r.get('kind')=='cpu_wait_total': wait_totals.append(fields(r.get('detail','')))
         if r.get('kind')!='CPU_POINT': continue
         d=fields(r.get('detail',''))
-        if (set(d)!=KEYS or any(type(v) is not int or v<0 for v in d.values()) or d['protocol']!=2 or
+        if (set(d)!=KEYS or any(type(v) is not int or v<0 for v in d.values()) or d['protocol'] not in (2,3) or
+                (d['protocol']==3 and d['phase']==3) or
                 d['phase'] not in (1,2,3,8,9) or d['cpu']>=512 or d['destination']>=512 or d['flags'] not in (0,1) or
                 d['irq_valid'] not in (0,1) or
                 not within_window(record,d['time_ns'],d['time_ns']) or d['time_ns']>=record['window']['end_ns']):
@@ -167,6 +171,7 @@ def analyze(record,raw):
                 d['phase'] in (8,9) and not (d['tid'] and d['object'] and d['function'])):
             excluded['context']+=1; continue
         if len(rows)>=MAX_POINTS: excluded['point_capacity']+=1; continue
+        protocols.add(d['protocol'])
         rows.append(d)
     expected=[dict(cpu=c,count=len(cpus),readback=1) for c in cpus]
     if selected!=expected: excluded['selection_readback']+=1
@@ -175,6 +180,23 @@ def analyze(record,raw):
             any(type(x) is not int or x<0 for x in v.values()) or v['protocol']!=2 or
             v['detached']!=1 or v['sequence']%2 for v in irq_totals)):
         excluded['irq_terminal_audit']+=1
+    if len(protocols)>1: excluded['mixed_cpu_protocol']+=1
+    if 3 in protocols or wait_audit or wait_totals:
+        if ([v.get('cpu') for v in wait_audit]!=cpus or any(
+                set(v)!=set('protocol cpu capacity unknown_count unknown_ns overflow_count overflow_ns detached'.split()) or
+                any(type(x) is not int or x<0 for x in v.values()) or v['protocol']!=3 or v['capacity']!=8 or v['detached']!=1
+                for v in wait_audit)):
+            excluded['wait_terminal_audit']+=1
+        seen=set();slots=set()
+        for v in wait_totals:
+            if (set(v)!=set('protocol cpu slot actor_id actor_generation count total_ns max_ns detached'.split()) or
+                    any(type(x) is not int or x<0 for x in v.values()) or v['protocol']!=3 or v['detached']!=1 or
+                    v['cpu'] not in cpus or not 0<=v['slot']<8 or not v['count'] or v['max_ns']>v['total_ns'] or
+                    (v['actor_id'],v['actor_generation']) not in known):
+                excluded['wait_total_schema']+=1;continue
+            key=(v['cpu'],v['actor_id'],v['actor_generation']);slot=(v['cpu'],v['slot'])
+            if key in seen or slot in slots: excluded['wait_total_duplicate']+=1
+            seen.add(key);slots.add(slot)
     result=timeline(rows,set(cpus)); quality=base['quality']
     if excluded or result['defects'] or scope['status']!='PASS':
         quality=dict(quality,status='FAIL',defects=quality['defects']+['cpu_audit'])
@@ -198,7 +220,8 @@ def analyze(record,raw):
         source=base['source'],raw_sha256=hashlib.sha256(raw).hexdigest(),cpu_selection=cpus,
         analysis_source_sha256=dict(base['analysis_source_sha256'],
             cpu_report=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),
-        points=len(rows),excluded=dict(excluded),quota_observations=quota,interrupt_totals=irq_totals,**result,
+        points=len(rows),excluded=dict(excluded),quota_observations=quota,interrupt_totals=irq_totals,
+        native_wait_aggregates=wait_totals,native_wait_audit=wait_audit,**result,
         limits=['same-CPU execution association is not a unique blocker or causal proof',
                 'only runnable switch-out waits fully contained on one CPU are joined; wakeup and migration waits are not reconstructed',
                 'quota is a separate cgroup boundary counter, not attributed to another container',
@@ -206,4 +229,6 @@ def analyze(record,raw):
                 'work executor and function identified; submitter and merged/requeued ownership unknown',
                 'work address is one execution token, never a persistent owner key',
                 'observed execution slices exclude recorded interrupts only, not an exact total backend CPU cost',
-                'native sched_stat_wait and switch-out brackets overlap and must not be added'])
+                'native sched_stat_wait and switch-out brackets overlap and must not be added',
+                'protocol 3 aggregates native wait completions per CPU/root, eight slots; overflow remains unknown, no per-event timing',
+                'native wait sums may include wait time beginning before the capture window; not a window-only interference total'])

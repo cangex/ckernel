@@ -81,7 +81,9 @@ def check(state,clients,servers,records,raws,plan):
         report=analyze(record,raw)
         if report['quality']['status']!='PASS' or not record.get('objects_absent'): errors.append('quality_or_cleanup')
         validate(observation['active_sources'],collector,record['receipt']['prepared_ns'],window['end_ns'])
-        validate(observation['idle_sources'],None,window['end_ns'],2**64-1)
+        # A budget stop may detach before the planned window end. Audit that
+        # real stop, but still reject its PARTIAL capture above.
+        validate(observation['idle_sources'],None,record['receipt']['producers_stopped_ns'],2**64-1)
         if any(r['causal']!='NOT_ESTABLISHED' for r in report['relations']): errors.append('causal_overclaim')
         if collector=='qdisc':
             q=report['specialist'];observed={tuple(s['actor']) for s in q['samples'] if s['actor'] is not None}

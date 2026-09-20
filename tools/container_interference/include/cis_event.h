@@ -66,10 +66,13 @@ struct cis_qdisc_event {
 	__u64 socket_id, socket_generation;
 };
 struct cis_cpu_actor { __u64 tid, start, id, generation; };
+struct cis_cpu_wait_total { __u64 id, generation, count, total_ns, max_ns; };
 struct cis_cpu_irq_state {
 	__u64 total_ns, begin_ns, entries, errors, sequence;
 	__u32 depth, reserved;
 	__u32 kinds[8], vectors[8];
+	struct cis_cpu_wait_total waits[8];
+	__u64 wait_unknown_count, wait_unknown_ns, wait_overflow_count, wait_overflow_ns;
 };
 struct cis_cpu_event {
 	struct cis_event base;

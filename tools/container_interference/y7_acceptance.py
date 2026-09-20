@@ -36,7 +36,8 @@ def summary(receipt):
         row=dict(mode=mode,
             management_cpu_ms=[m['cpu_delta_usec']['usage_usec']/1000 for m in management],
             management_cumulative_peak_bytes=max(m['cumulative_memory_peak_start_end_bytes'][1] for m in management),
-            management_end_components_bytes={k:span([m['memory_stat_start_end'][1].get(k,0) for m in management])
+            management_end_components_bytes={k:span([m['memory_stat_start_end'][1][k] for m in management])
+                if all(k in m['memory_stat_start_end'][1] for m in management) else None
                 for k in ('anon','file','kernel','slab','kernel_stack','pagetables')},
             business_cpu_ms=[sum(a['cpu_delta_usec']['usage_usec'] for a in s['system_cost']['actors'])/1000 for s in states],
             kernel_thread_ticks=[s['system_cost']['kernel_threads']['matched_cpu_ticks'] for s in states],

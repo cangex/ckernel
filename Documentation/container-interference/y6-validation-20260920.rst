@@ -10,8 +10,12 @@ checked before each VM. Image SHA256 is
 8d19768285e08059c36a887116c49e4ad173ecd864143e0409c88fe9b65e228d.
 Full Image/modules and C/BPF builds passed. The final preparation passed 748
 Python tests plus the existing owner/profile tests on Linux. Enabled native
-source inventory is version 20. Final disabled-config rebuild is separately
-required before combined Y7 sign-off.
+source inventory is version 20. The final disabled-config full Image/modules
+make subsequently completed at 8d32bb9d2 (native-source equivalent to
+50a202e65). The evidence is y7-private-8d32bb9d2-20260920/off-build.log and
+off-kernel.config; CONFIG_CIS_OBSERVE is disabled. OFF Image SHA256 is
+9e2d60b304d2faca21cb68a2282dbd8e8256e9f4ea3a7afe3bf32b38c985836a.
+This is build/link validation, not an OFF-kernel booted performance cohort.
 
 Evidence directory on development host 14:
 /dev/shm/cis-x-20260919/evidence/y6-fixture-164ec3105-20260920.

@@ -33,7 +33,7 @@ class CPUReport(unittest.TestCase):
         r['receipt']['producer_recursion']=dict(required=True,valid=True,skipped=0)
         return r
 
-    def analyze(self,points,record=None):
+    def analyze(self,points,record=None,wait_records=()):
         tail=[('cpu_selection','cpu=0 count=1 readback=1'),
               ('cpu_irq_audit','protocol=2 cpu=0 total_ns=15 entries=2 errors=0 depth=0 sequence=8 detached=1'),
               ('terminal_counters','received=20 emitted=20 rejected=0'),
@@ -42,6 +42,7 @@ class CPUReport(unittest.TestCase):
               ('owner_entry_stages','owner_entries=0 sched_entries=0 target_waits=0 watch_events=0')]
         rows=[dict(kind='CPU_POINT',detail=' '.join('%s=%s'%v for v in p.items())) for p in points]
         rows += [dict(kind=k,detail=v) for k,v in tail]
+        rows += [dict(kind=k,detail=v) for k,v in wait_records]
         return analyze(record or self.record(),'\n'.join(json.dumps(dict(r,session_id='7')) for r in rows).encode())
 
     def test_same_cpu_not_causal(self):
@@ -107,6 +108,19 @@ class CPUReport(unittest.TestCase):
     def test_native_wait_separate(self):
         r=self.analyze([point(10),point(39,phase=3,value=29),point(40,actor=2,next_actor=1)])
         self.assertFalse(r['native_sched_wait'][0]['additive'])
+
+    def test_native_wait_aggregate_retains_switch_evidence(self):
+        points=[point(10,protocol=3),point(40,actor=2,next_actor=1,protocol=3)]
+        audit=('cpu_wait_audit','protocol=3 cpu=0 capacity=8 unknown_count=2 unknown_ns=10 overflow_count=1 overflow_ns=3 detached=1')
+        total=('cpu_wait_total','protocol=3 cpu=0 slot=0 actor_id=1 actor_generation=1 count=4 total_ns=80 max_ns=30 detached=1')
+        r=self.analyze(points,wait_records=[audit,total])
+        self.assertEqual(r['quality']['status'],'PASS')
+        self.assertTrue(r['associations']);self.assertFalse(r['native_sched_wait'])
+        self.assertEqual(r['native_wait_aggregates'][0]['total_ns'],80)
+        self.assertEqual(r['native_wait_audit'][0]['overflow_count'],1)
+        for records in ([],[audit,total,total],[audit,(total[0],total[1].replace('actor_id=1','actor_id=3'))]):
+            self.assertEqual(self.analyze(points,wait_records=records)['quality']['status'],'FAIL')
+        self.assertEqual(self.analyze(points+[point(41,phase=3,protocol=3)],wait_records=[audit,total])['quality']['status'],'FAIL')
 
     def test_quota_is_boundary_fact_not_neighbor_blame(self):
         r=self.record(); key=next(iter(r['root_identities'])); ident=r['root_identities'][key]

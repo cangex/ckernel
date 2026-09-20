@@ -73,10 +73,29 @@ SEC("raw_tp/sched_stat_wait")
 int cpu_wait(struct bpf_raw_tracepoint_args *ctx)
 {
 	struct cis_cpu_event e={};
+	struct cis_cpu_irq_state *state;
+	__u32 zero=0;
 	if(!cpu_admit(&e,3,0)) return 0;
 	if (!cpu_actor((void*)ctx->args[0],&e.actor)) return 0;
-	e.value=ctx->args[1];
-	return cpu_output(ctx,&e);
+	state=bpf_map_lookup_elem(&cpu_irq_totals,&zero);
+	if(!state) return 0;
+	/* This overlaps switch-derived waits. Keep exact per-CPU/root totals,
+	 * not a second perf stream for every wake/schedule cycle. */
+	if(!e.actor.id) {
+		state->wait_unknown_count++;state->wait_unknown_ns+=ctx->args[1];return 0;
+	}
+#pragma unroll
+	for(int i=0;i<8;i++) {
+		struct cis_cpu_wait_total *w=&state->waits[i];
+		if(!w->id || (w->id==e.actor.id && w->generation==e.actor.generation)) {
+			w->id=e.actor.id;w->generation=e.actor.generation;w->count++;
+			w->total_ns+=ctx->args[1];
+			if(ctx->args[1]>w->max_ns) w->max_ns=ctx->args[1];
+			return 0;
+		}
+	}
+	state->wait_overflow_count++;state->wait_overflow_ns+=ctx->args[1];
+	return 0;
 }
 static __always_inline int cpu_interrupt(void *ctx,__u32 phase,__u64 vector)
 {

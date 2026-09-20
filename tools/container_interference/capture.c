@@ -291,7 +291,7 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	(void)cpu;
 	if(size>=sizeof(struct cis_cpu_event) && size<=sizeof(struct cis_cpu_event)+7 && e->type==CIS_CPU_EVENT) {
 		struct cis_cpu_event *v=data;
-		snprintf(detail,sizeof(detail),"protocol=2 time_ns=%llu cpu=%u phase=%u tid=%llu task_start=%llu actor_id=%llu actor_generation=%llu next_tid=%llu next_start=%llu next_id=%llu next_generation=%llu value=%llu flags=%u destination=%u object=%llu function=%llu irq_ns=%llu irq_entries=%llu irq_errors=%llu irq_valid=%u",
+		snprintf(detail,sizeof(detail),"protocol=3 time_ns=%llu cpu=%u phase=%u tid=%llu task_start=%llu actor_id=%llu actor_generation=%llu next_tid=%llu next_start=%llu next_id=%llu next_generation=%llu value=%llu flags=%u destination=%u object=%llu function=%llu irq_ns=%llu irq_entries=%llu irq_errors=%llu irq_valid=%u",
 			(unsigned long long)e->time_ns,e->cpu,v->phase,
 			(unsigned long long)v->actor.tid,(unsigned long long)v->actor.start,
 			(unsigned long long)v->actor.id,(unsigned long long)v->actor.generation,
@@ -1351,6 +1351,18 @@ int cis_capture_quiesce(struct cis_context *ctx)
 				cpu,(unsigned long long)s->total_ns,(unsigned long long)s->entries,
 				(unsigned long long)s->errors,s->depth,(unsigned long long)s->sequence);
 			cis_report(ctx,"cpu_irq_audit",NULL,detail);
+			snprintf(detail,sizeof(detail),"protocol=3 cpu=%u capacity=8 unknown_count=%llu unknown_ns=%llu overflow_count=%llu overflow_ns=%llu detached=1",
+				cpu,(unsigned long long)s->wait_unknown_count,(unsigned long long)s->wait_unknown_ns,
+				(unsigned long long)s->wait_overflow_count,(unsigned long long)s->wait_overflow_ns);
+			cis_report(ctx,"cpu_wait_audit",NULL,detail);
+			for(int j=0;j<8;j++) {
+				struct cis_cpu_wait_total *w=&s->waits[j];
+				if(!w->id) continue;
+				snprintf(detail,sizeof(detail),"protocol=3 cpu=%u slot=%d actor_id=%llu actor_generation=%llu count=%llu total_ns=%llu max_ns=%llu detached=1",
+					cpu,j,(unsigned long long)w->id,(unsigned long long)w->generation,
+					(unsigned long long)w->count,(unsigned long long)w->total_ns,(unsigned long long)w->max_ns);
+				cis_report(ctx,"cpu_wait_total",NULL,detail);
+			}
 		}
 		free(all);
 	}
