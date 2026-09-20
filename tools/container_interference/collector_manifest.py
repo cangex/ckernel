@@ -127,6 +127,13 @@ COLLECTORS['filesystem']=dict(profile=15,programs=['filesystem'],maps=COMMON_MAP
     source_filter='exclusive pinned directory lease; one ext4 device; native JBD2 commit/switch brackets and 1/16 ext4 allocation/orphan samples; no private inode lock tracing; group use is not lock contention, journal waits do not identify a unique blocking tenant; endpoints require same registered cgroup')
 
 
+COLLECTORS['qdisc']=dict(profile=16,programs=['qdisc_state'],maps=COMMON_MAPS+['targets'],
+    relation='selected_public_queue_samples',clock='monotonic_wall_ns',
+    contexts=['process_actor','socket_accounting','irq_or_unresolved_unknown'],
+    object_kinds=['pinned_netns_device_txq_qdisc_epoch'],
+    source_filter='exclusive host-netns device transmit-queue lease; native 1/16 per-CPU admission brackets and first-head service points; no socket watch or packet lifetime map; exact socket billing root only, descendant billing unknown; occupancy snapshots are not blockers or wire completion; qdisc configuration frozen for lease')
+
+
 def contract(name, legacy_block=False, legacy_rwsem=False):
     if name not in COLLECTORS:
         raise ValueError('unsupported collector')

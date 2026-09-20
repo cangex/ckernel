@@ -22,10 +22,11 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 37
+#define CIS_DIAGNOSTIC_LINKS 38
 #include "include/cis_backend_selection.h"
 #include <sys/sysmacros.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -49,11 +50,16 @@ struct capture {
 	unsigned long long filesystem_before[6];
 	int filesystem_audit_ready;
 	uint64_t filesystem_poll_ns,filesystem_poll_entries;
+	int queue_filter_fd;
+	char queue_readback[256];
+	unsigned long long queue_before[6];
+	int queue_audit_ready;
+	uint64_t queue_poll_ns,queue_poll_entries;
 };
 
-static int filesystem_audit(unsigned long long sum[6])
+static int source_audit(const char *path,unsigned long long sum[6])
 {
-	FILE *f=fopen("/sys/kernel/debug/cis_fs_audit","r");
+	FILE *f=fopen(path,"r");
 	char line[512];
 	unsigned char seen[CIS_CPU_CAP]={0};
 	unsigned int cpu,ncpu=0;
@@ -71,6 +77,59 @@ static int filesystem_audit(unsigned long long sum[6])
 	if(!ferror(f) && ncpu) rc=0;
 out:
 	fclose(f); return rc;
+}
+
+static int filesystem_audit(unsigned long long sum[6])
+{
+	return source_audit("/sys/kernel/debug/cis_fs_audit",sum);
+}
+
+static int queue_audit(unsigned long long sum[6])
+{
+	return source_audit("/sys/kernel/debug/cis_queue_audit",sum);
+}
+
+static int queue_readback_valid(struct capture *c)
+{
+	char actual[256];
+	ssize_t n=pread(c->queue_filter_fd,actual,sizeof(actual)-1,0);
+	if(n<=0) return 0;
+	actual[n]=0;
+	return !strcmp(actual,c->queue_readback);
+}
+
+static int prepare_queue_filter(struct capture *c)
+{
+	struct cis_context *ctx=c->ctx;
+	struct stat self,init;
+	unsigned long long lease,qdisc;
+	unsigned int valid,netns,ifindex,queue,handle;
+	char wanted[96],detail[384];
+	int fd,n,used=0;
+	ssize_t got;
+	if(ctx->session_collector!=16) return 0;
+	if(stat("/proc/self/ns/net",&self) || stat("/proc/1/ns/net",&init) ||
+	   self.st_ino!=init.st_ino || self.st_dev!=init.st_dev) return -EPERM;
+	fd=socket(AF_INET,SOCK_DGRAM|SOCK_CLOEXEC,0);
+	if(fd<0) return -errno;
+	c->queue_filter_fd=open("/sys/kernel/debug/cis_queue_filter",O_RDWR|O_CLOEXEC);
+	if(c->queue_filter_fd<0) { close(fd); return -errno; }
+	n=snprintf(wanted,sizeof(wanted),"%d %u %u\n",fd,ctx->queue_ifindex,ctx->queue_index);
+	got=write(c->queue_filter_fd,wanted,n); close(fd);
+	if(got!=n) return -EIO;
+	got=pread(c->queue_filter_fd,c->queue_readback,sizeof(c->queue_readback)-1,0);
+	if(got<=0) return -EIO;
+	c->queue_readback[got]=0;
+	if(sscanf(c->queue_readback,"version=1 lease=%llu valid=%u netns=%u ifindex=%u queue=%u handle=%u qdisc=%llu\n%n",
+		&lease,&valid,&netns,&ifindex,&queue,&handle,&qdisc,&used)!=7 || used!=got ||
+	   !lease || !qdisc || valid!=1 || netns!=self.st_ino || ifindex!=ctx->queue_ifindex || queue!=ctx->queue_index) return -EINVAL;
+	snprintf(detail,sizeof(detail),"protocol=1 lease=%llu valid=1 netns=%u ifindex=%u queue=%u handle=%u qdisc=%llu pinned=1 readback=1",
+		lease,netns,ifindex,queue,handle,qdisc);
+	cis_report(ctx,"queue_source_filter",NULL,detail);
+	if(queue_audit(c->queue_before)) return -EIO;
+	c->queue_audit_ready=1;
+	c->queue_poll_ns=cis_clock_ns(); c->queue_poll_entries=c->queue_before[0];
+	return 0;
 }
 
 static int prepare_filesystem_filter(struct capture *c)
@@ -230,6 +289,22 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 	char detail[768];
 	const char *symbol;
 	(void)cpu;
+	if(size>=sizeof(struct cis_qdisc_event) && size<=sizeof(struct cis_qdisc_event)+7 && e->type==CIS_QDISC_EVENT) {
+		struct cis_qdisc_event *v=data;
+		struct cis_qdisc_data *s=&v->sample;
+		char d[1200];
+		int n=snprintf(d,sizeof(d),"protocol=1 begin_ns=%llu acquired_ns=%llu end_ns=%llu lease=%llu qdisc=%llu txq=%llu dev=%llu skb=%llu actor_cgroup=%llu socket_cgroup=%llu txq_state=%llu netns=%u ifindex=%u queue=%u handle=%u operation=%u sample_shift=%u qlen_begin=%u qlen_end=%u backlog_begin=%u backlog_end=%u length=%u context=%u flags=%u packets=%u result=%d actor_id=%llu actor_generation=%llu socket_id=%llu socket_generation=%llu tid=%llu task_start=%llu cpu=%u",
+			(unsigned long long)s->begin_ns,(unsigned long long)s->acquired_ns,(unsigned long long)s->end_ns,
+			(unsigned long long)s->lease,(unsigned long long)s->qdisc,(unsigned long long)s->txq,
+			(unsigned long long)s->dev,(unsigned long long)s->skb,(unsigned long long)s->actor_cgroup,
+			(unsigned long long)s->socket_cgroup,(unsigned long long)s->txq_state,s->netns,s->ifindex,s->queue,
+			s->handle,s->operation,s->sample_shift,s->qlen_begin,s->qlen_end,s->backlog_begin,s->backlog_end,
+			s->length,s->context,s->flags,s->packets,s->result,(unsigned long long)v->actor_id,
+			(unsigned long long)v->actor_generation,(unsigned long long)v->socket_id,
+			(unsigned long long)v->socket_generation,(unsigned long long)e->tid,(unsigned long long)v->task_start,e->cpu);
+		if(n<0 || n>=(int)sizeof(d)) { ctx->errors++; return; }
+		cis_report(ctx,"QDISC",NULL,d); return;
+	}
 	if(size>=sizeof(struct cis_block_pool_event) && size<=sizeof(struct cis_block_pool_event)+7 && e->type==CIS_BLOCK_POOL_EVENT) {
 		struct cis_block_pool_event *v=data;
 		r=cis_registry_lookup(ctx,e->id,e->generation);
@@ -529,7 +604,7 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
 		{"block_tag",256},{"block_link",256},
 		{"wb_dirty",256},{"wb_begin",256},{"wb_end",256},{"wb_pause",256},
-		{"rwsem_state",512},{"page_backend",1024},{"filesystem",2048}};
+		{"rwsem_state",512},{"page_backend",1024},{"filesystem",2048},{"qdisc_state",4096}};
 	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
@@ -712,7 +787,9 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		cis_report(ctx,"capture_failure",NULL,"unsupported_page_size: kernel-memory budget not validated");
 		free(c); return -EOPNOTSUPP;
 	}
-	c->ctx=ctx; ctx->capture=c; c->rwsem_filter_fd=-1; c->backend_filter_fd=-1; c->filesystem_filter_fd=-1;
+	c->ctx=ctx; ctx->capture=c; c->rwsem_filter_fd=-1; c->backend_filter_fd=-1; c->filesystem_filter_fd=-1; c->queue_filter_fd=-1;
+	stage="queue_selection";
+	if(prepare_queue_filter(c)) goto fail;
 	stage="filesystem_selection";
 	if(prepare_filesystem_filter(c)) goto fail;
 	for(i=0;i<CIS_CPU_CAP;i++) c->perf_fds[i]=-1;
@@ -935,6 +1012,17 @@ int cis_capture_poll(struct cis_context *ctx)
 	if(!c) return 0;
 	/* Count native selection/sampling entry cost, including callers that
 	 * never reach BPF. A source budget stop detaches the real producer. */
+	if(c->queue_audit_ready && now-c->queue_poll_ns>=100000000ULL) {
+		unsigned long long values[6];
+		if(!queue_readback_valid(c) || queue_audit(values) || values[0]<c->queue_poll_entries) return -EIO;
+		if((values[0]-c->queue_poll_entries)*1000000000.0/(now-c->queue_poll_ns)>ctx->entry_rate_limit) {
+			snprintf(detail,sizeof(detail),"configured_limit=%u delta_entries=%llu interval_ns=%llu source=qdisc_native detaching_collectors=1",
+				ctx->entry_rate_limit,values[0]-(unsigned long long)c->queue_poll_entries,
+				(unsigned long long)(now-c->queue_poll_ns));
+			cis_report(ctx,"entry_budget_disable",NULL,detail); return -E2BIG;
+		}
+		c->queue_poll_ns=now; c->queue_poll_entries=values[0];
+	}
 	if(c->filesystem_audit_ready && now-c->filesystem_poll_ns>=100000000ULL) {
 		unsigned long long values[6];
 		if(filesystem_audit(values) || values[0]<c->filesystem_poll_entries) return -EIO;
@@ -1219,6 +1307,27 @@ int cis_capture_quiesce(struct cis_context *ctx)
 		if(close(c->backend_filter_fd)) c->stop_error=-errno;
 		c->backend_filter_fd=-1;
 		cis_report(ctx,"backend_source_filter_closed",NULL,"lease=0 close_after_detach=1");
+	}
+	if(c->queue_filter_fd>=0) {
+		int valid=queue_readback_valid(c);
+		cis_report(ctx,"queue_source_terminal",NULL,valid?"valid=1 unchanged=1":"valid=0 unchanged=0");
+		if(!valid) c->stop_error=-EIO;
+		if(close(c->queue_filter_fd)) c->stop_error=-errno;
+		c->queue_filter_fd=-1;
+		cis_report(ctx,"queue_source_filter_closed",NULL,"lease=0 close_after_detach=1");
+	}
+	if(c->queue_audit_ready) {
+		unsigned long long values[6];
+		char detail[384];
+		int i,valid=!queue_audit(values);
+		for(i=0;i<6 && valid;i++) if(values[i]<c->queue_before[i]) valid=0;
+		if(valid) {
+			for(i=0;i<6;i++) values[i]-=c->queue_before[i];
+			snprintf(detail,sizeof(detail),"valid=1 entries=%llu filtered=%llu sampled=%llu emitted=%llu expired=%llu recursive=%llu endpoint_snapshot=1 unfinished_unknown=1",
+				values[0],values[1],values[2],values[3],values[4],values[5]);
+			cis_report(ctx,"queue_native_audit",NULL,detail);
+			if(values[5]) c->stop_error=-EIO;
+		} else c->stop_error=-EIO;
 	}
 	if(c->filesystem_filter_fd>=0) {
 		if(close(c->filesystem_filter_fd)) c->stop_error=-errno;

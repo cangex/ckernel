@@ -8,7 +8,7 @@ CFLAGS += -Wall -Wextra -Werror
 LDLIBS += -lbpf -lelf -lz
 CORE = registry.c counters.c baseline.c budget.c report.c capture.c symbols.c fast.c
 HEADERS = $(wildcard include/*.h)
-BPF_OBJECTS = $(addprefix bpf/,$(addsuffix .bpf.o,cis ip owner sched reclaim sync fd counter allocator alloc_backend page_backend filesystem net block rwsem slub))
+BPF_OBJECTS = $(addprefix bpf/,$(addsuffix .bpf.o,cis ip owner sched reclaim sync fd counter allocator alloc_backend page_backend filesystem qdisc net block rwsem slub))
 all: cisd cisctl session-worker session-residue $(BPF_OBJECTS)
 session-residue: cleanup.c
 	$(CC) $(CFLAGS) $(LDFLAGS) cleanup.c -o $@ $(LDLIBS)

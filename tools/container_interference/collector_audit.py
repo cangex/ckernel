@@ -20,6 +20,7 @@ def audit(record, raw):
     found = {}
     owner_resources=set()
     selections=[]; closes=[]; fs_selections=[]; fs_closes=[]; fs_audits=[]
+    queue_selections=[]; queue_closes=[]; queue_audits=[]; queue_terminals=[]
     optional = {'owner_map_updates': ('watch_races', 'watch_failed', 'holder_failed', 'attempt_failed')}
     for line in raw.splitlines():
         if len(line) > 8192: raise ValueError('audit record length')
@@ -32,6 +33,10 @@ def audit(record, raw):
         if kind=='filesystem_source_filter': fs_selections.append(row.get('detail',''))
         if kind=='filesystem_source_filter_closed': fs_closes.append(row.get('detail',''))
         if kind=='filesystem_native_audit': fs_audits.append(row.get('detail',''))
+        if kind=='queue_source_filter': queue_selections.append(row.get('detail',''))
+        if kind=='queue_source_filter_closed': queue_closes.append(row.get('detail',''))
+        if kind=='queue_native_audit': queue_audits.append(row.get('detail',''))
+        if kind=='queue_source_terminal': queue_terminals.append(row.get('detail',''))
         if record.get('collector')=='alloc_backend' and kind=='MAPLE_ALLOC':
             errors.append('backend-only capture contains excluded Maple context')
         if kind=='OWNER':
@@ -99,10 +104,31 @@ def audit(record, raw):
                     native_fs['filtered']+native_fs['sampled']>native_fs['entries']):
                 raise ValueError('filesystem lease or native audit')
         except (ValueError,KeyError): errors.append('filesystem_selection_invalid')
+    queue=None; native_queue=None
+    if record.get('collector')=='qdisc':
+        try:
+            if (len(queue_selections)!=1 or len(queue_audits)!=1 or
+                    queue_closes!=['lease=0 close_after_detach=1'] or
+                    queue_terminals!=['valid=1 unchanged=1']):
+                raise ValueError('queue lease lifecycle')
+            queue={k:int(v) for k,v in (p.split('=',1) for p in queue_selections[0].split())}
+            native_queue={k:int(v) for k,v in (p.split('=',1) for p in queue_audits[0].split())}
+            if (set(queue)!={'protocol','lease','valid','netns','ifindex','queue','handle','qdisc','pinned','readback'} or
+                    min(queue.values())<0 or queue['protocol']!=1 or queue['valid']!=1 or
+                    queue['pinned']!=1 or queue['readback']!=1 or
+                    min(queue[k] for k in ('lease','netns','ifindex','qdisc'))<=0 or
+                    record.get('queue_selection')!=dict(ifindex=queue['ifindex'],tx_queue=queue['queue']) or
+                    set(native_queue)!={'valid','entries','filtered','sampled','emitted','expired','recursive','endpoint_snapshot','unfinished_unknown'} or
+                    min(native_queue.values())<0 or native_queue['valid']!=1 or native_queue['endpoint_snapshot']!=1 or
+                    native_queue['unfinished_unknown']!=1 or native_queue['recursive'] or
+                    native_queue['filtered']+native_queue['sampled']>native_queue['entries']):
+                raise ValueError('queue selection or native audit')
+        except (ValueError,KeyError): errors.append('queue_selection_invalid')
     return dict(schema='cis-collector-audit-v1', status='FAIL' if errors else 'BLOCKED' if missing else 'PASS',
                 collector_contract_sha256=contract, errors=errors, missing=missing, counters=found,
                 counters_overlap=True, owner_resources=sorted(owner_resources),
                 backend_selection=backend,
                 filesystem_selection=filesystem, filesystem_native_audit=native_fs,
+                queue_selection=queue, queue_native_audit=native_queue,
                 population_coverage=None, object_reuse_coverage=None,
                 note='scope audit only, not a zero-loss, attribution or performance acceptance')

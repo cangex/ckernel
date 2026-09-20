@@ -142,7 +142,13 @@ int main(void) {
     assert(cis_profile_map(15, "roots"));
     assert(cis_profile_program(15, "filesystem"));
     assert(!cis_profile_map(15, "holders"));
-    assert(!cis_profile_map(16, "roots"));
+    assert(cis_profile_map(16, "roots"));
+    assert(cis_profile_map(16, "targets"));
+    assert(!cis_profile_map(16, "stacks"));
+    assert(!cis_profile_map(16, "net_skb"));
+    assert(cis_profile_program(16, "qdisc_state"));
+    assert(!cis_profile_program(16, "net_state"));
+    assert(!cis_profile_map(17, "roots"));
     return 0;
 }
 '''

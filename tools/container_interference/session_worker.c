@@ -60,8 +60,19 @@ int main(int argc,char **argv)
 	channel=atoi(argv[1]); ctx->output_fd=atoi(argv[2]);
 	ctx->session_id=strtoull(argv[3],NULL,10); window=atoi(argv[5]);
 	ctx->session_collector=!strcmp(argv[4],"ip")?1:!strcmp(argv[4],"owner")?2:
-		!strcmp(argv[4],"sched")?3:!strcmp(argv[4],"reclaim")?4:!strcmp(argv[4],"sync")?5:!strcmp(argv[4],"fd")?6:!strcmp(argv[4],"counter")?7:!strcmp(argv[4],"allocator")?8:!strcmp(argv[4],"net")?9:!strcmp(argv[4],"block")?10:!strcmp(argv[4],"rwsem")?11:!strcmp(argv[4],"slub")?12:!strcmp(argv[4],"alloc_backend")?13:!strcmp(argv[4],"page_backend")?14:!strcmp(argv[4],"filesystem")?15:0;
+		!strcmp(argv[4],"sched")?3:!strcmp(argv[4],"reclaim")?4:!strcmp(argv[4],"sync")?5:!strcmp(argv[4],"fd")?6:!strcmp(argv[4],"counter")?7:!strcmp(argv[4],"allocator")?8:!strcmp(argv[4],"net")?9:!strcmp(argv[4],"block")?10:!strcmp(argv[4],"rwsem")?11:!strcmp(argv[4],"slub")?12:!strcmp(argv[4],"alloc_backend")?13:!strcmp(argv[4],"page_backend")?14:!strcmp(argv[4],"filesystem")?15:!strcmp(argv[4],"qdisc")?16:0;
 	if(!ctx->session_id || !ctx->session_collector || window<100 || window>10000) return 2;
+	if(ctx->session_collector==16) {
+		char *tail;
+		unsigned long value;
+		if(strncmp(argv[8],"q:",2) || argv[8][2]<'0' || argv[8][2]>'9') return 2;
+		errno=0; value=strtoul(argv[8]+2,&tail,10);
+		if(errno || !value || value>=1UL<<31 || *tail++!=':' || *tail<'0' || *tail>'9') return 2;
+		ctx->queue_ifindex=value;
+		errno=0; value=strtoul(tail,&tail,10);
+		if(errno || value>=1UL<<31 || *tail) return 2;
+		ctx->queue_index=value; roots_begin=9;
+	}
 	if(ctx->session_collector==15) {
 		int consumed=0;
 		if(sscanf(argv[8],"f:%d%n",&ctx->filesystem_fd,&consumed)!=1 || argv[8][consumed] || ctx->filesystem_fd<0) return 2;
@@ -107,7 +118,7 @@ int main(int argc,char **argv)
 		unsigned long long id,gen; int fd,n=0; char role; struct cis_root *r;
 		if(sscanf(argv[i],"%c:%d:%llu:%llu%n",&role,&fd,&id,&gen,&n)!=4 || argv[i][n] ||
 		   !id || !gen || (role!='t' && role!='i') ||
-		   (role=='i' && ctx->session_collector!=2 && ctx->session_collector!=6 && ctx->session_collector!=9 && ctx->session_collector!=10 && ctx->session_collector!=11 && ctx->session_collector!=12) ||
+		   (role=='i' && ctx->session_collector!=2 && ctx->session_collector!=6 && ctx->session_collector!=9 && ctx->session_collector!=10 && ctx->session_collector!=11 && ctx->session_collector!=12 && ctx->session_collector!=16) ||
 		   cis_registry_add(ctx,fd,role=='t'?"target":"identity-only",&r) || r->id!=id) {
 			err=1; reason="IDENTITY"; goto drain;
 		}
@@ -140,7 +151,7 @@ int main(int argc,char **argv)
 	for(i=0;i<CIS_MAX_ROOTS;i++) if(ctx->roots[i].used && ctx->roots[i].session_target) {
 		struct cis_root *r=&ctx->roots[i];
 		if(ctx->session_collector>=2) {
-			r->diagnostic_kind=(ctx->session_collector==2 || ctx->session_collector==6 || ctx->session_collector==12)?16:ctx->session_collector==3?1:ctx->session_collector==5?2:ctx->session_collector==7?32:(ctx->session_collector==8 || ctx->session_collector==13)?64:ctx->session_collector==9?128:ctx->session_collector==10?256:ctx->session_collector==11?512:ctx->session_collector==14?1024:ctx->session_collector==15?2048:4;
+			r->diagnostic_kind=(ctx->session_collector==2 || ctx->session_collector==6 || ctx->session_collector==12)?16:ctx->session_collector==3?1:ctx->session_collector==5?2:ctx->session_collector==7?32:(ctx->session_collector==8 || ctx->session_collector==13)?64:ctx->session_collector==9?128:ctx->session_collector==10?256:ctx->session_collector==11?512:ctx->session_collector==14?1024:ctx->session_collector==15?2048:ctx->session_collector==16?4096:4;
 			r->requested_start_ns=start;
 			if(cis_capture_diagnostic(ctx,r,1)) { err=1; reason="DIAGNOSTIC_ATTACH"; goto drain; }
 			r->state=CIS_DIAGNOSING; ctx->diagnostic++;

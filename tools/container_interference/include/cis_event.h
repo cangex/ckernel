@@ -17,6 +17,7 @@
 #define CIS_DIAG_RWSEM 512
 #define CIS_DIAG_PAGE_BACKEND 1024
 #define CIS_DIAG_FILESYSTEM 2048
+#define CIS_DIAG_QDISC 4096
 #define CIS_OWNER_EVENT 12
 #define CIS_COUNTER_EVENT 13
 #define CIS_ALLOC_EVENT 14
@@ -34,6 +35,7 @@
 #define CIS_FILESYSTEM_EVENT 26
 #define CIS_BLOCK_POOL_EVENT 27
 #define CIS_DIRTY_PAUSE_EVENT 28
+#define CIS_QDISC_EVENT 29
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -44,6 +46,22 @@ struct cis_event {
 	__s32 stack_id;
 	__u32 nesting, reserved;
 	__u64 executor_tid, sequence_ns;
+};
+/* Fixed native sample ABI, checked against the frozen kernel BTF at build. */
+struct cis_qdisc_data {
+	__u64 begin_ns, acquired_ns, end_ns, lease;
+	__u64 qdisc, txq, dev, skb, actor_cgroup, socket_cgroup;
+	__u64 txq_state;
+	__u32 netns, ifindex, queue, handle, operation, sample_shift;
+	__u32 qlen_begin, qlen_end, backlog_begin, backlog_end;
+	__u32 length, context, flags, packets;
+	__s32 result;
+};
+struct cis_qdisc_event {
+	struct cis_event base;
+	struct cis_qdisc_data sample;
+	__u64 actor_id, actor_generation, task_start;
+	__u64 socket_id, socket_generation;
 };
 struct cis_work_state { struct cis_event queued, active; __u32 queued_valid, active_valid; };
 struct cis_pending_key { __u64 tid, object, task_start_ns; __u32 type, reserved; };
