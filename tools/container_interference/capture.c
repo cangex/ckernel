@@ -25,6 +25,7 @@
 #define CIS_DIAGNOSTIC_LINKS 36
 #include "include/cis_backend_selection.h"
 #include <sys/sysmacros.h>
+#include <sys/stat.h>
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;

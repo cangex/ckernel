@@ -13,12 +13,14 @@ from session import source_manifest
 from source_switches import observe
 from filesystem_report import analyze
 from y3_filesystem_check import CASES,case_order,check_case
+from filesystem_filter_control import check as check_filter
 
 
 def run():
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=admission.environment(); admission.check_environment(env)
     out=Path('/tmp/y3-filesystem-evidence'); out.mkdir(mode=0o700)
+    (out/'lease-checks.json').write_text(json.dumps(check_filter(),indent=2))
     root=Path('/sys/fs/cgroup/cis-y3-fs'); root.mkdir(); (root/'management').mkdir()
     (root/'management/cgroup.procs').write_text(str(os.getpid()))
     (root/'cgroup.subtree_control').write_text('+cpu +memory +cpuset +io')
