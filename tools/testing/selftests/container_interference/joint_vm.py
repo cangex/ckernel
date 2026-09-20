@@ -97,6 +97,19 @@ def run(group='common'):
             if daemon.poll() is not None or time.monotonic()>limit: raise RuntimeError('daemon readiness')
             time.sleep(.02)
         targets=[request('register',path=str(p))['target'] for p in roots]
+        if group=='topology':
+            registrations=[]
+            for i,recreate in ((0,False),(1,True)):
+                old=targets[i]
+                request('unregister',target=old)
+                if recreate:
+                    roots[i].rmdir();roots[i].mkdir()
+                    (roots[i]/'memory.max').write_text(str(64<<20))
+                targets[i]=request('register',path=str(roots[i]))['target']
+                if old==targets[i] or old.split(':')[1]==targets[i].split(':')[1]:
+                    raise ValueError('registration generation reused')
+                registrations.append(dict(path=str(roots[i]),old=old,new=targets[i],recreated=recreate))
+            (out/'registrations.json').write_text(json.dumps(registrations,indent=2))
         if group=='public':
             denials=[]
             for collector in sorted(EXTENSIONS):

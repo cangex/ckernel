@@ -253,6 +253,28 @@ class SurveyTests(unittest.TestCase):
         record['survey_epoch'] = 2
         self.assertEqual(self.summarize(record, [meta, event], previous)['roots']['a']['status'], 'REFERENCE')
 
+    def test_topology_change_starts_new_reference_and_partial_cannot_compare(self):
+        from test_resource_topology import endpoint
+        from periodic_plan import digest
+        from resource_topology import FINGERPRINT_FIELDS
+        record,meta,event=self.data()
+        a=endpoint(id=1,generation=2)
+        record['boundary_before']['a']['topology']=a
+        record['boundary_after']['a']['topology']=a
+        previous=self.summarize(record,[meta,event])['roots']
+        self.assertEqual(self.summarize(record,[meta,event],previous)['roots']['a']['status'],'COMPARABLE')
+        b=endpoint(id=1,generation=2,device='8:1')
+        record['boundary_before']['a']['topology']=b
+        record['boundary_after']['a']['topology']=b
+        self.assertEqual(self.summarize(record,[meta,event],previous)['roots']['a']['status'],'REFERENCE')
+        b['status']='PARTIAL'
+        b['fingerprint']=digest({k:b[k] for k in FINGERPRINT_FIELDS})
+        previous=self.summarize(record,[meta,event])['roots']
+        result=self.summarize(record,[meta,event],previous)['roots']['a']
+        self.assertTrue(result['valid'])
+        self.assertEqual(result['status'],'REFERENCE')
+        self.assertFalse(result['candidate'])
+
     def test_no_sample_not_normal(self):
         record, meta, _ = self.data()
         self.assertFalse(self.summarize(record, [meta])['roots']['a']['valid'])

@@ -35,6 +35,14 @@ configuration changes invalidate the association. A deleted pinned cgroup is
 unknown, not a newly created group at the same pathname. Restart does not load
 old topology as current state.
 
+Survey reference epochs include the topology fingerprint. Changed or partial
+topology prevents an automatic comparison against an earlier reference; direct
+PSI/counter/IP facts remain available. This conservative loss of automatic
+comparison coverage is explicit, not reported as absence of interference.
+An image or workload-phase change which is not visible here still requires an
+explicit epoch notification. Eight-task/cgroup/mount limits must be considered
+when interpreting the covered container population.
+
 Equal endpoint fingerprints only prove equal endpoint observations. They do
 not exclude changes and reversal within the interval, demonstrate continuous
 device lifetime, prove a mount was accessed, or identify a holder or blocker.

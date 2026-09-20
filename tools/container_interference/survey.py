@@ -154,9 +154,11 @@ def summarize(record, path, previous, min_samples):
     for key, identity in record['root_identities'].items():
         before, after = record['boundary_before'][key], record['boundary_after'][key]
         delta = boundary_delta(before, after)
+        context = resource_topology.stable(before.get('topology'),after.get('topology'))
         epoch = digest(dict(identity=identity, config=before['config'], unit=unit,
                             declared_epoch=record.get('survey_epoch', 0),
-                            source=record.get('source_identity', {})))
+                            source=record.get('source_identity', {}),
+                            resource_context=context.get('fingerprint'),context_status=context['status']))
         config_known = set(before['config']) == set(CONFIG) and set(after['config']) == set(CONFIG)
         valid = session_valid and config_known and delta['status'] in ('VALID', 'PARTIAL') and counts[key] >= min_samples
         observed = dict(cpu_usec_per_s=rate(delta, 'cpu.stat', 'usage_usec'),
@@ -164,7 +166,8 @@ def summarize(record, path, previous, min_samples):
                         memory_wait_usec_per_s=rate(delta, 'memory.pressure', 'some_total_usec'),
                         io_wait_usec_per_s=rate(delta, 'io.pressure', 'some_total_usec'))
         prior = previous.get(key)
-        comparable = bool(valid and prior and prior.get('valid') and prior['epoch'] == epoch)
+        comparable = bool(valid and prior and prior.get('valid') and prior['epoch'] == epoch and
+                          context['status'] in ('STABLE_ENDPOINTS','UNOBSERVED'))
         reasons = []
         if comparable:
             for field, value in observed.items():
@@ -172,9 +175,10 @@ def summarize(record, path, previous, min_samples):
                 if value is not None and reference is not None and value > max(reference*1.5, reference+10000):
                     reasons.append(field + '_increased_candidate_not_cause')
         report['roots'][key] = dict(valid=valid, epoch=epoch, rates=observed, counters=delta,
+            resource_context=context,
             status='INSUFFICIENT' if not valid else 'COMPARABLE' if comparable else 'REFERENCE',
             samples=counts[key], candidate=bool(reasons), reasons=reasons,
-            metadata_coverage='image, credentials, mounts and workload phases require explicit epoch notification',
+            metadata_coverage='bounded topology endpoints are not continuity; unknown image, credentials and workload phases still require explicit epoch notification',
             top_ip=[dict(cpu=cpu, ip=ip, symbol=symbol, weight=weight) for (cpu, ip, symbol), weight
                     in (samples[key].most_common(8) if unit != 'mixed_or_unknown_do_not_sum'
                         else sorted(samples[key].items())[:8])])

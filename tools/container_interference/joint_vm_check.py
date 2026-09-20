@@ -81,6 +81,14 @@ def check(serial,output):
             plan['targets_by_round']!=[[0,2],[1,3],[0,3]] or plan['captures']!=3*len(collectors) or plan['clock_ticks']<=0):
         raise ValueError('unexpected frozen matrix')
     if declared['source']!=plan['source'] or any(plan['source'][k]!=permit['source'][k] for k in SOURCE_KEYS): errors.append('source_binding')
+    if plan['schema']=='cis-y1-joint-plan-v1':
+        registrations=value('registrations.json')
+        if len(registrations)!=2 or [v['recreated'] for v in registrations]!=[False,True]:
+            errors.append('registration_test_population')
+        for row in registrations:
+            old,new=row['old'].split(':'),row['new'].split(':')
+            if old[1]==new[1] or not row['recreated'] and old[0]!=new[0]:
+                errors.append('registration_generation')
     if plan['schema']=='cis-y0-joint-plan-v1':
         from resource_policy import policy, EXTENSIONS
         expected=policy([] if plan['group']=='public' else ['allocator'])
