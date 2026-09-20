@@ -20,7 +20,7 @@ fi
 /usr/bin/python3 /profile/y5_queue_vm.py
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"
-find /tmp/y5-queue-evidence -type f | sort | while read -r f; do
+find /tmp/y5-queue-* -type f | sort | while read -r f; do
     echo "CIS_FILE $f"
     cat "$f"
     echo

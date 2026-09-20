@@ -15,11 +15,13 @@ from queue_report import analyze
 from y5_queue_check import CASES,order,check
 
 
-def run():
+def run(guard=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=admission.environment(); admission.check_environment(env)
     if not Path('/cis-disposable-vm').exists(): raise PermissionError('disposable VM only')
-    out=Path('/tmp/y5-queue-evidence'); out.mkdir(mode=0o700)
+    out=Path('/tmp/y5-queue-guard' if guard else '/tmp/y5-queue-evidence'); out.mkdir(mode=0o700)
+    from y5_queue_guard import order as guard_order,check as guard_check
+    run_order=guard_order() if guard else order()
     commands=[]; namespaces=[]; interfaces=[]; handles=[]; children=[]; netfds=[]; daemon=None
     endpoint='/run/cis-y5-queue.sock'
     requests=(out/'requests.jsonl').open('x'); log=(out/'controller.log').open('x')
@@ -86,7 +88,7 @@ def run():
         args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
         source=source_manifest(args,env['boot_id']); permit=admission.create(source,env,time.monotonic_ns())
         (out/'permit.json').write_text(json.dumps(permit,indent=2))
-        plan=dict(schema='cis-y5-queue-plan-v1',order=order(),cases=CASES,source=source,window_ms=2000,
+        plan=dict(schema='cis-y5-queue-guard-v1' if guard else 'cis-y5-queue-plan-v1',order=run_order,cases=CASES,source=source,window_ms=2000,
             selected_ifindex=selected,tx_queue=0,udp_datagrams_per_actor=1000,payload_bytes=1024,
             rate_per_actor=1000,egress_rate='2mbit',egress_limit_bytes=65536,cpu=[0,1],management_cpu=7,
             direct_scope='containers use shared host network namespace, private UDP sockets created after cgroup entry',
@@ -100,8 +102,8 @@ def run():
             if daemon.poll() is not None or time.monotonic()>deadline: raise RuntimeError('readiness')
             time.sleep(.02)
         targets=[request('register',path=str(p))['target'] for p in roots]; states=[]
-        for entry in order():
-            label=entry['label']; case=entry['case']; c=CASES[case]; sid=None
+        for entry in run_order:
+            label=entry['label']; case=entry['case']; c=CASES['sharedDirect'] if guard else CASES[case]; sid=None
             for i in range(2):
                 command('/usr/sbin/tc','qdisc','replace','dev','cisy5ex%d'%i,'root','handle','1:',
                         'tbf','rate','2mbit','burst','8192','limit','65536')
@@ -115,7 +117,7 @@ def run():
             sinks=[]
             for i,fd in enumerate(sinkfds):
                 path=out/(label+'-sink%d.json'%i); h=(out/(label+'-sink%d.log'%i)).open('x'); handles.append(h)
-                p=subprocess.Popen(['/usr/bin/python3','/profile/queue_sink.py',str(fd),str(path),str(window['end_ns']+250_000_000)],
+                p=subprocess.Popen(['/usr/bin/python3','/profile/queue_sink.py',str(fd),str(path),str(window['end_ns']+(3_000_000_000 if guard else 250_000_000))],
                     pass_fds=(fd,),stdout=h,stderr=h); children.append(p); sinks.append(p)
             deadline=time.monotonic()+3
             while not all((out/(label+'-sink%d.ready'%i)).exists() for i in range(2)):
@@ -125,8 +127,13 @@ def run():
             for i,p in enumerate(roots):
                 fd=actorfds[i] if c['forwarded'] else hostnet; h=(out/(label+'-%d.log'%i)).open('x'); handles.append(h)
                 child=subprocess.Popen(['/session_launch',str(p),str(i),'/queue_workload',str(fd),str(i),
-                    '172.%d.0.2'%(30+c['destinations'][i]),str(start)],pass_fds=(fd,),stdout=h,stderr=h)
+                    '172.%d.0.2'%(30+c['destinations'][i]),str(start)]+(['storm'] if guard else []),pass_fds=(fd,),stdout=h,stderr=h)
                 children.append(child); running.append(child)
+            detached=None
+            if guard:
+                if sid: wait(sid,'finalized')
+                else: time.sleep(max(0,(window['end_ns']-time.monotonic_ns())/1e9))
+                idle=observe(None); detached=snapshot()
             codes=[p.wait(timeout=10) for p in running]
             if any(p.wait(timeout=10) for p in sinks): raise RuntimeError('sink exit')
             report=None; identities=None
@@ -136,14 +143,16 @@ def run():
                 identities=[record['root_identities'][t] for t in targets]
                 (out/(label+'-report.json')).write_text(json.dumps(report,indent=2))
             idle=observe(None); after=snapshot()
-            checked=check(case,window,[(out/(label+'-%d.log'%i)).read_text() for i in range(2)],
-                [json.loads((out/(label+'-sink%d.json'%i)).read_text()) for i in range(2)],report,identities)
             evidence=dict(**entry,session_id=sid,targets=targets,window=window,before=before,after=after,
-                active_sources=active,idle_sources=idle,exit_codes=codes,result=checked)
+                active_sources=active,idle_sources=idle,exit_codes=codes,detached=detached)
+            logs=[(out/(label+'-%d.log'%i)).read_text() for i in range(2)]
+            checked=(guard_check(record if sid else None,(out/'records'/(sid+'.jsonl')).read_bytes() if sid else None,logs,evidence)
+                if guard else check(case,window,logs,[json.loads((out/(label+'-sink%d.json'%i)).read_text()) for i in range(2)],report,identities))
+            evidence['result']=checked
             states.append(evidence); (out/(label+'-evidence.json')).write_text(json.dumps(evidence,indent=2))
             (out/'partial.json').write_text(json.dumps(states,indent=2))
-            if checked['status']!='PASS_SCOPED' or codes!=[0,0]: raise ValueError(checked)
-        (out/'result.json').write_text(json.dumps(dict(status='PASS_SCOPED',source=source,states=states),indent=2))
+            if checked['status']!=('PASS_PROTECTION_ONLY' if guard else 'PASS_SCOPED') or codes!=[0,0]: raise ValueError(checked)
+        (out/'result.json').write_text(json.dumps(dict(status='PASS_PROTECTION_ONLY' if guard else 'PASS_SCOPED',source=source,states=states),indent=2))
     finally:
         for p in children:
             if p.poll() is None: p.terminate()
@@ -162,4 +171,4 @@ def run():
         for ns in reversed(namespaces): command('/usr/sbin/ip','netns','del',ns)
 
 
-if __name__=='__main__': run()
+if __name__=='__main__': run(guard=os.environ.get('CIS_QUEUE_GUARD')=='1')

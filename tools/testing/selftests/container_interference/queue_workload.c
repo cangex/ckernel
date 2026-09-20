@@ -20,7 +20,7 @@ int main(int argc,char **argv)
 	unsigned long long start,first=0,last=0;
 	unsigned int actor,i,sent=0,errors=0;
 	int fd,netfd;
-	if(argc!=5 || getpid()!=1) return 2;
+	if((argc!=5 && argc!=6) || (argc==6 && strcmp(argv[5],"storm")) || getpid()!=1) return 2;
 	netfd=atoi(argv[1]); actor=atoi(argv[2]); start=strtoull(argv[4],NULL,10);
 	if(netfd<3 || actor>1 || !start || inet_pton(AF_INET,argv[3],&peer.sin_addr)!=1 ||
 	   setns(netfd,CLONE_NEWNET) || fstat(netfd,&ns) ||
@@ -28,6 +28,24 @@ int main(int argc,char **argv)
 	close(netfd);
 	fd=socket(AF_INET,SOCK_DGRAM|SOCK_CLOEXEC,0);
 	if(fd<0) return 4;
+	if(argc==6) {
+		struct timespec wake={start/1000000000ULL,start%1000000000ULL};
+		while(clock_nanosleep(CLOCK_MONOTONIC,TIMER_ABSTIME,&wake,NULL)==EINTR) {}
+		memset(payload,0x40+actor,sizeof(payload));
+		for(i=0;i<8;i++) {
+			uint64_t begin=cis_now_ns(),end=start+(i+1)*500000000ULL;
+			unsigned int count=0,failed=0;
+			while(cis_now_ns()<end) {
+				if(sendto(fd,payload,sizeof(payload),0,(void*)&peer,sizeof(peer))==(ssize_t)sizeof(payload)) count++;
+				else failed++;
+			}
+			errors+=failed;
+			printf("CIS_QUEUE_BUCKET actor=%u bucket=%u operations=%u errors=%u begin_ns=%llu end_ns=%llu\n",
+				actor,i,count,failed,(unsigned long long)begin,(unsigned long long)cis_now_ns());
+			fflush(stdout);
+		}
+		close(fd); return errors?5:0;
+	}
 	for(i=0;i<1000;i++) {
 		uint32_t *header=(void*)payload;
 		uint64_t at=start+i*1000000ULL;

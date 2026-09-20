@@ -6,6 +6,7 @@ from pathlib import Path
 from owner_report import fields
 from queue_report import analyze
 from source_switches import validate
+from prototype_admission import SOURCE_KEYS
 
 CASES={
     'sharedDirect':dict(destinations=[0,0],forwarded=False,actors=[0,1]),
@@ -18,6 +19,26 @@ CASES={
 def order():
     return [dict(label='%sR%d%s'%(case,r,'On' if enabled else 'Off'),case=case,round=r,enabled=enabled)
             for r in range(1,4) for case in CASES for enabled in ((False,True) if r%2 else (True,False))]
+
+
+def native_totals(text):
+    rows=text.splitlines()
+    if not rows or not rows[0].startswith('version=1 '): raise ValueError('native queue audit version')
+    result=dict.fromkeys(('entries','filtered','sampled','emitted','expired','recursive'),0); seen=set()
+    for line in rows[1:]:
+        d=fields(line)
+        if (set(d)!=set(result)|{'cpu'} or any(type(v) is not int or v<0 for v in d.values()) or
+                not 0<=d['cpu']<512 or d['cpu'] in seen): raise ValueError('native queue audit schema')
+        seen.add(d['cpu'])
+        for k in result: result[k]+=d[k]
+    if not seen: raise ValueError('empty source audit')
+    return result
+
+
+def source_delta(before,after):
+    a,b=native_totals(before),native_totals(after)
+    if any(b[k]<a[k] for k in a): raise ValueError('native audit decreased')
+    return {k:b[k]-a[k] for k in a}
 
 
 def check(case,window,logs,sinks,report=None,identities=None):
@@ -74,24 +95,35 @@ def replay(serial,output):
     if serial.stat().st_size>32<<20: raise ValueError('serial capacity')
     text=serial.read_text(); files=extract(text); out=Path(output); out.mkdir(exist_ok=False)
     prefix='/tmp/y5-queue-evidence/'
-    result=json.loads(files[prefix+'result.json']); states=result['states']
+    def value(path): return json.JSONDecoder().raw_decode(files[prefix+path].lstrip())[0]
+    result=value('result.json'); plan=value('plan.json'); permit=value('permit.json'); states=result['states']
     errors=[]; receipts=[]
     if ('CIS_PROFILE_VM_EXIT=0' not in text.splitlines() or
             'CIS_QUEUE_DEVICE_UNLOAD=0' not in text.splitlines()): errors.append('exit_or_unload')
     if any(s in text for s in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')): errors.append('kernel_warning')
+    if plan.get('order')!=order() or plan.get('cases')!=CASES: errors.append('plan_changed')
+    if any(result['source'].get(k)!=permit['source'].get(k) or plan['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS):
+        errors.append('source_binding')
     if [{k:e[k] for k in ('label','case','round','enabled')} for e in states]!=order(): errors.append('fixed_order')
     for e in states:
         label=e['label']; report=None; identities=None
         if e['session_id']:
-            sid=e['session_id']; record=json.loads(files[prefix+'records/'+sid+'.json'])
-            report=analyze(record,files[prefix+'records/'+sid+'.jsonl'].encode())
+            sid=e['session_id']; record=value('records/'+sid+'.json')
+            report=analyze(record,(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode())
             identities=[record['root_identities'][t] for t in e['targets']]
             if record['window']!=e['window']: errors.append(label+':window')
+            if record['nonce']!=label or any(record.get(k)!=permit['source'].get(k) for k in SOURCE_KEYS):
+                errors.append(label+':source_binding')
         checked=check(e['case'],e['window'],[files[prefix+label+'-%d.log'%i] for i in range(2)],
-            [json.loads(files[prefix+label+'-sink%d.json'%i]) for i in range(2)],report,identities)
+            [value(label+'-sink%d.json'%i) for i in range(2)],report,identities)
         if checked['status']!='PASS_SCOPED' or e['exit_codes']!=[0,0]: errors.append(label+':'+str(checked['errors']))
         validate(e['active_sources'],'qdisc' if e['enabled'] else None,e['before']['before_ns'],e['after']['after_ns'])
         validate(e['idle_sources'],None,e['before']['before_ns'],e['after']['after_ns'])
+        delta=source_delta(e['before']['native'],e['after']['native'])
+        if not e['enabled'] and any(delta.values()): errors.append(label+':off_callbacks')
+        if e['enabled'] and (not delta['entries'] or delta['recursive']): errors.append(label+':native_entries_or_recursion')
+        if e['enabled'] and e['case']=='unselected' and (not delta['filtered'] or delta['emitted']):
+            errors.append(label+':native_unselected_filter')
         receipts.append(dict(label=label,checked=checked))
     receipt=dict(status='FAIL' if errors else 'PASS_SCOPED',errors=errors,states=receipts)
     (out/'replay.json').write_text(json.dumps(receipt,indent=2)); print(json.dumps(dict(status=receipt['status'],errors=errors)))
