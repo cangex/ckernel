@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 import unittest
-from y7_private_check import workload,order,captures,ROLES
+from y7_private_check import workload,order,captures,validate_plan,ROLES
 
 class PrivateJoint(unittest.TestCase):
     def log(self):
@@ -17,3 +17,13 @@ class PrivateJoint(unittest.TestCase):
         self.assertEqual(order()[3]['mode'],'profile')
         self.assertEqual(set(i for r in ROLES for i in r),{0,1,2,3})
         self.assertFalse(set(('fd','owner','net','allocator','sync','rwsem'))&set(captures('profile')))
+        with self.assertRaises(ValueError): captures('unknown')
+
+    def test_separate_devices_and_private_directories_are_not_asserted_by_name(self):
+        p=dict(schema='cis-y7-private-plan-v1',order=order(),arrangement='separate',rounds=3,
+            offered=6000,period_ns=3_000_000,timeout_ns=100_000_000,window_ms=2000,
+            management_cpu=7,cpus=[0,1,2,3],directories=[dict(path='/fs%d/private%d'%(i%2,i),
+                disk=i%2,dev=10+i%2,inode=20+i) for i in range(4)])
+        validate_plan(p)
+        p['directories'][1]['dev']=10
+        with self.assertRaises(ValueError):validate_plan(p)

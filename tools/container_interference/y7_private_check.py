@@ -20,7 +20,29 @@ def order():
             for m in (MODES if r%2==0 else tuple(reversed(MODES)))]
 
 def captures(mode):
+    if mode not in MODES: raise ValueError('unknown frozen capture mode')
     return () if mode=='off' else ('ip',) if mode=='survey' else COLLECTORS
+
+def validate_plan(plan):
+    arrangement=plan.get('arrangement')
+    if (plan.get('schema')!='cis-y7-private-plan-v1' or plan.get('order')!=order() or
+            arrangement not in ('shared','separate') or plan.get('rounds')!=3 or
+            plan.get('offered')!=6000 or plan.get('period_ns')!=3_000_000 or
+            plan.get('timeout_ns')!=100_000_000 or plan.get('window_ms')!=2000 or
+            plan.get('management_cpu')!=7 or
+            plan.get('cpus')!=([0,0,1,1] if arrangement=='shared' else [0,1,2,3])):
+        raise ValueError('unexpected frozen plan')
+    directories=plan.get('directories',[])
+    if len(directories)!=4: raise ValueError('private directory population')
+    for i,d in enumerate(directories):
+        disk=0 if arrangement=='shared' else i%2
+        if (d.get('disk')!=disk or d.get('path')!='/fs%d/private%d'%(disk,i) or
+                type(d.get('dev')) is not int or type(d.get('inode')) is not int or min(d['dev'],d['inode'])<=0):
+            raise ValueError('private directory plan')
+    if len({(d['dev'],d['inode']) for d in directories})!=4: raise ValueError('shared directory')
+    for i,a in enumerate(directories):
+        for b in directories[i+1:]:
+            if (a['disk']==b['disk'])!=(a['dev']==b['dev']): raise ValueError('filesystem placement')
 
 def workload(text):
     rows=[fields(l.split(' ',1)[1]) for l in text.splitlines() if l.startswith('Y7_PRIVATE ')]
@@ -45,6 +67,8 @@ def cost_fields(state,plan):
 
 def check(state,logs,records,raws,plan):
     errors=[]; work=[workload(t) for t in logs]; observations=[]
+    if len(logs)!=4 or len(state['all_targets'])!=4 or len(set(state['all_targets']))!=4:
+        raise ValueError('four independent container identities required')
     selected=[state['all_targets'][i] for i in ROLES[state['round']]]
     if state['targets']!=selected or state['exit_codes']!=[0]*4: errors.append('roles_or_exit')
     objects=[]
@@ -85,8 +109,8 @@ def replay(serial,destination):
     text=Path(serial).read_text();files=extract(text);prefix='/tmp/y7-private-evidence/'
     def value(n): return json.JSONDecoder().raw_decode(files[prefix+n].lstrip())[0]
     plan=value('plan.json');declared=value('result.json');permit=value('permit.json')
-    if (plan['schema']!='cis-y7-private-plan-v1' or plan['order']!=order() or
-            plan['arrangement'] not in ('shared','separate') or len(declared['states'])!=9 or
+    validate_plan(plan)
+    if (declared['states']!=[dict(label=v['label'],result='PASS_SCOPED') for v in order()] or
             any(plan['source'][k]!=permit['source'][k] for k in SOURCE_KEYS)):
         raise ValueError('matrix or source binding')
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): raise ValueError('guest failed')
