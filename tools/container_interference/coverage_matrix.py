@@ -51,6 +51,11 @@ CONTRACT={
     'net': dict(name='Socket逻辑锁',collector='net',discovered='选定TCP Socket逻辑锁的获取、等待和释放',
         object='原生Socket cookie与netns',participants='已观察逻辑持有者与等待者，不代表TCP全部锁',
         pending=['窗口内用户Socket创建与accept已区分；窗口前/内核创建者仍未知','SCM_RIGHTS来源与持有者有专项真值，不等于报文来源','更多协议/短锁覆盖']),
+    'net_isolation': dict(name='CPU配额与Socket命名空间反例',collector='net',
+        discovered='真实cgroup限流及原生Socket/任务namespace FD独立核对',
+        object='独立Socket cookie和原生网络命名空间inode',
+        participants='限流容器不是另一私有Socket的持有者；转移FD不改变Socket归属',
+        pending=['受控CPU配额反例不代表所有网络背压','不量化CPU限流对生产吞吐的因果贡献']),
     'backlog': dict(name='backlog/skb',collector='net',discovered='入队、服务及skb释放入口',
         object='Socket cookie、skb地址及入队epoch',participants='执行者独立记录，报文原始归属未知',
         pending=['TCP发送原始头部分配另列net_tx；收包分配与完整释放后端仍缺失','clone/GSO/GRO来源变换']),
@@ -143,6 +148,7 @@ VERIFIERS={
     'allocator_rollback':('allocator_vm_check','allocator',dict(rollback=True)),
     'slub':('slub_vm_check','slub',{}),
     'net':('net_vm_check','net',{}), 'backlog':('net_vm_check','backlog',{}),
+    'net_isolation':('net_vm_check','net_isolation',{}),
     'net_tx':('net_vm_check','net_tx',{}),
     'net_tx_failure':('net_vm_check','net_tx_failure',{}),
     'net_tx_admission':('net_vm_check','net_tx_admission',{}),
@@ -196,8 +202,15 @@ def replay(index,base,output):
             labels=[r.get('label','') for r in checked.get('states',[])]
             if key=='backlog' and not labels or (key=='backlog' and not all(v.startswith('backlog-') for v in labels)):
                 raise ValueError('backlog cohort required')
-            if key=='net' and labels and all(v.startswith(('backlog-','capacity-','storm-','txfailure-','txunmarked-','txadmission-','txnormal-','txplain-','txclone-')) for v in labels):
+            if key=='net' and labels and all(v.startswith(('private-','backlog-','capacity-','storm-','txfailure-','txunmarked-','txadmission-','txnormal-','txplain-','txclone-')) for v in labels):
                 raise ValueError('logical ownership cohort required')
+            if key=='net_isolation':
+                selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
+                if (len(selected)!=3 or any(not v['label'].startswith('private-') or
+                        v.get('result',{}).get('namespace_validation',{}).get('status')!='PASS' or
+                        v['result'].get('quota_validation',{}).get('status')!='PASS' or
+                        v['result'].get('eligible')!=0 or v['result'].get('captured')!=0 for v in selected)):
+                    raise ValueError('observed private sockets and real CPU quota negative required')
             if key=='net_capacity':
                 selected=[v for v in checked.get('states',[]) if '-net' in v.get('label','')]
                 if (len(selected)!=3 or any(not v['label'].startswith('capacity-') or

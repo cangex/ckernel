@@ -28,7 +28,7 @@ def tcp_pair():
         except BaseException: client.close(); raise
 
 
-def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,txadmission=False,txrelease=False):
+def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,txadmission=False,txrelease=False,quota=False):
     os.umask(0o077); os.sched_setaffinity(0,{7})
     env=prototype_admission.environment(); prototype_admission.check_environment(env)
     if Path('/sys/module/cis_observe/parameters/net_shift').read_text().strip()!='0':
@@ -47,11 +47,15 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
     roots=[]
     for i in range(2):
         p=root/('root%d'%i); p.mkdir(); (p/'memory.max').write_text(str(64<<20)); roots.append(p)
+    if quota:
+        from net_isolation_check import QUOTA_CONFIG
+        for p,config in zip(roots,QUOTA_CONFIG): (p/'cpu.max').write_text(config)
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
     source=source_manifest(args,env['boot_id']); permit=prototype_admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
     rights=rights or origin
     cases=('capacity',) if capacity else ORIGIN_CASES if origin else ('backlog',) if backlog else RIGHTS_CASES if rights else CASES
+    if quota: cases=('private',)
     if txfailure:
         from net_tx_failure_check import CASES as failure_cases
         cases=failure_cases
@@ -66,6 +70,12 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
         hold_ms=30,waiter_offset_ms=5,socket_namespace='inherited VM loopback TCP socket; tasks in separate container namespaces',
         scope='logical lock fixture with deliberate bounded sleep while held, not ordinary application cost acceptance')
     (out/'plan.json').write_text(json.dumps(plan,indent=2))
+    if quota or origin:
+        plan.update(namespace_validation=True)
+        if quota:
+            plan.update(private_quota_validation=True,cpu_max=QUOTA_CONFIG,quota_work_cpu_ns=80000000,
+                        scope='private native sockets with actor0 CPU quota; no shared logical Socket lock')
+        (out/'plan.json').write_text(json.dumps(plan,indent=2))
     if txrelease:
         plan.update(operations=1,send_bytes=128,tx_release_validation=True,
                     scope='native TCP_REPAIR original-header release and real retained skb_clone, no wire-delivery claim')
@@ -125,7 +135,7 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
     def snapshot():
         return dict(time_ns=time.monotonic_ns(),proc_stat=Path('/proc/stat').read_text(),
             memory=Path('/proc/meminfo').read_text(),source_audit=Path('/sys/kernel/debug/cis_net_audit').read_text(),
-            roots=[{name:(p/name).read_text() for name in ('cpu.stat','memory.current','memory.peak','memory.events')} for p in roots])
+            roots=[{name:(p/name).read_text() for name in ('cpu.stat','cpu.max','memory.current','memory.peak','memory.events')} for p in roots])
 
     try:
         if fault: fault.enable()
@@ -183,7 +193,7 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
                 if txrelease: workload='/net_release_workload'
                 child_env=dict(os.environ,CIS_NET_RELEASE_CLOSE_PARENT_FD='1') if txrelease else None
                 child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case]
-                    +(['origin'] if origin else [])+extra,stdout=handle,stderr=handle,pass_fds=passed,env=child_env)
+                    +(['origin'] if origin else ['quota'] if quota else [])+extra,stdout=handle,stderr=handle,pass_fds=passed,env=child_env)
                 children.append(child); running.append(child)
             if txfailure:
                 for sock in sockets: sock.close()
@@ -231,6 +241,13 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
             else:
                 result=check_case(case,window,logs,report,identities,require_origin=origin,require_protocol_negative=origin,
                                   require_tx=backlog)
+            if quota or origin:
+                from net_isolation_check import namespaces,quota as check_quota
+                result['namespace_validation']=namespaces(case,logs,report)
+                if quota: result['quota_validation']=check_quota(window,logs,before,after)
+                for key in ('namespace_validation','quota_validation'):
+                    if key in result and result[key]['status']!='PASS':
+                        result['errors'].extend(result[key]['errors']); result['status']='FAIL'
             evidence=dict(label=label,session_id=sid,window=window,active_sources=active,idle_sources=idle,
                 targets=targets,before=before,after=after,source_before=source_before,source_after=snapshot(),exit_codes=codes,result=result)
             evidence['source_delta']=delta(evidence['source_before'],evidence['source_after'])
@@ -271,4 +288,5 @@ if __name__=='__main__':
     group.add_argument('--txfailure',action='store_true')
     group.add_argument('--txadmission',action='store_true')
     group.add_argument('--txrelease',action='store_true')
-    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure,a.txadmission,a.txrelease)
+    group.add_argument('--quota',action='store_true')
+    a=parser.parse_args(); run(a.backlog,a.rights,a.origin,a.capacity,a.txfailure,a.txadmission,a.txrelease,a.quota)

@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/sockios.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <stdint.h>
@@ -10,6 +11,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -34,6 +36,44 @@ static uint64_t now_ns(void)
 	struct timespec t;
 	if (clock_gettime(CLOCK_MONOTONIC,&t)) return 0;
 	return (uint64_t)t.tv_sec*1000000000ULL+t.tv_nsec;
+}
+
+static int namespace_record(int fd, unsigned int actor, uint64_t cookie)
+{
+	struct stat task, object;
+	int task_fd=open("/proc/self/ns/net",O_RDONLY|O_CLOEXEC);
+	int socket_fd=ioctl(fd,SIOCGSKNS);
+	int error=task_fd<0 || socket_fd<0;
+	if (!error) error=fstat(task_fd,&task) || fstat(socket_fd,&object);
+	if (task_fd>=0) close(task_fd);
+	if (socket_fd>=0) close(socket_fd);
+	if (error) return -1;
+	printf("CIS_NET_NAMESPACE actor=%u cookie=%llu task_ns=%llu socket_ns=%llu\n",
+		actor,(unsigned long long)cookie,(unsigned long long)task.st_ino,(unsigned long long)object.st_ino);
+	fflush(stdout);
+	return 0;
+}
+
+static uint64_t thread_ns(void)
+{
+	struct timespec t;
+	if (clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t)) return 0;
+	return (uint64_t)t.tv_sec*1000000000ULL+t.tv_nsec;
+}
+
+/* Real cgroup CPU throttling, before (not while) taking either private lock. */
+static int quota_work(unsigned int actor)
+{
+	uint64_t begin=now_ns(), cpu_begin=thread_ns(), end, cpu_end;
+	do {
+		cpu_end=thread_ns(); end=now_ns();
+		if (!cpu_end || !end || end-begin>1200000000ULL) return -1;
+	} while (cpu_end-cpu_begin<80000000ULL);
+	printf("CIS_NET_QUOTA actor=%u begin_ns=%llu end_ns=%llu cpu_begin_ns=%llu cpu_end_ns=%llu requested_cpu_ns=80000000\n",
+		actor,(unsigned long long)begin,(unsigned long long)end,
+		(unsigned long long)cpu_begin,(unsigned long long)cpu_end);
+	fflush(stdout);
+	return 0;
 }
 
 static int origin_record(int fd, unsigned int operation, uint64_t begin, uint64_t end)
@@ -144,22 +184,27 @@ int main(int argc, char **argv)
 	struct cis_net_test_request r = {0};
 	uint64_t start, cookie = 0;
 	socklen_t length = sizeof(cookie);
-	unsigned int i, actor, swap, rights, private_socket;
+	unsigned int i, actor, swap, rights, private_socket, origin, quota;
 	int device, fd;
 	if (argc != 5 && argc != 6) return 2;
-	if (argc == 6 && strcmp(argv[5],"origin")) return 2;
+	origin=argc==6 && !strcmp(argv[5],"origin");
+	quota=argc==6 && !strcmp(argv[5],"quota");
+	if (argc==6 && !origin && !quota) return 2;
 	fd = atoi(argv[1]); actor = strtoul(argv[2], NULL, 10);
 	start = strtoull(argv[3], NULL, 10);
 	rights=!strcmp(argv[4],"rightsShared") || !strcmp(argv[4],"rightsPrivate") || !strcmp(argv[4],"rightsAccept");
 	private_socket=!strcmp(argv[4],"rightsPrivate");
 	swap = !strcmp(argv[4], "switch") || rights;
 	if (fd < 0 || actor > 1 || (strcmp(argv[4], "shared") && strcmp(argv[4], "private") && !swap)) return 2;
-	if (argc == 6 && (!rights || start<300000000ULL || until(start-300000000ULL))) return 5;
-	if (argc == 6 && excluded_sockets()) { perror("excluded sockets"); return 9; }
+	if (quota && strcmp(argv[4],"private")) return 2;
+	if (origin && (!rights || start<300000000ULL || until(start-300000000ULL))) return 5;
+	if (origin && excluded_sockets()) { perror("excluded sockets"); return 9; }
 	if(rights) { fd=transfer_socket(fd,actor,private_socket,!strcmp(argv[4],"rightsAccept")); if(fd<0) { perror("SCM_RIGHTS"); return 8; } }
 	if (getsockopt(fd, SOL_SOCKET, SO_COOKIE, &cookie, &length) || length != sizeof(cookie) || !cookie) return 3;
+	if (namespace_record(fd,actor,cookie)) { perror("socket namespace"); return 10; }
 	device = open("/dev/cis-net-test", O_RDWR | O_CLOEXEC);
 	if (device < 0) return 4;
+	if (quota && !actor && (until(start) || quota_work(actor))) return 11;
 	for (i = 0; i < 4; i++) {
 		unsigned int holder = swap ? i % 2 : 0;
 		r = (struct cis_net_test_request) { .fd = fd, .cookie = cookie, .hold_ms = actor == holder ? 30 : 0 };

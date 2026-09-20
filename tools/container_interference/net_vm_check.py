@@ -13,6 +13,7 @@ from source_switches import validate
 from net_tx_failure_check import CASES as TX_FAILURE_CASES
 from net_tx_admission_check import CASES as TX_ADMISSION_CASES
 from net_release_check import CASES as TX_RELEASE_CASES
+from net_isolation_check import QUOTA_CONFIG,namespaces,quota as check_quota
 
 
 def verify(serial,output):
@@ -22,7 +23,12 @@ def verify(serial,output):
     plan,declared,permit=[value(k+'.json') for k in ('plan','result','permit')]
     output.mkdir(mode=0o700); errors=[]; states=[]
     cases=tuple(plan.get('cases',[]))
-    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,TX_FAILURE_CASES,TX_ADMISSION_CASES,TX_RELEASE_CASES,('backlog',),('capacity',)): raise ValueError('unsupported frozen case set')
+    if cases not in (CASES,RIGHTS_CASES,ORIGIN_CASES,TX_FAILURE_CASES,TX_ADMISSION_CASES,TX_RELEASE_CASES,('backlog',),('capacity',),('private',)): raise ValueError('unsupported frozen case set')
+    quota=cases==('private',)
+    if quota!=(plan.get('private_quota_validation') is True): errors.append('quota_plan')
+    if quota and (plan.get('namespace_validation') is not True or plan.get('cpu_max')!=QUOTA_CONFIG or
+                  plan.get('quota_work_cpu_ns')!=80000000): errors.append('quota_frozen_parameters')
+    if plan.get('namespace_validation') and cases not in (ORIGIN_CASES,('private',)): errors.append('namespace_plan')
     txfailure=cases==TX_FAILURE_CASES
     txadmission=cases==TX_ADMISSION_CASES
     txrelease=cases==TX_RELEASE_CASES
@@ -100,6 +106,12 @@ def verify(serial,output):
             result=check_case(label.split('-')[0],ev['window'],logs,report,identities,require_origin=cases==ORIGIN_CASES,
                               require_protocol_negative='excluded_protocols' in plan,
                               require_tx=plan.get('tx_allocation_validation') is True)
+        if plan.get('namespace_validation'):
+            result['namespace_validation']=namespaces(label.split('-')[0],logs,report)
+            if quota: result['quota_validation']=check_quota(ev['window'],logs,ev['before'],ev['after'])
+            for key in ('namespace_validation','quota_validation'):
+                if key in result and result[key]['status']!='PASS':
+                    result['errors'].extend(result[key]['errors']); result['status']='FAIL'
         source=delta(ev['source_before'],ev['source_after'])
         if cases==('capacity',) and any(delta(ev['post_detach_source_before'],ev['source_after'])['totals'].values()):
             errors.append('callbacks_after_detach_'+label)
@@ -108,7 +120,7 @@ def verify(serial,output):
         if result['status']!='PASS' or ev['exit_codes']!=[0,0]: errors.append(label)
         states.append(dict(label=label,result=result,source_audit=source))
     result=dict(status='FAIL' if errors else 'PASS',errors=errors,states=states,source=declared['source'],
-        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='native original skb backend return and retained clone' if txrelease else 'native TCP memory admission rejection' if txadmission else
+        serial_sha256=hashlib.sha256(raw).hexdigest(),scope='CPU quota and namespace negative, not Socket lock positive' if quota else 'native original skb backend return and retained clone' if txrelease else 'native TCP memory admission rejection' if txadmission else
             'native TCP send backend failure and recovery' if txfailure else 'native TCP logical lock fixture only',
         x4_status='INCOMPLETE',performance_certification='NOT_ACCEPTED')
     (output/'verification.json').write_text(json.dumps(result,indent=2)); return result

@@ -120,4 +120,6 @@ class NetSource(unittest.TestCase):
         self.assertLess(body.index('until(start-300000000ULL)'),body.index('fd=transfer_socket('))
         harness=(root/'tools/testing/selftests/container_interference/net_vm.py').read_text()
         self.assertIn("window['start_ns']+500_000_000",harness)
-        self.assertIn("+(['origin'] if origin else [])",harness)
+        self.assertIn("+(['origin'] if origin else ['quota'] if quota else [])",harness)
+        self.assertIn('if (origin && (!rights || start<300000000ULL',body)
+        self.assertIn('if (quota && strcmp(argv[4],"private")) return 2;',body)
