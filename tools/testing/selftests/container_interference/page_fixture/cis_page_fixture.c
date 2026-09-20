@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Disposable VM only: native page allocation/free, no synthetic trace events. */
 #include <linux/capability.h>
+#include <linux/delay.h>
 #include <linux/fs.h>
 #include <linux/ktime.h>
 #include <linux/miscdevice.h>
@@ -21,7 +22,7 @@ static long page_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN)) return -EPERM;
 	if (cmd != CIS_PAGE_TEST) return -EINVAL;
 	if (copy_from_user(&q, (void __user *)arg, sizeof(q))) return -EFAULT;
-	if (q.version != 1 || q.reserved[0] || q.reserved[1] ||
+	if (q.version != 2 || q.reserved[0] || q.reserved[1] ||
 	    q.node >= MAX_NUMNODES || !node_online(q.node) ||
 	    !node_isset(q.node, current->mems_allowed)) return -EINVAL;
 	pages = kcalloc(CIS_PAGE_SMALL + CIS_PAGE_LARGE, sizeof(*pages), GFP_KERNEL_ACCOUNT);
@@ -34,12 +35,15 @@ static long page_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (!pages[i]) { q.failed++; break; }
 		q.wrong_node += page_to_nid(pages[i]) != q.node;
 		q.pages_allocated += 1U << order;
+		/* Functional full-rate coverage only, not an allocator benchmark. */
+		if ((i & 15) == 15) usleep_range(1000, 1100);
 	}
 	for (i = 0; i < CIS_PAGE_SMALL + CIS_PAGE_LARGE; i++) {
 		if (!pages[i]) continue;
 		order = i < CIS_PAGE_SMALL ? 0 : CIS_PAGE_ORDER;
 		__free_pages(pages[i], order);
 		q.pages_freed += 1U << order;
+		if ((i & 15) == 15) usleep_range(1000, 1100);
 	}
 	q.end_ns = ktime_get_ns();
 	kfree(pages);

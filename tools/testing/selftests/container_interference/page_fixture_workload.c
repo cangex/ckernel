@@ -25,7 +25,7 @@ int main(int argc, char **argv)
 	do { err = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL); } while (err == EINTR);
 	if (err) return 4;
 	for (i = 0; i < 4; i++) {
-		struct cis_page_test q = { .version = 1, .node = 0 };
+		struct cis_page_test q = { .version = 2, .node = 0 };
 		if (ioctl(fd, CIS_PAGE_TEST, &q) || q.failed || q.wrong_node ||
 		    q.pages_allocated != pages || q.pages_freed != pages) return 5;
 		printf("CIS_MEM_OP index=%u begin_ns=%llu end_ns=%llu bytes=%llu success=1\n",

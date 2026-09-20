@@ -61,22 +61,25 @@ def verify(serial,output):
     def value(name): return json.JSONDecoder().raw_decode(files[prefix+name].lstrip())[0]
     output.mkdir(mode=0o700)
     plan,result,permit=[value(n+'.json') for n in ('plan','result','permit')]
-    fixture=plan['schema'] in ('cis-y2-page-fixture-v1','cis-y2-page-fixture-v2')
-    page_count=4 if plan['schema']=='cis-y2-page-fixture-v2' else 8
+    fixture=plan['schema'] in ('cis-y2-page-fixture-v1','cis-y2-page-fixture-v2','cis-y2-page-fixture-v3')
+    page_count=4 if fixture and plan['schema']!='cis-y2-page-fixture-v1' else 8
     errors=[]; states=[]
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
     if any(v in text for v in ('page_counter underflow:', 'BUG: KASAN:', 'Oops:', 'Kernel panic','WARNING: CPU:')):
         errors.append('kernel_warning')
     lease=value('lease-checks.json')
     if lease.get('status')!='PASS' or len(lease.get('checks',[]))!=6: errors.append('lease_control')
-    if (plan['schema'] not in ('cis-y2-memory-plan-v1','cis-y2-memory-plan-v2','cis-y2-page-fixture-v1','cis-y2-page-fixture-v2') or len(plan['order'])!=(12 if fixture else 24) or
+    if (plan['schema'] not in ('cis-y2-memory-plan-v1','cis-y2-memory-plan-v2','cis-y2-page-fixture-v1','cis-y2-page-fixture-v2','cis-y2-page-fixture-v3') or len(plan['order'])!=(12 if fixture else 24) or
             plan['operations']!=16 or plan['sample_shift']!=6 or plan['cpus']!=[0,1] or plan['mems']!=[0]):
         errors.append('plan')
     if fixture and ('CIS_PAGE_FIXTURE_UNLOAD=0' not in text.splitlines() or
                     plan['pcp_high_fraction']!=4096 or plan['page_bytes_per_operation']!=3088*plan['page_size']):
         errors.append('page_fixture_configuration')
-    if plan['schema']=='cis-y2-page-fixture-v2' and (plan['page_operations']!=4 or plan.get('page_sample_shift')!=0):
+    if fixture and plan['schema']!='cis-y2-page-fixture-v1' and (plan['page_operations']!=4 or plan.get('page_sample_shift')!=0):
         errors.append('page_fixture_full_rate_configuration')
+    if plan['schema']=='cis-y2-page-fixture-v3' and (plan.get('fixture_version')!=2 or
+            plan.get('pace_every')!=16 or plan.get('pace_us')!=[1000,1100]):
+        errors.append('page_fixture_pacing_configuration')
     if fixture:
         restored=[fields(line) for line in text.splitlines() if line.startswith('CIS_PAGE_PCP_RESTORED=')]
         if len(restored)!=1 or restored[0].get('CIS_PAGE_PCP_RESTORED')!=restored[0].get('original'):

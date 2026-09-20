@@ -102,7 +102,8 @@ def run(page_fixture=False):
               sample_shift=6,window_ms=2000,cpus=[0,1],mems=[0],manager_cpu=7,
               host_scope='isolated VM',claim='native participation and ownership, not causal blocking')
     if page_fixture:
-        plan.update(schema='cis-y2-page-fixture-v2',page_operations=4,page_sample_shift=0,
+        plan.update(schema='cis-y2-page-fixture-v3',page_operations=4,page_sample_shift=0,
+                    fixture_version=2,pace_every=16,pace_us=[1000,1100],
                     page_bytes_per_operation=3088*os.sysconf('SC_PAGESIZE'),
                     page_thp='native order0/order4',page_size=os.sysconf('SC_PAGESIZE'),
                     pcp_high_fraction=4096,claim='native allocation/free coverage fixture, not ordinary workload cost')
