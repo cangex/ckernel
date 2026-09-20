@@ -146,7 +146,8 @@ def explain(record, raw, *, finding_limit=MAX_FINDINGS):
         limits=['sampling absence is not absence of interference',
                 'hold/wait and holder off-CPU overlap; never add as disjoint time',
                 'bounded supported paths only; no full-kernel recall claim'])
-    result['manual_diagnosis_candidates']=recommend(result)
+    result['collector_policy']=record.get('collector_policy')
+    result['manual_diagnosis_candidates']=recommend(result, legacy='collector_policy' not in record)
     return result
 
 

@@ -17,16 +17,17 @@ MAX_RELATIONS=128
 def analyze(record,raw):
     collector=record['collector']; base=explain(record,raw); relations=[]; omitted=0
     specialist=None
-    if collector in ('sync','counter','allocator','net','block','rwsem'):
-        module=__import__(collector+'_report'); specialist=module.analyze(record,raw)
+    if collector in ('sync','counter','allocator','alloc_backend','net','block','rwsem'):
+        module=__import__(('allocator' if collector=='alloc_backend' else collector)+'_report')
+        specialist=module.analyze(record,raw)
     quality=specialist['quality'] if specialist else base['quality']
     scope=specialist['scope_audit'] if specialist else audit(record,raw)
     if scope['status']!='PASS':
         quality=dict(quality,status='FAIL' if 'FAIL' in (quality['status'],scope['status']) else 'BLOCKED',
             defects=quality['defects']+['collector_scope_'+scope['status'].lower()])
-    if collector=='allocator' and specialist['lifetimes']['status']=='FAIL':
+    if collector in ('allocator','alloc_backend') and specialist['lifetimes']['status']=='FAIL':
         quality=dict(quality,status='FAIL',defects=quality['defects']+['allocation_lifetime_invalid'])
-    if collector=='allocator' and specialist['maple']['status']=='FAIL':
+    if collector in ('allocator','alloc_backend') and specialist['maple']['status']=='FAIL':
         quality=dict(quality,status='FAIL',defects=quality['defects']+['maple_context_invalid'])
 
     def add(kind,level,actor,resource,participants,interval,chain,unknown,**detail):
@@ -60,7 +61,7 @@ def analyze(record,raw):
                 add('counter_operation','E1',f['actor'],dict(kind='page_counter',address=f['leaf_address'],generation=f['leaf_generation']),
                     [],f['interval_ns'],f['stack_leaf_to_root'],['wall time includes observer and scheduling'],
                     outcome=f['outcome'],steps=f['steps'])
-        elif collector=='allocator':
+        elif collector in ('allocator','alloc_backend'):
             for f in specialist['calls']:
                 unknown=['Maple tree owner and SLUB lock holder not inferred']
                 if f['allocation_stack_status']!='AVAILABLE':

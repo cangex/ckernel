@@ -8,12 +8,12 @@ def expected_fields(version, collector):
     if version not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'):
         raise ValueError('unsupported source-switch version')
     v = int(version)
-    if v < {'counter':2, 'allocator':3, 'net':5, 'block':6, 'rwsem':7, 'slub':8}.get(collector, 1):
+    if v < {'counter':2, 'allocator':3, 'alloc_backend':3, 'net':5, 'block':6, 'rwsem':7, 'slub':8}.get(collector, 1):
         raise ValueError('unsupported source-switch version')
     result = dict(version=version, owner=str(int(collector=='owner')), fd=str(int(collector=='fd')))
     if v >= 2: result['counter'] = str(int(collector=='counter'))
-    if v >= 3: result['allocator'] = str(int(collector=='allocator'))
-    if v >= 4: result['allocator_release'] = str(int(collector=='allocator'))
+    if v >= 3: result['allocator'] = str(int(collector in ('allocator','alloc_backend')))
+    if v >= 4: result['allocator_release'] = str(int(collector in ('allocator','alloc_backend')))
     if v >= 5: result.update(net=str(int(collector=='net')),net_release=str(int(collector=='net')))
     if v >= 6:
         result.update({name:str(int(collector=='block')) for name in (

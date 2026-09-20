@@ -65,7 +65,7 @@ def stages(rows, begin, end):
 
 
 def analyze(record, raw):
-    if record.get('collector')!='allocator' or len(raw)>16<<20:
+    if record.get('collector') not in ('allocator','alloc_backend') or len(raw)>16<<20:
         raise ValueError('bounded allocator capture required')
     base=explain(record,raw); groups=defaultdict(list); stacks={}; excluded=Counter()
     known={(v['id'],v['generation']) for v in record.get('root_identities',{}).values()}

@@ -17,11 +17,11 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,2); __type(key,__u64
 #endif
 struct { __uint(type,BPF_MAP_TYPE_PERF_EVENT_ARRAY); __uint(max_entries,512); __type(key,__u32); __type(value,__u32); } events SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(key,__u32); __type(value,struct cis_bpf_stats); } stats SEC(".maps");
-#if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 7 || CIS_PROFILE == 8
+#if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 13
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10 || CIS_PROFILE == 11 || CIS_PROFILE == 12
-#if CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10 || CIS_PROFILE == 11 || CIS_PROFILE == 12 || CIS_PROFILE == 13
+#if CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10 || CIS_PROFILE == 13
 #define PROFILE_STACKS 2048
 #else
 #define PROFILE_STACKS CIS_STACKS
@@ -31,7 +31,7 @@ struct { __uint(type,BPF_MAP_TYPE_STACK_TRACE); __uint(max_entries,PROFILE_STACK
 #if CIS_PROFILE == 0
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,128); __type(key,__u64); __type(value,struct cis_work_state); } work_items SEC(".maps");
 #endif
-#if CIS_PROFILE == 8
+#if CIS_PROFILE == 8 || CIS_PROFILE == 13
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_alloc_live_key); __type(value,struct cis_alloc_live); } alloc_live SEC(".maps");
 #endif
 #if CIS_PROFILE == 9
@@ -231,6 +231,8 @@ int net_release(struct bpf_raw_tracepoint_args *ctx)
 
 #if CIS_PROFILE == 8
 #include "maple.bpf.h"
+#endif
+#if CIS_PROFILE == 8 || CIS_PROFILE == 13
 SEC("raw_tp/cis_alloc_step")
 int alloc_step(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -275,7 +277,9 @@ int alloc_step(struct bpf_raw_tracepoint_args *ctx)
 	e.ordinal = BPF_CORE_READ(sample, ordinal); e.sample_shift = BPF_CORE_READ(sample, sample_shift);
 	e.requested_node = BPF_CORE_READ(sample, requested_node);
 	e.observed_node = BPF_CORE_READ(sample, observed_node);
+#if CIS_PROFILE == 8
 	if (e.stage == 1) maple_backend(&e);
+#endif
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);
 	if (e.base.object && (e.stage == 17 || (e.stage == 20 && e.operation == 1 && e.count == 1))) {

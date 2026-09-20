@@ -385,7 +385,9 @@ static int configure_links(struct capture *c,unsigned int kinds)
 	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {
-		if(!(kinds&links[i].mask)) { bpf_link__destroy(c->diagnostic_links[i]); c->diagnostic_links[i]=NULL; }
+		if(!(kinds&links[i].mask) || !cis_profile_program(c->ctx->session_collector,links[i].name)) {
+			bpf_link__destroy(c->diagnostic_links[i]); c->diagnostic_links[i]=NULL;
+		}
 		else if(!c->diagnostic_links[i] && attach(c,links[i].name,&c->diagnostic_links[i])) return -EIO;
 	}
 	if(c->active_kinds!=kinds) {

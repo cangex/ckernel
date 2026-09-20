@@ -20,6 +20,10 @@ JOINT_COLLECTORS = JOINT_COLLECTORS_V1 + ('slub',)
 
 
 def cohort_collectors(schema, group=None):
+    if schema == 'cis-y0-joint-plan-v1' and group == 'public':
+        return ('ip','counter','alloc_backend','slub','sched','reclaim','block')
+    if schema == 'cis-y0-joint-plan-v1' and group == 'backend-compare':
+        return ('alloc_backend','allocator')
     if schema == 'cis-x7-joint-plan-v1': return JOINT_COLLECTORS_V1
     if schema == 'cis-x7-joint-plan-v2': return JOINT_COLLECTORS
     if schema == 'cis-x7-joint-plan-v3' and group == 'common': return JOINT_COLLECTORS_V1
@@ -71,6 +75,18 @@ def check(serial,output):
             plan['targets_by_round']!=[[0,2],[1,3],[0,3]] or plan['captures']!=3*len(collectors) or plan['clock_ticks']<=0):
         raise ValueError('unexpected frozen matrix')
     if declared['source']!=plan['source'] or any(plan['source'][k]!=permit['source'][k] for k in SOURCE_KEYS): errors.append('source_binding')
+    if plan['schema']=='cis-y0-joint-plan-v1':
+        from resource_policy import policy, EXTENSIONS
+        expected=policy([] if plan['group']=='public' else ['allocator'])
+        if plan['source'].get('collector_policy')!=expected: errors.append('public_resource_policy')
+        if plan['group']=='public':
+            denials=value('extension-denials.json')
+            if {v['collector'] for v in denials}!=EXTENSIONS or len(denials)!=len(EXTENSIONS):
+                errors.append('extension_denial_population')
+            for row in denials:
+                if row['reply'].get('ok') is not False or 'explicit extension required' not in row['reply'].get('error',''):
+                    errors.append('extension_not_denied')
+                validate(row['sources'],None,0,2**64-1)
     if 'CIS_PROFILE_VM_EXIT=0' not in text.splitlines(): errors.append('guest_exit')
     if any(v in text for v in ('Oops:','Kernel panic','BUG: KASAN:','WARNING: CPU:')): errors.append('kernel_warning')
     if len(declared['states'])!=len(order): errors.append('incomplete_matrix')
@@ -96,6 +112,11 @@ def check(serial,output):
                 controller_cpu_ns=record.get('controller_cpu_ns'),reaped_children_cpu_ns=record.get('reaped_children_cpu_ns'),
                 memory_total_complete=record.get('memory_total_complete'),rss_bytes=record.get('combined_rss_peak_bytes'),
                 explicit_unknown=['business-context callback CPU not separately measured','kernel asynchronous memory not complete'])
+            if mode=='alloc_backend':
+                from collector_manifest import validate_record_inventory
+                validate_record_inventory(record)
+                if any(json.loads(line).get('kind')=='MAPLE_ALLOC' for line in capture.splitlines()):
+                    errors.append('unexpected_tree_observation')
             (output/(label+'-explanation.json')).write_text(json.dumps(report,indent=2))
         else:
             if evidence['session_id'] is not None: errors.append('off_capture')
@@ -132,7 +153,8 @@ def check(serial,output):
                     p99_change_ns=b['p99_ns']-a['p99_ns'],timeouts_before=a['timeouts'],timeouts_after=b['timeouts']))
     result=dict(schema='cis-x7-joint-check-v1',status='FAIL' if errors else 'PASS_SCOPED',errors=sorted(set(errors)),
         states=states,comparisons=comparisons,serial_sha256=hashlib.sha256(raw).hexdigest(),source=plan['source'],
-        x7_complete=False,scope='four-container mixed native operations with fixed offered load',
+        x7_complete=False,cohort_schema=plan['schema'],group=plan.get('group'),
+        scope='four-container mixed native operations with fixed offered load',
         limits=['no population attribution precision/recall without full truth','quiet adapters do not gain positive coverage',
                 'not saturated-throughput or tail-latency acceptance','whole VM CPU includes business and background'],
         performance_certification='NOT_ACCEPTED')

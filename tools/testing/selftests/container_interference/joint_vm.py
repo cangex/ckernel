@@ -17,6 +17,7 @@ from session import source_manifest
 from source_switches import observe
 from unified_report import analyze
 from joint_costs import CGROUP_FILES,kernel_threads
+from resource_policy import EXTENSIONS
 
 
 def order(collectors):
@@ -34,11 +35,14 @@ def run(group='common'):
     roots=[]
     for i in range(4):
         p=root/('root%d'%i); p.mkdir(); (p/'memory.max').write_text(str(64<<20)); roots.append(p)
-    args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
+    schema='cis-y0-joint-plan-v1' if group in ('public','backend-compare') else 'cis-x7-joint-plan-v3'
+    collectors=cohort_collectors(schema,group)
+    extensions=sorted(set(collectors)&EXTENSIONS)
+    args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',
+                         bpf='/profile/cis.bpf.o',enable_extension=extensions)
     source=source_manifest(args,env['boot_id']); permit=admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
-    collectors=cohort_collectors('cis-x7-joint-plan-v3',group)
-    plan=dict(schema='cis-x7-joint-plan-v3',group=group,source=source,order=order(collectors),modes=['off']+list(collectors),rounds=3,
+    plan=dict(schema=schema,group=group,source=source,order=order(collectors),modes=['off']+list(collectors),rounds=3,
         cpus=[0,0,1,1],workloads=['file','file','vma','vma'],management_cpu=7,
         offered_per_actor=1500,period_ns=2_000_000,timeout_ns=100_000_000,
         scope='native file and VMA operations, four active containers; no injected kernel delays',
@@ -51,10 +55,10 @@ def run(group='common'):
     endpoint='/run/cis-joint.sock'; log=(out/'controller.log').open('x'); audit=(out/'requests.jsonl').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
         '--worker',args.worker,'--residue',args.residue,'--bpf',args.bpf,'--admission-policy','prototype',
-        '--prototype-permit',str(out/'permit.json'),'daemon'],stdout=log,stderr=log)
+        '--prototype-permit',str(out/'permit.json')]+[v for e in extensions for v in ('--enable-extension',e)]+['daemon'],stdout=log,stderr=log)
     children=[]; handles=[]; results=[]
 
-    def request(op,**args):
+    def request(op,expected_ok=True,**args):
         before=time.monotonic_ns(); req=dict(version=1,op=op,**args)
         with socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET) as sock:
             sock.settimeout(15); sock.connect(endpoint); sock.send(json.dumps(req).encode()); reply=json.loads(sock.recv(16384))
@@ -62,7 +66,8 @@ def run(group='common'):
         if op=='status' and reply.get('ok'):
             retained=dict(reply,data={k:reply['data'][k] for k in ('state','session_id','finalized','prototype_sessions_started') if k in reply['data']})
         audit.write(json.dumps(dict(before_ns=before,after_ns=time.monotonic_ns(),request=req,response=retained))+'\n'); audit.flush()
-        if not reply['ok']: raise RuntimeError(reply)
+        if reply['ok'] is not expected_ok: raise RuntimeError(reply)
+        if not expected_ok: return reply
         return reply['data']
 
     def wait(sid,key):
@@ -91,6 +96,14 @@ def run(group='common'):
             if daemon.poll() is not None or time.monotonic()>limit: raise RuntimeError('daemon readiness')
             time.sleep(.02)
         targets=[request('register',path=str(p))['target'] for p in roots]
+        if group=='public':
+            denials=[]
+            for collector in sorted(EXTENSIONS):
+                extra=dict(objects=[4096]) if collector=='rwsem' else {}
+                reply=request('start',expected_ok=False,collector=collector,targets=targets[:1],
+                              nonce='reject'+collector,**extra)
+                denials.append(dict(collector=collector,reply=reply,sources=observe(None)))
+            (out/'extension-denials.json').write_text(json.dumps(denials,indent=2))
         for round_number,mode in plan['order']:
             label=mode+str(round_number); start=time.monotonic_ns()+500_000_000; running=[]; before=snapshot()
             for i in range(4):
@@ -138,5 +151,5 @@ def run(group='common'):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(); parser.add_argument('--group',choices=('common','slub'),default='common')
+    parser=argparse.ArgumentParser(); parser.add_argument('--group',choices=('common','slub','public','backend-compare'),default='common')
     run(parser.parse_args().group)

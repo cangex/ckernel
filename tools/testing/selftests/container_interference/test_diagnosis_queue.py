@@ -82,4 +82,4 @@ class DiagnosisQueueTests(unittest.TestCase):
             ('mutex_lock','owner'),('rwsem_down_write_slowpath','sync')]:
             report=dict(quality=dict(status='PASS'),session_id='7',survey_epoch=1,window=dict(end_ns=99),
                 candidates=[dict(valid=True,target='1:1',top_ip=[dict(symbol=symbol)],rates={})])
-            self.assertEqual(recommend(report)[0]['collector'],collector)
+            self.assertEqual(recommend(report,legacy=True)[0]['collector'],collector)

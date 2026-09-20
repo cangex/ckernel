@@ -55,7 +55,9 @@ class DiagnosisController(unittest.TestCase):
         r['receipt']['producer_recursion']=dict(required=True,valid=True,skipped=0)
         c.manifest={k:'frozen' for k in session.prototype_admission.SOURCE_KEYS}
         r.update(c.manifest); c.history={'7':r}
-        self.assertEqual(c.diagnosis_ready(),{'owner'})
+        self.assertEqual(c.diagnosis_ready(),set())
+        r['collector']='counter'
+        self.assertEqual(c.diagnosis_ready(),{'counter'})
         r['bpf_sha256']='other'; self.assertFalse(c.diagnosis_ready())
         r['bpf_sha256']='frozen'; r['receipt']['producer_recursion']['skipped']=1
         self.assertFalse(c.diagnosis_ready())

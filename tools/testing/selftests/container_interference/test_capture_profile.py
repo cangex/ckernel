@@ -127,7 +127,12 @@ int main(void) {
     assert(cis_profile_program(12, "owner_state"));
     assert(cis_profile_program(12, "owner_switch"));
     assert(!cis_profile_program(12, "alloc_step"));
-    assert(!cis_profile_map(13, "roots"));
+    assert(cis_profile_map(13, "roots"));
+    assert(cis_profile_map(13, "alloc_live"));
+    assert(!cis_profile_map(13, "maple_pending"));
+    assert(cis_profile_program(13, "alloc_step"));
+    assert(!cis_profile_program(13, "maple_context"));
+    assert(!cis_profile_map(14, "roots"));
     return 0;
 }
 '''

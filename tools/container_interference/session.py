@@ -45,6 +45,7 @@ from schedule import Schedule
 import survey
 import prototype_admission
 import collector_manifest
+import resource_policy
 from diagnosis_queue import DiagnosisQueue
 from diagnosis_plan import recommend
 from session_quality import assess
@@ -83,15 +84,19 @@ def host_admin(pid=None):
 
 def source_manifest(args, boot):
     bundle = collector_manifest.bundle_manifest(args.bpf)
+    policy = resource_policy.policy(getattr(args, 'enable_extension', ()))
     return {'protocol': VERSION, 'boot_id': boot,
             'controller_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'worker_sha256': hashlib.sha256(Path(args.worker).read_bytes()).hexdigest(),
             'residue_sha256': hashlib.sha256(Path(args.residue).read_bytes()).hexdigest(),
             'bpf_sha256': digest(bundle), 'bpf_binding': 'collector_bundle_v1',
-            'support_sha256': digest({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
+            'collector_policy': policy,
+            'collector_policy_sha256': resource_policy.fingerprint(policy),
+            'support_sha256': digest(dict({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
                 for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py',
                              'child_usage.py', 'prototype_admission.py', 'collector_manifest.py',
-                             'diagnosis_queue.py','diagnosis_plan.py','session_quality.py')}),
+                             'diagnosis_queue.py','diagnosis_plan.py','session_quality.py','resource_policy.py')},
+                             collector_policy=policy)),
             'collector_bundle': bundle, 'collector_bundle_sha256': digest(bundle),
             'kernel_release': os.uname().release,
             'kernel_notes_sha256': hashlib.sha256(Path('/sys/kernel/notes').read_bytes()).hexdigest(),
@@ -436,6 +441,9 @@ class Controller:
     def start(self, request, planned=None):
         if self.schedule and request.get('nonce_epoch') != self.nonce_epoch:
             raise ValueError('nonce epoch expired; query status before a new request')
+        resource_policy.admit(self.manifest.get('collector_policy', resource_policy.policy()),
+                              request['collector'], automatic=bool(planned and
+                              planned.get('kind') == 'automatic_diagnosis'))
         fingerprint = hashlib.sha256(encoded(request)).hexdigest()
         for saved in self.history.values():
             if saved['nonce'] == request['nonce'] and saved.get('nonce_epoch') == request.get('nonce_epoch'):
@@ -990,6 +998,7 @@ class Controller:
 
     def diagnosis_ready(self):
         return {r['collector'] for r in self.history.values() if r.get('finalized') and r.get('collector')!='ip'
+                and r['collector'] in resource_policy.DEFAULT
                 and all(k in r and k in self.manifest and r[k]==self.manifest[k] for k in prototype_admission.SOURCE_KEYS)
                 and assess(r)['status']=='PASS' and not r.get('collector_contract_error')}
 
@@ -1146,6 +1155,9 @@ def main():
     parser.add_argument('--bpf', default=str(HERE/'bpf/cis.bpf.o'))
     parser.add_argument('--residue', default=str(HERE/'session-residue'))
     parser.add_argument('--test-faults', action='store_true')
+    parser.add_argument('--enable-extension', action='append', default=[],
+                        choices=sorted(resource_policy.EXTENSIONS),
+                        help='explicit manual legacy collector; never enabled by automatic routing')
     parser.add_argument('--p1-acceptance', help='root-owned receipt matching current source and passed P1 checks')
     parser.add_argument('--admission-policy', choices=('strict', 'prototype'), default='strict')
     parser.add_argument('--prototype-permit', help='expiring disposable-VM experiment permit, never P1 acceptance')

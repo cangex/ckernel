@@ -13,6 +13,8 @@ echo 1 > /proc/sys/kernel/sched_schedstats
 touch /cis-disposable-vm
 group=common
 if test -f /profile/joint-slub; then group=slub; fi
+if test -f /profile/joint-public; then group=public; fi
+if test -f /profile/joint-backend-compare; then group=backend-compare; fi
 /usr/bin/python3 /profile/joint_vm.py --group "$group"
 status=$?
 echo "CIS_PROFILE_VM_EXIT=$status"

@@ -101,6 +101,8 @@ if __name__=='__main__':
     parser.add_argument('--residue',required=True)
     parser.add_argument('--bpf',required=True)
     parser.add_argument('--output',required=True)
+    from resource_policy import EXTENSIONS
+    parser.add_argument('--enable-extension', action='append', default=[], choices=sorted(EXTENSIONS))
     args=parser.parse_args()
     if os.geteuid()!=0:raise PermissionError('administrator required')
     env=environment()

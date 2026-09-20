@@ -88,6 +88,9 @@ COLLECTORS['net']['source_filter'] += '; protocol 3 bounded original-header __kf
 COLLECTORS['allocator']['programs'].append('maple_context')
 COLLECTORS['allocator']['maps'].append('maple_pending')
 COLLECTORS['allocator']['source_filter'] += '; 256 task-start keyed Maple allocation brackets join sampled backend calls to destination tree addresses; no lifetime across brackets or inferred tree owner'
+COLLECTORS['alloc_backend'] = deepcopy(LEGACY_ALLOCATOR)
+COLLECTORS['alloc_backend']['profile'] = 13
+COLLECTORS['alloc_backend']['source_filter'] += '; independent backend-only bundle; no Maple context program, map or source activation'
 LEGACY_RWSEM = deepcopy(COLLECTORS['rwsem'])
 COLLECTORS['rwsem']['source_filter'] = 'manual 1..8 administrator-selected addresses; exclusive immutable kernel filter lease before BPF; all actors on selected objects remain visible; target init/attempt opens watches, 1024 events/object; observed init required for E2; eight-reader analysis; pre-window and non-owner use unknown'
 COLLECTORS['block']['programs'].append('block_tag')

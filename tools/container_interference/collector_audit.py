@@ -25,6 +25,8 @@ def audit(record, raw):
         if not isinstance(row, dict): raise ValueError('audit record must be an object')
         if str(row.get('session_id')) != str(record['session_id']): raise ValueError('audit session mismatch')
         kind = row.get('kind')
+        if record.get('collector')=='alloc_backend' and kind=='MAPLE_ALLOC':
+            errors.append('backend-only capture contains excluded Maple context')
         if kind=='OWNER':
             resource=re.search(r'(?:^|\s)resource=(\d+)(?:\s|$)',row.get('detail',''))
             if resource: owner_resources.add(int(resource[1]))

@@ -6,7 +6,7 @@
 static inline int cis_profile_buffer_pages(unsigned int profile, unsigned int cpus)
 {
 	unsigned int pages = 2;
-	unsigned int limit = profile == 8 ? 128 : 16;
+	unsigned int limit = (profile == 8 || profile == 13) ? 128 : 16;
 
 	if (!cpus || cpus > 512)
 		return 0;
@@ -33,6 +33,8 @@ static inline int cis_profile_program(unsigned int profile, const char *name)
 		return !strcmp(name, "counter_step");
 	if (profile == 8)
 		return !strcmp(name, "alloc_step") || !strcmp(name, "alloc_release") || !strcmp(name, "maple_context");
+	if (profile == 13)
+		return !strcmp(name, "alloc_step") || !strcmp(name, "alloc_release");
 	if (profile == 9)
 		return !strcmp(name, "net_state") || !strcmp(name, "net_release") || !strcmp(name, "net_tx");
 	if (profile == 10)
@@ -49,7 +51,7 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 {
 	if (!profile)
 		return 1;
-	if (profile < 1 || profile > 12)
+	if (profile < 1 || profile > 13)
 		return 0;
 	if (!strcmp(name, "session_window") || !strcmp(name, "roots") ||
 	    !strcmp(name, "events") || !strcmp(name, "stats"))
@@ -57,6 +59,8 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 	if (profile == 3)
 		return !strcmp(name, "targets");
 	if (profile == 8 && (!strcmp(name, "alloc_live") || !strcmp(name, "maple_pending")))
+		return 1;
+	if (profile == 13 && !strcmp(name, "alloc_live"))
 		return 1;
 	if (profile == 9)
 		return !strcmp(name, "targets") || !strcmp(name, "stacks") ||
@@ -68,7 +72,7 @@ static inline int cis_profile_map(unsigned int profile, const char *name)
 		return !strcmp(name,"targets") || !strcmp(name,"stacks") || !strcmp(name,"rwsem_watched") || !strcmp(name,"rwsem_selected");
 	if (profile == 7 && (!strcmp(name,"counter_selected") || !strcmp(name,"counter_actors") || !strcmp(name,"counter_sums")))
 		return 1;
-	if (profile == 4 || profile == 5 || profile == 7 || profile == 8)
+	if (profile == 4 || profile == 5 || profile == 7 || profile == 8 || profile == 13)
 		return !strcmp(name, "targets") || !strcmp(name, "stacks") || !strcmp(name, "pending");
 	return (profile == 2 || profile == 6 || profile == 12) && (!strcmp(name, "targets") || !strcmp(name, "stacks") ||
 		!strcmp(name, "watched") || !strcmp(name, "holders") ||

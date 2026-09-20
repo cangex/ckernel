@@ -103,7 +103,8 @@ def check(text):
         source_record=next(r for r in records if r['session_id']==item['source_session'])
         rebuilt=recommend(dict(quality=dict(status='PASS'),session_id=item['source_session'],
             window=source_record['window'],survey_epoch=source_record['survey_epoch'],
-            candidates=[dict(v,target=k) for k,v in prior['roots'].items()]))
+            candidates=[dict(v,target=k) for k,v in prior['roots'].items()]),
+            legacy='collector_policy' not in source_record)
         proposal=next((p for p in rebuilt if (p['target'],p['collector'])==(item['target'],item['collector'])),None)
         if not proposal or any(item.get(k)!=v for k,v in proposal.items()): errors.append('candidate_not_from_observation')
         if row['targets']!=[item['target']] or row['collector']!='sched': errors.append('route_target')
