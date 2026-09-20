@@ -18,6 +18,8 @@ def recommend(report, *, legacy=False):
             selected=('fd','FD-table path candidate; shared files_struct not yet established')
         elif any(s.startswith(('mt_alloc','mas_alloc','kmem_cache_','___slab_alloc','__slab_alloc','new_slab','get_partial')) for s in symbols):
             selected=('allocator' if legacy else 'alloc_backend','allocation stage candidate; common backend not yet established; no default tree tracking')
+        elif not legacy and any(s.startswith(('rmqueue','free_pcppages','free_one_page','__alloc_pages')) for s in symbols):
+            selected=('page_backend','physical-page supply candidate; selected zone operation brackets, holder unknown')
         elif legacy and any(s.startswith(('lock_sock','release_sock','__release_sock','tcp_','skb_','__kfree_skb','napi_consume_skb')) for s in symbols):
             selected=('net','network candidate; selected native socket cookie and queue evidence required')
         elif any(s.startswith(('blk_','__blk','submit_bio','bio_','io_schedule')) for s in symbols):

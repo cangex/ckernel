@@ -55,6 +55,7 @@
 #include <linux/delayacct.h>
 #include <linux/cacheinfo.h>
 #include <linux/dynamic_pool.h>
+#include <linux/cis_page_backend.h>
 #include <asm/div64.h>
 #include "internal.h"
 #include "shuffle.h"
@@ -1203,6 +1204,9 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 	unsigned int order;
 	bool isolated_pageblocks;
 	struct page *page;
+	struct cis_page_sample cis;
+	int initial_count = pcp->count;
+	u64 returned;
 
 	/*
 	 * Ensure proper count is passed which otherwise would stuck in the
@@ -1213,7 +1217,9 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 	/* Ensure requested pindex is drained first. */
 	pindex = pindex - 1;
 
+	cis_page_begin(&cis, zone, CIS_PB_DRAIN, -1, count);
 	spin_lock_irqsave(&zone->lock, flags);
+	cis_page_acquired(&cis);
 	isolated_pageblocks = has_isolate_pageblock(zone);
 
 	while (count > 0) {
@@ -1251,7 +1257,10 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		} while (count > 0 && !list_empty(list));
 	}
 
+	returned = initial_count - pcp->count;
+	cis_page_releasing(&cis);
 	spin_unlock_irqrestore(&zone->lock, flags);
+	cis_page_end(&cis, returned);
 }
 
 static void free_one_page(struct zone *zone,
@@ -1260,14 +1269,19 @@ static void free_one_page(struct zone *zone,
 				int migratetype, fpi_t fpi_flags)
 {
 	unsigned long flags;
+	struct cis_page_sample cis;
 
+	cis_page_begin(&cis, zone, CIS_PB_FREE, order, 1ULL << order);
 	spin_lock_irqsave(&zone->lock, flags);
+	cis_page_acquired(&cis);
 	if (unlikely(has_isolate_pageblock(zone) ||
 		is_migrate_isolate(migratetype))) {
 		migratetype = get_pfnblock_migratetype(page, pfn);
 	}
 	__free_one_page(page, pfn, zone, order, migratetype, fpi_flags);
+	cis_page_releasing(&cis);
 	spin_unlock_irqrestore(&zone->lock, flags);
+	cis_page_end(&cis, 1ULL << order);
 }
 
 static void __free_pages_ok(struct page *page, unsigned int order,
@@ -2165,8 +2179,11 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 {
 	unsigned long flags;
 	int i;
+	struct cis_page_sample cis;
 
+	cis_page_begin(&cis, zone, CIS_PB_REFILL, order, count << order);
 	spin_lock_irqsave(&zone->lock, flags);
+	cis_page_acquired(&cis);
 	for (i = 0; i < count; ++i) {
 		struct page *page = __rmqueue(zone, order, migratetype,
 								alloc_flags);
@@ -2190,7 +2207,9 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	}
 
 	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << order));
+	cis_page_releasing(&cis);
 	spin_unlock_irqrestore(&zone->lock, flags);
+	cis_page_end(&cis, (u64)i << order);
 
 	return i;
 }
@@ -2782,10 +2801,13 @@ struct page *rmqueue_buddy(struct zone *preferred_zone, struct zone *zone,
 {
 	struct page *page;
 	unsigned long flags;
+	struct cis_page_sample cis;
 
 	do {
 		page = NULL;
+		cis_page_begin(&cis, zone, CIS_PB_ALLOC, order, 1ULL << order);
 		spin_lock_irqsave(&zone->lock, flags);
+		cis_page_acquired(&cis);
 		if (alloc_flags & ALLOC_HIGHATOMIC)
 			page = __rmqueue_smallest(zone, order, MIGRATE_HIGHATOMIC);
 		if (!page) {
@@ -2801,13 +2823,17 @@ struct page *rmqueue_buddy(struct zone *preferred_zone, struct zone *zone,
 				page = __rmqueue_smallest(zone, order, MIGRATE_HIGHATOMIC);
 
 			if (!page) {
+				cis_page_releasing(&cis);
 				spin_unlock_irqrestore(&zone->lock, flags);
+				cis_page_end(&cis, 0);
 				return NULL;
 			}
 		}
 		__mod_zone_freepage_state(zone, -(1 << order),
 					  get_pcppage_migratetype(page));
+		cis_page_releasing(&cis);
 		spin_unlock_irqrestore(&zone->lock, flags);
+		cis_page_end(&cis, 1ULL << order);
 	} while (check_new_pages(page, order));
 
 	__count_zid_vm_events(PGALLOC, page_zonenum(page), 1 << order);

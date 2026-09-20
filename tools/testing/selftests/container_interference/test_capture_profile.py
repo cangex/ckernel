@@ -132,7 +132,14 @@ int main(void) {
     assert(!cis_profile_map(13, "maple_pending"));
     assert(cis_profile_program(13, "alloc_step"));
     assert(!cis_profile_program(13, "maple_context"));
-    assert(!cis_profile_map(14, "roots"));
+    assert(cis_profile_map(14, "roots"));
+    assert(cis_profile_map(14, "targets"));
+    assert(cis_profile_map(14, "stacks"));
+    assert(!cis_profile_map(14, "pending"));
+    assert(!cis_profile_map(14, "holders"));
+    assert(cis_profile_program(14, "page_backend"));
+    assert(!cis_profile_program(14, "alloc_step"));
+    assert(!cis_profile_map(15, "roots"));
     return 0;
 }
 '''

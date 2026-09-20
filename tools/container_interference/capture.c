@@ -22,7 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #define CIS_CPU_CAP 512
-#define CIS_DIAGNOSTIC_LINKS 34
+#define CIS_DIAGNOSTIC_LINKS 35
 #include "include/cis_backend_selection.h"
 struct capture {
 	struct cis_context *ctx;
@@ -52,16 +52,17 @@ static int prepare_backend_filter(struct capture *c)
 	FILE *file;
 	size_t length;
 	ssize_t got;
-	if (ctx->session_collector!=8 && ctx->session_collector!=12 && ctx->session_collector!=13) return 0;
+	if (ctx->session_collector!=8 && ctx->session_collector!=12 && ctx->session_collector!=13 && ctx->session_collector!=14) return 0;
 	c->backend_filter_fd=open("/sys/kernel/debug/cis_backend_filter",O_RDWR|O_CLOEXEC);
 	if (c->backend_filter_fd<0) {
-		if (errno==ENOENT && !ctx->backend_selection[0]) {
+		if (errno==ENOENT && !ctx->backend_selection[0] && ctx->session_collector!=14) {
 			cis_report(ctx,"backend_source_filter",NULL,"protocol=1 lease=0 legacy_boot_selection=1");
 			return 0;
 		}
 		return -errno;
 	}
 	if (ctx->backend_selection[0]) memcpy(wanted,ctx->backend_selection,sizeof(wanted));
+	else if (ctx->session_collector==14) strcpy(wanted,"page_zone *\n");
 	else {
 		file=fopen("/sys/module/cis_observe/parameters/alloc_cache","r");
 		if (!file) return -errno;
@@ -77,7 +78,8 @@ static int prepare_backend_filter(struct capture *c)
 	wanted[length-1]=0;
 	{
 		char *nodes=strchr(wanted,' '); *nodes++=0;
-		snprintf(detail,sizeof(detail),"protocol=1 lease=1 readback=1 cache=%s nodes=%s node_scope=slub_lock_only allocation_release_scope=whole_selected_cache",wanted,nodes);
+		snprintf(detail,sizeof(detail),"protocol=1 lease=1 readback=1 cache=%s nodes=%s node_scope=%s allocation_release_scope=%s",wanted,nodes,
+			ctx->session_collector==14?"page_zone":"slub_lock_only",ctx->session_collector==14?"not_tracked":"whole_selected_cache");
 	}
 	cis_report(ctx,"backend_source_filter",NULL,detail);
 	return 0;
@@ -313,6 +315,19 @@ static void event(void *opaque,int cpu,void *data,__u32 size)
 			(unsigned long long)v->actor_generation,e->cpu,(unsigned long long)v->skipped,e->stack_id);
 		cis_report(ctx,"RWSEM",r,d);return;
 	}
+	if(size>=sizeof(struct cis_page_event) && size<=sizeof(struct cis_page_event)+7 && e->type==CIS_PAGE_BACKEND_EVENT) {
+		struct cis_page_event *v=data;
+		char d[900];
+		r=cis_registry_lookup(ctx,e->id,e->generation);
+		if(!r) {ctx->unknown++;return;}
+		snprintf(d,sizeof(d),"protocol=1 begin_ns=%llu acquired_ns=%llu releasing_ns=%llu end_ns=%llu tid=%llu task_start=%llu cgroup_id=%llu cpu=%u zone=0x%llx node=%d zone_index=%d order=%d operation=%u sample_shift=%u requested_pages=%llu completed_pages=%llu stack_id=%d",
+			(unsigned long long)e->sequence_ns,(unsigned long long)v->acquired_ns,
+			(unsigned long long)v->releasing_ns,(unsigned long long)e->time_ns,
+			(unsigned long long)e->tid,(unsigned long long)v->task_start,(unsigned long long)v->cgroup_id,
+			e->cpu,(unsigned long long)e->object,v->node,v->zone_index,v->order,v->operation,v->sample_shift,
+			(unsigned long long)v->requested_pages,(unsigned long long)v->completed_pages,e->stack_id);
+		cis_report(ctx,"PAGE_BACKEND",r,d);return;
+	}
 	if(size>=sizeof(struct cis_counter_event) && size<=sizeof(struct cis_counter_event)+7 && e->type==CIS_COUNTER_EVENT) {
 		struct cis_counter_event *v=data;
 		char d[1100];
@@ -421,7 +436,7 @@ static int configure_links(struct capture *c,unsigned int kinds)
 		{"block_requeue",256},{"block_complete",256},{"block_merge",256},{"block_remap",256},
 		{"block_tag",256},{"block_link",256},
 		{"wb_dirty",256},{"wb_begin",256},{"wb_end",256},
-		{"rwsem_state",512}};
+		{"rwsem_state",512},{"page_backend",1024}};
 	_Static_assert(sizeof(links)/sizeof(links[0]) == CIS_DIAGNOSTIC_LINKS, "diagnostic links");
 	unsigned int i;
 	for(i=0;i<CIS_DIAGNOSTIC_LINKS;i++) {

@@ -54,7 +54,7 @@ def audit(record, raw):
             record.get('collector_contract_sha256')==contract and owner_resources-{1,2}):
         errors.append('owner source emitted another resource kind')
     backend=None
-    if record.get('collector') in ('allocator','alloc_backend','slub') and (
+    if record.get('collector') in ('allocator','alloc_backend','slub','page_backend') and (
             selections or record.get('backend_selection') is not None or
             record.get('collector_contract_sha256')==digest(current_contract(record['collector']))):
         try:
@@ -62,17 +62,19 @@ def audit(record, raw):
             backend=dict(p.split('=',1) for p in selections[0].split())
             requested=record.get('backend_selection')
             if backend==dict(protocol='1',lease='0',legacy_boot_selection='1'):
-                if requested or closes: raise ValueError('explicit selection without native lease')
+                if requested or closes or record['collector']=='page_backend': raise ValueError('explicit selection without native lease')
             else:
                 if (set(backend)!={'protocol','lease','readback','cache','nodes','node_scope','allocation_release_scope'} or
                         backend['protocol']!='1' or backend['lease']!='1' or backend['readback']!='1' or
-                        backend['node_scope']!='slub_lock_only' or backend['allocation_release_scope']!='whole_selected_cache' or
+                        backend['node_scope']!=('page_zone' if record['collector']=='page_backend' else 'slub_lock_only') or
+                        backend['allocation_release_scope']!=('not_tracked' if record['collector']=='page_backend' else 'whole_selected_cache') or
                         not re.fullmatch(r'[A-Za-z0-9_-]{1,63}',backend['cache']) or
                         closes!=['lease=0 close_after_detach=1']):
                     raise ValueError('backend lease lifecycle')
                 nodes=[] if backend['nodes']=='*' else [int(v) for v in backend['nodes'].split(',')]
                 if (len(nodes)>8 or len(set(nodes))!=len(nodes) or any(not 0<=n<1024 for n in nodes) or
-                        nodes and record['collector']!='slub'):
+                        nodes and record['collector'] not in ('slub','page_backend') or
+                        record['collector']=='page_backend' and backend['cache']!='page_zone'):
                     raise ValueError('backend node selection')
                 if requested and requested!=dict(cache=backend['cache'],nodes=nodes):
                     raise ValueError('backend selection readback mismatch')

@@ -15,6 +15,7 @@
 #define CIS_DIAG_NET 128
 #define CIS_DIAG_BLOCK 256
 #define CIS_DIAG_RWSEM 512
+#define CIS_DIAG_PAGE_BACKEND 1024
 #define CIS_OWNER_EVENT 12
 #define CIS_COUNTER_EVENT 13
 #define CIS_ALLOC_EVENT 14
@@ -28,6 +29,7 @@
 #define CIS_WRITEBACK_EVENT 22
 #define CIS_MAPLE_EVENT 23
 #define CIS_NET_TX_EVENT 24
+#define CIS_PAGE_BACKEND_EVENT 25
 struct cis_identity { __u64 id, generation; };
 struct cis_target { __u64 generation, deadline_ns, start_ns; __u32 kind, reserved; };
 enum cis_event_type { CIS_IP=1, CIS_SCHED_WAIT, CIS_LOCK_WAIT, CIS_RECLAIM, CIS_UNFINISHED,
@@ -80,6 +82,12 @@ struct cis_alloc_event {
 	__u64 cache, resource, task_start, gfp, requested, count;
 	__u32 operation, stage, ordinal, sample_shift;
 	__s32 requested_node, observed_node;
+};
+struct cis_page_event {
+	struct cis_event base;
+	__u64 acquired_ns, releasing_ns, requested_pages, completed_pages, task_start, cgroup_id;
+	__u32 operation, sample_shift;
+	__s32 node, zone_index, order;
 };
 struct cis_alloc_live_key { __u64 cache, object; };
 struct cis_alloc_live { struct cis_event allocation; __u64 task_start; };

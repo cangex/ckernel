@@ -2,8 +2,8 @@
 """Admission policy, not evidence that a configured backend is contended."""
 from periodic_plan import digest
 
-SCHEMA = 'cis-public-resource-policy-v1'
-DEFAULT = frozenset(('ip', 'sched', 'reclaim', 'counter', 'alloc_backend', 'slub', 'block'))
+SCHEMA = 'cis-public-resource-policy-v2'
+DEFAULT = frozenset(('ip', 'sched', 'reclaim', 'counter', 'alloc_backend', 'slub', 'page_backend', 'block'))
 EXTENSIONS = frozenset(('owner', 'fd', 'sync', 'rwsem', 'allocator', 'net'))
 
 

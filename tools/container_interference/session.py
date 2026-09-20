@@ -152,13 +152,14 @@ def validate(request):
             raise ValueError('explicit object selection is supported only for rwsem/counter')
         if 'backend' in request:
             backend=request['backend']
-            if (request['collector'] not in ('allocator','alloc_backend','slub') or
+            if (request['collector'] not in ('allocator','alloc_backend','slub','page_backend') or
                     not isinstance(backend,dict) or set(backend)!={'cache','nodes'} or
                     not isinstance(backend['cache'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,63}',backend['cache']) or
                     not isinstance(backend['nodes'],list) or len(backend['nodes'])>8 or
                     any(type(v) is not int or not 0<=v<1024 for v in backend['nodes']) or
                     len(set(backend['nodes']))!=len(backend['nodes']) or
-                    backend['nodes'] and request['collector']!='slub'):
+                    backend['nodes'] and request['collector'] not in ('slub','page_backend') or
+                    request['collector']=='page_backend' and backend['cache']!='page_zone'):
                 raise ValueError('one exact cache; at most eight distinct SLUB lock nodes, allocator lifetime spans all nodes')
         targets = request.get('targets')
         if (not isinstance(targets, list) or not 1 <= len(targets) <= 2

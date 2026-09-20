@@ -7,6 +7,7 @@
 #include <linux/cis_counter.h>
 #include <linux/cis_alloc.h>
 #include <linux/cis_backend.h>
+#include <linux/cis_page_backend.h>
 #include <linux/cis_maple.h>
 #include <linux/cis_net.h>
 struct task_struct;
@@ -43,6 +44,13 @@ TRACE_EVENT(cis_net_tx,
 	TP_STRUCT__entry(__field(u64, time_ns) __field(u32, phase)),
 	TP_fast_assign(__entry->time_ns = sample->time_ns; __entry->phase = sample->phase;),
 	TP_printk("time_ns=%llu phase=%u", __entry->time_ns, __entry->phase)
+);
+TRACE_EVENT_FN(cis_page_backend,
+	TP_PROTO(const struct cis_page_sample *sample), TP_ARGS(sample),
+	TP_STRUCT__entry(__field(void *, zone) __field(u32, operation)),
+	TP_fast_assign(__entry->zone = sample->zone; __entry->operation = sample->operation;),
+	TP_printk("zone=%p operation=%u", __entry->zone, __entry->operation),
+	cis_backend_register, cis_backend_unregister
 );
 TRACE_EVENT_FN(cis_maple_alloc,
 	TP_PROTO(const struct cis_maple_sample *sample),

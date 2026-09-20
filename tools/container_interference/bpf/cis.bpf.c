@@ -20,7 +20,7 @@ struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,1); __type(k
 #if CIS_PROFILE == 0 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 13
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,CIS_INFLIGHT); __type(key,struct cis_pending_key); __type(value,struct cis_event); } pending SEC(".maps");
 #endif
-#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10 || CIS_PROFILE == 11 || CIS_PROFILE == 12 || CIS_PROFILE == 13
+#if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 4 || CIS_PROFILE == 5 || CIS_PROFILE == 6 || CIS_PROFILE == 7 || CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10 || CIS_PROFILE == 11 || CIS_PROFILE == 12 || CIS_PROFILE == 13 || CIS_PROFILE == 14
 #if CIS_PROFILE == 8 || CIS_PROFILE == 9 || CIS_PROFILE == 10 || CIS_PROFILE == 13
 #define PROFILE_STACKS 2048
 #else
@@ -432,6 +432,43 @@ int counter_step(struct bpf_raw_tracepoint_args *ctx)
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);
 	if (e.stage == 9) bpf_map_delete_elem(&pending, &key);
+	return 0;
+}
+#endif
+
+#if CIS_PROFILE == 14
+SEC("raw_tp/cis_page_backend")
+int page_backend(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct cis_page_sample *sample=(void *)ctx->args[0];
+	struct task_struct *task=(void *)bpf_get_current_task();
+	struct cis_identity id={};
+	struct cis_page_event e={};
+	struct cis_bpf_stats *s=statistics();
+	u64 now=bpf_ktime_get_ns();
+	COUNT(s,received);
+	if (!synchronous_context()) return 0;
+	e.cgroup_id=BPF_CORE_READ(sample,cgroup_id);
+	if (!e.cgroup_id || e.cgroup_id!=BPF_CORE_READ(task,cgroups,dfl_cgrp,kn,id)) {
+		COUNT(s,unknown); return 0;
+	}
+	if (!identity(task,&id) || !allowed(&id,CIS_DIAG_PAGE_BACKEND,now)) return 0;
+	e.base.sequence_ns=BPF_CORE_READ(sample,begin_ns);
+	e.base.time_ns=BPF_CORE_READ(sample,end_ns);
+	e.base.id=id.id; e.base.generation=id.generation;
+	if (!allowed(&id,CIS_DIAG_PAGE_BACKEND,e.base.sequence_ns)) {
+		COUNT(s,expired); return 0;
+	}
+	e.base.type=CIS_PAGE_BACKEND_EVENT; e.base.tid=bpf_get_current_pid_tgid();
+	e.base.cpu=bpf_get_smp_processor_id(); e.task_start=BPF_CORE_READ(task,start_boottime);
+	e.base.object=(u64)BPF_CORE_READ(sample,zone);
+	e.acquired_ns=BPF_CORE_READ(sample,acquired_ns); e.releasing_ns=BPF_CORE_READ(sample,releasing_ns);
+	e.requested_pages=BPF_CORE_READ(sample,requested_pages); e.completed_pages=BPF_CORE_READ(sample,completed_pages);
+	e.operation=BPF_CORE_READ(sample,operation); e.sample_shift=BPF_CORE_READ(sample,sample_shift);
+	e.node=BPF_CORE_READ(sample,node); e.zone_index=BPF_CORE_READ(sample,zone_index); e.order=BPF_CORE_READ(sample,order);
+	e.base.stack_id=bpf_get_stackid(ctx,&stacks,0);
+	if (bpf_perf_event_output(ctx,&events,BPF_F_CURRENT_CPU,&e,sizeof(e))) COUNT(s,lost);
+	else COUNT(s,emitted);
 	return 0;
 }
 #endif

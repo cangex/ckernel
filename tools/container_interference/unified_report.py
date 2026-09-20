@@ -18,7 +18,7 @@ MAX_RELATIONS=128
 def analyze(record,raw):
     collector=record['collector']; base=explain(record,raw); relations=[]; omitted=0
     specialist=None
-    if collector in ('sync','counter','allocator','alloc_backend','net','block','rwsem'):
+    if collector in ('sync','counter','allocator','alloc_backend','page_backend','net','block','rwsem'):
         module=__import__(('allocator' if collector=='alloc_backend' else collector)+'_report')
         specialist=module.analyze(record,raw)
     quality=specialist['quality'] if specialist else base['quality']
@@ -63,6 +63,12 @@ def analyze(record,raw):
                 add('counter_operation','E1',f['actor'],dict(kind='page_counter',address=f['leaf_address'],generation=f['leaf_generation']),
                     [],f['interval_ns'],f['stack_leaf_to_root'],['wall time includes observer and scheduling'],
                     outcome=f['outcome'],steps=f['steps'])
+        elif collector=='page_backend':
+            for f in specialist['episodes']:
+                add('page_zone_operation','E1',f['actor'],
+                    dict(kind='page_zone',address=f['zone_address'],node=f['node'],zone_index=f['zone_index']),
+                    [],f['interval_ns'],f['stack_leaf_to_root'],
+                    ['holder and causal blocker unknown; wall time is not pure spin time'],source_finding=f)
         elif collector in ('allocator','alloc_backend'):
             for f in specialist['calls']:
                 unknown=['Maple tree owner and SLUB lock holder not inferred']

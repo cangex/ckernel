@@ -9,6 +9,7 @@ void cis_backend_unregister(void);
 bool cis_backend_active(void);
 bool cis_backend_allows(const char *name);
 bool cis_backend_node_allows(const char *name, void *const *nodes, void *node);
+bool cis_backend_page_allows(int node);
 #else
 static inline int cis_backend_register(void) { return -ENODEV; }
 static inline void cis_backend_unregister(void) { }

@@ -15,6 +15,8 @@
 #include <linux/hash.h>
 #include <linux/page_counter.h>
 #include <linux/ktime.h>
+#include <linux/mmzone.h>
+#include <linux/cgroup.h>
 #ifdef CONFIG_CIS_OBSERVE_NET
 #include <linux/sock_diag.h>
 #endif
@@ -119,6 +121,7 @@ static bool cis_trace_active(void)
 	return trace_cis_lock_state_enabled() || trace_cis_fdlock_state_enabled() ||
 	       trace_cis_counter_step_enabled() || trace_cis_alloc_step_enabled() ||
 	       trace_cis_alloc_release_enabled() || trace_cis_maple_alloc_enabled() || trace_cis_net_state_enabled() ||
+	       trace_cis_page_backend_enabled() ||
 	       trace_cis_net_skb_release_enabled() || trace_cis_net_tx_enabled() || trace_cis_rwsem_state_enabled() ||
 	       trace_cis_slublock_state_enabled() || cis_block_active();
 }
@@ -227,7 +230,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=15 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u\n",
+	seq_printf(m, "version=16 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u page_backend=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -239,7 +242,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_tag_wait), cis_rwsem_filter_active(),
 		   CIS_BLOCK_ON(block_merge_link), CIS_BLOCK_ON(writeback_dirty_folio),
 		   CIS_BLOCK_ON(writeback_single_inode_start), CIS_BLOCK_ON(writeback_single_inode),
-		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled(), cis_backend_active());
+		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled(), cis_backend_active(), trace_cis_page_backend_enabled());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -249,6 +252,7 @@ static const struct file_operations cis_counter_audit_fops;
 #endif
 #ifdef CONFIG_CIS_OBSERVE_ALLOC
 static const struct file_operations cis_alloc_audit_fops;
+static const struct file_operations cis_page_audit_fops;
 #endif
 #ifdef CONFIG_CIS_OBSERVE_NET
 static const struct file_operations cis_net_audit_fops;
@@ -264,6 +268,7 @@ static int __init cis_diag_init(void)
 #endif
 #ifdef CONFIG_CIS_OBSERVE_ALLOC
 	debugfs_create_file("cis_alloc_audit", 0400, NULL, NULL, &cis_alloc_audit_fops);
+	debugfs_create_file("cis_page_audit", 0400, NULL, NULL, &cis_page_audit_fops);
 #endif
 #ifdef CONFIG_CIS_OBSERVE_NET
 	debugfs_create_file("cis_net_audit", 0400, NULL, NULL, &cis_net_audit_fops);
@@ -459,6 +464,92 @@ void __cis_counter_start(struct cis_counter_ctx *ctx, struct page_counter *leaf,
 #endif
 
 #ifdef CONFIG_CIS_OBSERVE_ALLOC
+struct cis_page_audit {
+	unsigned long entries, eligible, sampled, emitted, irq_filtered, nested;
+	unsigned long callback_ns, callback_max_ns;
+};
+static DEFINE_PER_CPU(struct cis_page_audit, cis_page_audit);
+static unsigned int page_shift = 6;
+module_param(page_shift, uint, 0400);
+
+void __cis_page_begin(struct cis_page_sample *s, struct zone *zone,
+		u32 op, int order, u64 pages)
+{
+	struct cis_page_audit *audit;
+	preempt_disable();
+	audit = this_cpu_ptr(&cis_page_audit);
+	audit->entries++;
+	if (!cis_backend_page_allows(zone_to_nid(zone)))
+		goto out;
+	if (in_interrupt()) {
+		audit->irq_filtered++;
+		goto out;
+	}
+	if (this_cpu_read(cis_in_trace)) {
+		audit->nested++;
+		goto out;
+	}
+	if (++audit->eligible & ((1UL << min(page_shift, 16U)) - 1))
+		goto out;
+	audit->sampled++;
+	*s = (struct cis_page_sample) {
+		.zone = zone, .node = zone_to_nid(zone), .zone_index = zone_idx(zone),
+		.operation = op, .order = order, .requested_pages = pages,
+		.sample_shift = min(page_shift, 16U), .begin_ns = ktime_get_ns(),
+	};
+#ifdef CONFIG_CGROUPS
+	rcu_read_lock();
+	s->cgroup_id = cgroup_id(task_dfl_cgroup(current));
+	rcu_read_unlock();
+#endif
+out:
+	preempt_enable();
+}
+
+void __cis_page_end(struct cis_page_sample *s, u64 pages)
+{
+	struct cis_page_audit *audit;
+	u64 begin, elapsed;
+	s->end_ns = ktime_get_ns();
+	s->completed_pages = pages;
+	preempt_disable();
+	audit = this_cpu_ptr(&cis_page_audit);
+	if (in_interrupt() || this_cpu_read(cis_in_trace)) {
+		audit->nested++;
+		this_cpu_inc(cis_skipped);
+		goto out;
+	}
+	this_cpu_write(cis_in_trace, true);
+	begin = ktime_get_ns();
+	trace_cis_page_backend(s);
+	elapsed = ktime_get_ns() - begin;
+	audit->emitted++;
+	audit->callback_ns += elapsed;
+	if (elapsed > audit->callback_max_ns)
+		audit->callback_max_ns = elapsed;
+	this_cpu_write(cis_in_trace, false);
+out:
+	preempt_enable();
+}
+
+static int cis_page_audit_show(struct seq_file *m, void *unused)
+{
+	int cpu;
+	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+	seq_printf(m, "version=1 active=%u shift=%u bytes_per_cpu=%zu snapshot=non_atomic\n",
+		trace_cis_page_backend_enabled(), min(page_shift, 16U), sizeof(struct cis_page_audit));
+	for_each_possible_cpu(cpu) {
+		struct cis_page_audit *a = per_cpu_ptr(&cis_page_audit, cpu);
+		seq_printf(m, "cpu=%d entries=%lu eligible=%lu sampled=%lu emitted=%lu irq_filtered=%lu nested=%lu callback_ns=%lu callback_max_ns=%lu\n",
+			cpu, READ_ONCE(a->entries), READ_ONCE(a->eligible), READ_ONCE(a->sampled),
+			READ_ONCE(a->emitted), READ_ONCE(a->irq_filtered), READ_ONCE(a->nested),
+			READ_ONCE(a->callback_ns), READ_ONCE(a->callback_max_ns));
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(cis_page_audit);
+
 static char alloc_cache[64] = "maple_node";
 module_param_string(alloc_cache, alloc_cache, sizeof(alloc_cache), 0400);
 MODULE_PARM_DESC(alloc_cache, "Exact SLUB cache name admitted for short allocation diagnostics");

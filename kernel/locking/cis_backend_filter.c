@@ -72,6 +72,23 @@ int cis_backend_register(void)
 	return ret;
 }
 
+bool cis_backend_page_allows(int node)
+{
+	struct cis_backend_filter *f;
+	bool result = false;
+	unsigned int i;
+	preempt_disable_notrace();
+	f = rcu_dereference_sched(selection);
+	if (f && !strcmp(f->cache, "page_zone")) {
+		result = !f->count;
+		for (i = 0; i < f->count; i++)
+			if (f->nodes[i] == node)
+				result = true;
+	}
+	preempt_enable_notrace();
+	return result;
+}
+
 void cis_backend_unregister(void)
 {
 	mutex_lock(&control);

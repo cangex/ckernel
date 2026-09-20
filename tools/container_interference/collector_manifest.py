@@ -112,6 +112,11 @@ LEGACY_BACKEND_SELECTION = {name:deepcopy(COLLECTORS[name]) for name in ('alloca
 for _name in LEGACY_BACKEND_SELECTION:
     COLLECTORS[_name]['source_filter'] += '; Y2 kernel requires immutable administrative cache lease; optional up-to-eight SLUB lock nodes, allocation/release lifetimes retain all nodes; older kernels accept boot default only, never explicit session override'
 
+COLLECTORS['page_backend']=dict(profile=14,programs=['page_backend'],maps=COMMON_MAPS+['targets','stacks'],
+    relation='page_zone_operation',clock='monotonic_wall_ns',contexts=['synchronous_task_completion'],
+    object_kinds=['selected_numa_zone'],
+    source_filter='immutable page_zone node lease; per-CPU sampled PCP refill/drain and buddy allocate/free brackets; timestamps inside native zone lock, one callback after unlock; no page lifetime tracking, inferred holder or pure spin time; preemption/IRQ and unobserved zone operations remain outside causal coverage')
+
 
 def contract(name, legacy_block=False, legacy_rwsem=False):
     if name not in COLLECTORS:
