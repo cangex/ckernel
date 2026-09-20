@@ -110,7 +110,7 @@ class ReleaseTruth(unittest.TestCase):
                    header_refs=2 if cloned else 1,send_begin=9,send_end=21,
                    inspect_begin=25,inspect_end=30,close_begin=35,close_end=55,
                    child_begin=60 if cloned else 0,child_end=70 if cloned else 0)
-            logs.append('CIS_NET_RELEASE '+' '.join('%s=%s'%p for p in r.items()))
+            logs.append('CIS_NET_PARENT_FD_CLOSED fd=5\nCIS_NET_RELEASE '+' '.join('%s=%s'%p for p in r.items()))
         report=test_net_tx.NetTx().run_rows(rows)
         return ['txclone' if cloned else 'txplain',dict(start_ns=1,end_ns=100),logs,report,
                 [dict(id=1,generation=1),dict(id=2,generation=1)]]
@@ -132,6 +132,10 @@ class ReleaseTruth(unittest.TestCase):
                 extra=copy.deepcopy(e); extra['skb_address']=177; args[3]['tx']['episodes'].append(extra)
             if mutation=='missing_end': e['release_backend_status']='UNOBSERVED'
             self.assertEqual(net_release_check.check(*args)['status'],'FAIL',mutation)
+
+    def test_launcher_reference_not_silently_ignored(self):
+        args=self.fixture(True); args[2][0]=args[2][0].split('\n',1)[1]
+        self.assertIn('launcher_reference_unclosed',net_release_check.check(*args)['errors'])
 
 
 if __name__=='__main__': unittest.main()

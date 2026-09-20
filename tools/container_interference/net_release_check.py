@@ -10,6 +10,9 @@ def check(case,window,logs,report=None,identities=None):
     if case not in CASES or len(logs)!=2: return dict(status='FAIL',errors=['case'])
     cloned=case=='txclone'
     for actor,log in enumerate(logs):
+        parents=[fields(line[len('CIS_NET_PARENT_FD_CLOSED '):]) for line in log.splitlines() if line.startswith('CIS_NET_PARENT_FD_CLOSED ')]
+        if len(parents)!=1 or type(parents[0].get('fd')) is not int or parents[0]['fd']<3:
+            errors.append('launcher_reference_unclosed')
         rows=[fields(line[len('CIS_NET_RELEASE '):]) for line in log.splitlines() if line.startswith('CIS_NET_RELEASE ')]
         if len(rows)!=1: errors.append('truth_count'); continue
         r=rows[0]; truth.append(r)

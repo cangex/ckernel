@@ -19,6 +19,13 @@ int main(int argc,char **argv)
 		if(sched_setaffinity(0,sizeof(allocation),&allocation)) return 3;
 	}
 	pid_t pid=cis_container_start(argv[1],"/container-root",&argv[3],atoi(argv[2]));
+	if(getenv("CIS_NET_RELEASE_CLOSE_PARENT_FD")) {
+		char *end; long fd=strtol(argv[4],&end,10);
+		if(pid<=0 || access("/cis-disposable-vm",F_OK) || *end || fd<3 || fd>1048576 || close((int)fd)) {
+			if(pid>0) {kill(pid,SIGKILL);cis_container_wait(pid);} return 5;
+		}
+		printf("CIS_NET_PARENT_FD_CLOSED fd=%ld\n",fd);
+	}
 	if(local && sched_setaffinity(0,sizeof(original),&original)) {
 		if(pid>0) {kill(pid,SIGKILL);cis_container_wait(pid);} return 4;
 	}

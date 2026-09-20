@@ -181,8 +181,9 @@ def run(backlog=False,rights=False,origin=False,capacity=False,txfailure=False,t
                 if txadmission:
                     workload='/net_tx_admission_workload'; extra=[str(child_channels[i].fileno())]; passed=(fd,child_channels[i].fileno())
                 if txrelease: workload='/net_release_workload'
+                child_env=dict(os.environ,CIS_NET_RELEASE_CLOSE_PARENT_FD='1') if txrelease else None
                 child=subprocess.Popen(['/session_launch',str(p),str(i),workload,str(fd),str(i),str(start),case]
-                    +(['origin'] if origin else [])+extra,stdout=handle,stderr=handle,pass_fds=passed)
+                    +(['origin'] if origin else [])+extra,stdout=handle,stderr=handle,pass_fds=passed,env=child_env)
                 children.append(child); running.append(child)
             if txfailure:
                 for sock in sockets: sock.close()
