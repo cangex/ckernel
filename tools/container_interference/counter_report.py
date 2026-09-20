@@ -17,6 +17,7 @@ STAGES = {1: 'begin', 2: 'usage_add', 3: 'usage_sub', 4: 'limit_reverse',
           5: 'rollback', 6: 'children_min_update', 7: 'children_low_update',
           8: 'underflow_correction', 9: 'end'}
 MAX_CALLS = 1024
+RESOURCE_KINDS = {0: 'unknown', 1: 'memory', 2: 'swap', 3: 'kmem', 4: 'tcp_memory'}
 
 
 def analyze(record, raw):
@@ -25,6 +26,7 @@ def analyze(record, raw):
     base = explain(record, raw)
     groups, stacks = defaultdict(list), {}
     generation_addresses = defaultdict(set)
+    provenance = defaultdict(set)
     excluded = Counter()
     known = {(v['id'], v['generation']) for v in record.get('root_identities', {}).values()}
     for line in raw.decode().splitlines():
@@ -37,17 +39,24 @@ def analyze(record, raw):
         required = {'protocol', 'sample_time_ns', 'call_ns', 'tid', 'task_start', 'cpu', 'leaf',
                     'object', 'parent', 'operation', 'stage', 'depth', 'ordinal', 'pages', 'usage',
                     'limit_snapshot', 'sample_shift', 'stack_id'}
-        if (not required <= d.keys() or d['protocol'] not in (1, 2) or d['operation'] not in OPERATIONS
+        if (not required <= d.keys() or d['protocol'] not in (1, 2, 3) or d['operation'] not in OPERATIONS
                 or d['stage'] not in STAGES or not 0 <= d['sample_shift'] <= 16
                 or min(d['ordinal'], d['depth'], d['pages']) < 0):
             excluded['invalid_schema'] += 1
             continue
-        if d['protocol'] == 2 and (not {'leaf_generation','object_generation','parent_generation'} <= d.keys() or
+        if d['protocol'] >= 2 and (not {'leaf_generation','object_generation','parent_generation'} <= d.keys() or
                 any(type(d[k]) is not int or not 0 <= d[k] < 2**63 for k in
                     ('leaf_generation','object_generation','parent_generation'))):
             excluded['invalid_schema'] += 1
             continue
-        if d['protocol'] == 2:
+        if d['protocol'] == 3:
+            owner,kind=d.get('owner_cgroup'),d.get('resource_kind')
+            if (type(owner) is not int or not 0<=owner<2**64 or type(kind) is not int or
+                    kind not in RESOURCE_KINDS or bool(owner)!=bool(kind)):
+                excluded['invalid_schema'] += 1
+                continue
+            provenance[d['object'],d['object_generation']].add((owner,kind))
+        if d['protocol'] >= 2:
             if not d['parent'] and d['parent_generation']:
                 excluded['invalid_schema'] += 1
                 continue
@@ -65,6 +74,8 @@ def analyze(record, raw):
         groups[key].append(d)
     calls = []
     if any(len(addresses) != 1 for addresses in generation_addresses.values()):
+        excluded['invalid_schema'] += 1
+    if any(len(values)!=1 for values in provenance.values()):
         excluded['invalid_schema'] += 1
     quality_ok = base['quality']['status'] == 'PASS'
     # Malformed records invalidate the stream, not just the convenient row.
@@ -107,6 +118,8 @@ def analyze(record, raw):
             excluded['incomplete_rollback'] += 1
             continue
         steps = [dict(address=r['object'], parent_address=r['parent'], depth=r['depth'],
+                      owner_cgroup=r.get('owner_cgroup',0),
+                      resource_kind=RESOURCE_KINDS[r.get('resource_kind',0)],
                       object_generation=r.get('object_generation',0), parent_generation=r.get('parent_generation',0),
                       stage=STAGES[r['stage']], pages=r['pages'], observed_value=r['usage'],
                       limit_snapshot=r['limit_snapshot'], time_ns=r['sample_time_ns'], cpu=r['cpu'])
@@ -135,6 +148,11 @@ def analyze(record, raw):
               for (address, generation, field), actors in sorted(participants.items())
               if generation and len({a[:2] for a in actors}) > 1]
     live=live_aggregate(record,raw,base['quality'])
+    for obj in shared:
+        values=provenance.get((obj['address'],obj['object_generation']),set())
+        owner,kind=next(iter(values)) if len(values)==1 else (0,0)
+        obj.update(owner_cgroup=owner or None,resource_kind=RESOURCE_KINDS[kind],
+                   provenance='NATIVE_IMMUTABLE_BINDING' if owner else 'UNKNOWN')
     if live['status']=='FAIL':
         base['quality']=dict(base['quality'],status='FAIL',defects=base['quality']['defects']+['counter_live_aggregate'])
         shared=[]; candidates=[]
@@ -149,10 +167,12 @@ def analyze(record, raw):
                 shared_objects=shared[:128], omitted_shared_objects=max(0,len(shared)-128),
                 excluded=dict(excluded), performance_certification='NOT_ACCEPTED',
                 coverage=dict(updates='IMPLEMENTED', rollback='IMPLEMENTED', lifetime='PER_RECORD_INIT_GENERATION_OR_UNKNOWN',
+                              ownership='NATIVE_MEMCG_BINDING_WHERE_AVAILABLE',
                               cacheline_contention='UNVERIFIED', causal='NOT_CLAIMED'),
                 limits=['operation wall time includes observer callbacks, preemption and nested work; not atomic-update cycles',
                         'periodic per-CPU call sampling is not unbiased population sampling; do not multiply into total cost',
                         'pages is the native counter quantity, not always physical memory or bytes',
+                        'bound owner is the resource cgroup, not a lock holder; unbound and legacy counters stay unknown',
                         'limit_snapshot can race with updates; failure is established by the native branch event',
                         'children_min/low observed_value is propagation delta, not a usage snapshot',
                         'legacy/zero generation cannot exclude address reuse; init generation identifies an object only within this boot',

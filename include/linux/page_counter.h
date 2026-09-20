@@ -38,6 +38,8 @@ struct page_counter {
 	struct page_counter *parent;
 #ifdef CONFIG_CIS_OBSERVE_COUNTER
 	u64 cis_generation;
+	u64 cis_owner_cgroup;
+	u32 cis_resource_kind;
 #endif
 } ____cacheline_internodealigned_in_smp;
 

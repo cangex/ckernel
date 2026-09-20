@@ -59,6 +59,8 @@ struct cis_owner_event {
 };
 struct cis_attempt { __u64 start_ns, epoch, id, generation; };
 struct cis_counter_event {
+	/* Counter events do not sample IP: ip/flags hold immutable native
+	 * owner cgroup ID/resource kind. Zero means provenance unavailable. */
 	struct cis_event base;
 	__u64 leaf, parent, task_start, pages, limit;
 	__u64 leaf_generation, object_generation, parent_generation;

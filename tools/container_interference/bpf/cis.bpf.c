@@ -47,6 +47,10 @@ struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u64
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u64); __type(value,__u8); } rwsem_selected SEC(".maps");
 #endif
 #if CIS_PROFILE == 7
+struct cis_counter_sample___owner {
+	__u64 owner_cgroup;
+	__u32 resource_kind;
+} __attribute__((preserve_access_index));
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,8); __type(key,__u64); __type(value,__u32); } counter_selected SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_HASH); __uint(max_entries,2); __type(key,__u64); __type(value,struct cis_counter_actor); } counter_actors SEC(".maps");
 struct { __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries,CIS_COUNTER_BUCKETS); __type(key,__u32); __type(value,struct cis_counter_sum); } counter_sums SEC(".maps");
@@ -419,6 +423,11 @@ int counter_step(struct bpf_raw_tracepoint_args *ctx)
 	e.usage = BPF_CORE_READ(sample, usage); e.operation = BPF_CORE_READ(sample, op);
 	e.depth = BPF_CORE_READ(sample, depth); e.ordinal = BPF_CORE_READ(sample, ordinal);
 	e.sample_shift = BPF_CORE_READ(sample, sample_shift);
+	/* Optional native provenance, never guessed from the observing task. */
+	if (bpf_core_field_exists(((struct cis_counter_sample___owner *)sample)->owner_cgroup)) {
+		e.base.ip = BPF_CORE_READ((struct cis_counter_sample___owner *)sample, owner_cgroup);
+		e.base.flags = BPF_CORE_READ((struct cis_counter_sample___owner *)sample, resource_kind);
+	}
 	counter_sum(&e);
 	if (bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &e, sizeof(e))) COUNT(s, lost);
 	else COUNT(s, emitted);

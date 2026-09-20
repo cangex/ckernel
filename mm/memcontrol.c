@@ -26,6 +26,7 @@
  */
 
 #include <linux/page_counter.h>
+#include <linux/cis_counter.h>
 #include <linux/memcontrol.h>
 #include <linux/cgroup.h>
 #include <linux/pagewalk.h>
@@ -6788,6 +6789,11 @@ static int mem_cgroup_css_online(struct cgroup_subsys_state *css)
 #endif
 
 	dynamic_pool_inherit(memcg);
+
+	cis_counter_bind(&memcg->memory, cgroup_id(css->cgroup), CIS_CC_MEMORY);
+	cis_counter_bind(&memcg->swap, cgroup_id(css->cgroup), CIS_CC_SWAP);
+	cis_counter_bind(&memcg->kmem, cgroup_id(css->cgroup), CIS_CC_KMEM);
+	cis_counter_bind(&memcg->tcpmem, cgroup_id(css->cgroup), CIS_CC_TCPMEM);
 
 	/* Online state pins memcg ID, memcg ID pins CSS */
 	refcount_set(&memcg->id.ref, 1);

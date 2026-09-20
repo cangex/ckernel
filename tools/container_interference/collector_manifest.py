@@ -71,6 +71,8 @@ COLLECTORS = {
 
 
 LEGACY_BLOCK = deepcopy(COLLECTORS['block'])
+LEGACY_COUNTER = deepcopy(COLLECTORS['counter'])
+COLLECTORS['counter']['source_filter'] += '; protocol 3 optional immutable native owning cgroup and memory/swap/kmem/tcpmem kind; absent bindings remain unknown, no inferred holder or cache-line latency'
 LEGACY_FD = deepcopy(COLLECTORS['fd'])
 COLLECTORS['fd']['source_filter'] = 'cis_fdlock_state only; target opens prefix-128 watch; mutex/lockref static key stays disabled; prefix omissions retained in full-call population, not complete window coverage'
 LEGACY_ALLOCATOR = deepcopy(COLLECTORS['allocator'])
@@ -144,6 +146,14 @@ def validate_inventory(name, inventory):
 def validate_record_inventory(record):
     """Historical reads only; live admission always requires the current maps."""
     name=record['collector']; expected=contract(name); inventory=record.get('inventory')
+    if name=='counter' and record.get('collector_contract_sha256') not in (None,digest(expected)):
+        candidate=contract(name); candidate.update(deepcopy(LEGACY_COUNTER))
+        legacy_maps=COMMON_MAPS+['targets','stacks','pending']
+        if isinstance(inventory,dict) and set(inventory.get('map_names',[]))==set(legacy_maps):
+            candidate['maps']=legacy_maps
+        if record['collector_contract_sha256']!=digest(candidate):
+            raise ValueError('unproven historical counter contract')
+        expected=candidate
     if name=='fd' and record.get('collector_contract_sha256') not in (None,digest(expected)):
         candidate=contract(name); candidate.update(deepcopy(LEGACY_FD))
         if record['collector_contract_sha256']!=digest(candidate):

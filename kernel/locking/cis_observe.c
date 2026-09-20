@@ -344,6 +344,8 @@ void cis_counter_init(struct page_counter *counter)
 {
 	s64 old = atomic64_read(&cis_counter_generation), next;
 
+	counter->cis_owner_cgroup = 0;
+	counter->cis_resource_kind = CIS_CC_UNKNOWN;
 	for (;;) {
 		if (unlikely(old == S64_MAX)) {
 			counter->cis_generation = 0;
@@ -358,6 +360,18 @@ void cis_counter_init(struct page_counter *counter)
 	}
 }
 EXPORT_SYMBOL_GPL(cis_counter_init);
+
+/* Called once by the owning subsystem before publishing an online object.
+ * No lookup or shared update is added to the charge/uncharge path. */
+void cis_counter_bind(struct page_counter *counter, u64 owner, u32 kind)
+{
+	if (!owner || !kind || kind > CIS_CC_TCPMEM ||
+	    WARN_ON_ONCE(READ_ONCE(counter->cis_owner_cgroup)))
+		return;
+	WRITE_ONCE(counter->cis_resource_kind, kind);
+	smp_store_release(&counter->cis_owner_cgroup, owner);
+}
+EXPORT_SYMBOL_GPL(cis_counter_bind);
 
 static int cis_counter_audit_show(struct seq_file *m, void *unused)
 {
@@ -383,6 +397,7 @@ void __cis_counter_step(struct cis_counter_ctx *ctx, struct page_counter *counte
 {
 	struct cis_counter_sample sample;
 	u32 ordinal = ctx->steps++;
+	u64 owner;
 
 	if (ordinal >= CIS_CC_STEPS && stage != CIS_CC_END) {
 		preempt_disable();
@@ -398,6 +413,7 @@ void __cis_counter_step(struct cis_counter_ctx *ctx, struct page_counter *counte
 	}
 	this_cpu_write(cis_in_trace, true);
 	this_cpu_inc(cis_counter_steps);
+	owner = smp_load_acquire(&counter->cis_owner_cgroup);
 	sample = (struct cis_counter_sample) {
 		.start_ns = ctx->start_ns, .time_ns = ktime_get_ns(),
 		.leaf = ctx->leaf, .counter = counter, .parent = counter->parent,
@@ -408,6 +424,8 @@ void __cis_counter_step(struct cis_counter_ctx *ctx, struct page_counter *counte
 		.op = ctx->op, .stage = stage, .depth = depth, .ordinal = ordinal,
 		.sample_shift = min(counter_shift, 16U),
 		.skipped = this_cpu_read(cis_skipped),
+		.owner_cgroup = owner,
+		.resource_kind = owner ? READ_ONCE(counter->cis_resource_kind) : CIS_CC_UNKNOWN,
 	};
 	trace_cis_counter_step(&sample);
 	this_cpu_write(cis_in_trace, false);

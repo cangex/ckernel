@@ -90,6 +90,43 @@ class CounterReport(unittest.TestCase):
         self.assertEqual(r['shared_objects'][0]['cacheline_contention'],'UNVERIFIED')
         self.assertIsNone(r['shared_objects'][0]['holder'])
 
+    def version3(self, rows):
+        for row in self.version2(rows):
+            d=fields(row['detail']); d['protocol']=3
+            d['owner_cgroup']=90 if d['object']==200 else d['object']+100
+            d['resource_kind']=1
+            row['detail']=' '.join('%s=%s'%v for v in d.items())
+        return rows
+
+    def test_native_resource_owner_is_not_actor_or_holder(self):
+        r=self.run_rows(self.version3(self.call()+self.call(actor=2,start=30,leaf=101)))
+        obj=r['shared_objects'][0]
+        self.assertEqual(obj['owner_cgroup'],90)
+        self.assertEqual(obj['resource_kind'],'memory')
+        self.assertEqual(obj['provenance'],'NATIVE_IMMUTABLE_BINDING')
+        self.assertIsNone(obj['holder'])
+        self.assertEqual(obj['cacheline_contention'],'UNVERIFIED')
+
+    def test_native_provenance_corruption_rejected(self):
+        for replacement in ('owner_cgroup=0','owner_cgroup=-1','resource_kind=9'):
+            rows=self.version3(self.call())
+            key=replacement.split('=')[0]
+            d=fields(rows[2]['detail']); d[key]=int(replacement.split('=')[1])
+            rows[2]['detail']=' '.join('%s=%s'%v for v in d.items())
+            self.assertEqual(self.run_rows(rows)['quality']['status'],'FAIL')
+        rows=self.version3(self.call()+self.call(actor=2,start=30,leaf=101))
+        rows[-2]['detail']=rows[-2]['detail'].replace('owner_cgroup=90','owner_cgroup=91')
+        self.assertEqual(self.run_rows(rows)['quality']['status'],'FAIL')
+
+    def test_unannotated_counter_does_not_inherit_actor(self):
+        rows=self.version3(self.call()+self.call(actor=2,start=30,leaf=101))
+        for row in rows:
+            d=fields(row['detail']); d.update(owner_cgroup=0,resource_kind=0)
+            row['detail']=' '.join('%s=%s'%v for v in d.items())
+        obj=self.run_rows(rows)['shared_objects'][0]
+        self.assertIsNone(obj['owner_cgroup'])
+        self.assertEqual(obj['provenance'],'UNKNOWN')
+
     def test_reinitialized_address_not_shared_object(self):
         r=self.run_rows(self.version2(self.call())+self.version2(self.call(actor=2,start=30),offset=2000))
         self.assertEqual(len(r['calls']),2)
