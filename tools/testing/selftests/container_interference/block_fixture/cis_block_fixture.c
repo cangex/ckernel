@@ -292,7 +292,7 @@ static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 	struct bio *bios[CIS_MERGE_MAX] = {};
 	struct page *pages[CIS_MERGE_MAX] = {};
 	struct blk_plug plug;
-	unsigned int i, n, block;
+	unsigned int i, n, block, role, pattern;
 	int error = -ENOMEM;
 
 	if (test_mode >= 5 && command == CIS_LIFECYCLE_RUN)
@@ -310,7 +310,9 @@ static int cis_merge_ioctl(struct block_device *bdev, blk_mode_t mode,
 	    (test_mode == 4 && !((n == 3 && job->output.pattern == 3) || (n == 2 && job->output.pattern == 1)))) {
 		error = -EINVAL; goto out;
 	}
-	memset(&job->output.requests, 0, sizeof(job->output) - offsetof(struct cis_merge_test, requests));
+	role = job->output.role; pattern = job->output.pattern;
+	memset(&job->output, 0, sizeof(job->output));
+	job->output.role = role; job->output.count = n; job->output.pattern = pattern;
 	init_completion(&job->done);
 	for (i = 0; i < n; i++) {
 		pages[i] = alloc_page(GFP_KERNEL);

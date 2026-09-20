@@ -48,3 +48,9 @@ class MergeTruth(unittest.TestCase):
             self.assertIn(call,src)
         self.assertNotIn('trace_block',src)
         self.assertIn('if (test_mode < 3 || test_mode >= 5) blk_queue_flag_set(QUEUE_FLAG_NOMERGES',src)
+
+    def test_merge_output_clear_respects_field_bounds(self):
+        src=(Path(__file__).parent/'block_fixture/cis_block_fixture.c').read_text()
+        self.assertNotIn('memset(&job->output.requests',src)
+        self.assertIn('memset(&job->output, 0, sizeof(job->output));',src)
+        self.assertIn('job->output.role = role; job->output.count = n; job->output.pattern = pattern;',src)
