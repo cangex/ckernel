@@ -99,6 +99,7 @@ def run(args):
     if args.label == 'x4-net-guard': command[-1] += ' cis_net_test=guard'
     if args.label == 'x1-rwsem-overflow': command[-1] += ' cis_rwsem_test=overflow'
     if args.label == 'x7-rwsem-joint': command[-1] += ' cis_rwsem_test=joint'
+    if args.label == 'y4-tags': command[-1] += ' cis_tag_pressure=1'
     disks=[]
     if args.label in ('x5-block','x5-writeback','x7-mixed','y3-filesystem','y4-io'):
         for i in range(2):
@@ -177,7 +178,7 @@ if __name__ == '__main__':
     parser.add_argument('--source', help='frozen guest-tool checkout, if staged independently')
     parser.add_argument('--source-diagnostics', action='store_true',
                         help='bounded recursion troubleshooting; not a performance cohort')
-    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-maple','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x4-net-quota','x4-net-reuse','x4-net-capacity','x4-net-txfailure','x4-net-txadmission','x4-net-txrelease','x4-net-guard','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint','x7-mixed','y0-public','y0-backend','y1-topology','y2-memory','y2-page-fixture','y2-allocator','y3-filesystem','y4-io'), required=True)
+    parser.add_argument('--label', choices=('x0-control','x0-fault','x0-expiry','x0-crashes','x1-sync','x1-fd','x1-rwsem','x1-rwsem-overflow','x2-counter','x2-memcg','x3-allocator','x3-maple','x3-fixture','x3-placement','x3-failure','x3-rollback','x3-slub','x4-net','x4-backlog','x4-net-rights','x4-net-origin','x4-net-quota','x4-net-reuse','x4-net-capacity','x4-net-txfailure','x4-net-txadmission','x4-net-txrelease','x4-net-guard','x5-block','x5-fixture','x5-writeback','x6-diagnosis','x7-joint','x7-rwsem-joint','x7-mixed','y0-public','y0-backend','y1-topology','y2-memory','y2-page-fixture','y2-allocator','y3-filesystem','y4-io','y4-tags'), required=True)
     parser.add_argument('--timeout', type=int, choices=(900,1500,1800), default=900)
     parser.add_argument('--mke2fs', default='mkfs.ext4', help='isolated versioned image formatter, no host installation')
     parser.add_argument('--dumpe2fs', default='dumpe2fs', help='matching isolated image feature inspector')

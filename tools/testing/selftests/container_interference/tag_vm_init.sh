@@ -11,6 +11,9 @@ mount -t debugfs none /sys/kernel/debug
 echo '+cpu +memory +pids +cpuset +io' > /sys/fs/cgroup/cgroup.subtree_control
 echo 1 > /proc/sys/kernel/sched_schedstats
 touch /cis-disposable-vm
+case " $(cat /proc/cmdline) " in
+    *" cis_tag_pressure=1 "*) export CIS_TAG_PRESSURE=1 ;;
+esac
 if ! insmod /cis_tag_fixture.ko disposable_vm=1; then
     echo CIS_PROFILE_VM_EXIT=91
     poweroff -f
