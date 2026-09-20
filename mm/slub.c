@@ -4433,8 +4433,8 @@ static void free_kmem_cache_nodes(struct kmem_cache *s)
 	struct kmem_cache_node *n;
 
 	for_each_kmem_cache_node(s, node, n) {
-		s->node[node] = NULL;
 		slub_node_event(s, n, CIS_RETIRE);
+		s->node[node] = NULL;
 		kmem_cache_free(kmem_cache_node, n);
 	}
 }
@@ -4468,8 +4468,8 @@ static int init_kmem_cache_nodes(struct kmem_cache *s)
 		}
 
 		init_kmem_cache_node(n);
-		slub_node_event(s, n, CIS_RESET);
 		s->node[node] = n;
+		slub_node_event(s, n, CIS_RESET);
 	}
 	return 1;
 }
@@ -5084,8 +5084,8 @@ static int slab_mem_going_online_callback(void *arg)
 			goto out;
 		}
 		init_kmem_cache_node(n);
-		slub_node_event(s, n, CIS_RESET);
 		s->node[nid] = n;
+		slub_node_event(s, n, CIS_RESET);
 	}
 	/*
 	 * Any cache created after this point will also have kmem_cache_node

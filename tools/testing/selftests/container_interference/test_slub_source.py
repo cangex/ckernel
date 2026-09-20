@@ -45,6 +45,12 @@ class SlubSource(unittest.TestCase):
         self.assertIn('SEC("raw_tp/cis_slublock_state")', code)
         self.assertIn('CIS_PROFILE == 12 ? key.kind != 4', code)
 
+    def test_selected_node_is_published_at_lifetime_boundaries(self):
+        source=(ROOT/'mm/slub.c').read_text()
+        self.assertIn('slub_node_event(s, n, CIS_RETIRE);\n\t\ts->node[node] = NULL;',source)
+        for index in ('node','nid'):
+            self.assertIn('s->node[%s] = n;\n\t\tslub_node_event(s, n, CIS_RESET);'%index,source)
+
     def test_interrupt_boundary_does_not_name_current_or_reset_prefix(self):
         source=(ROOT/'kernel/locking/cis_observe.c').read_text()
         begin=source.index('void __cis_slub_event('); end=source.index('EXPORT_SYMBOL_GPL(__cis_slub_event)',begin)
