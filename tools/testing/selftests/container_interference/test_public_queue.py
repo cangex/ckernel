@@ -25,7 +25,7 @@ class PublicQueue(unittest.TestCase):
             qdisc=100,txq=200,dev=300,skb=400,actor_cgroup=actor,socket_cgroup=actor,
             txq_state=0,netns=77,ifindex=5,queue=0,handle=65536,operation=1,sample_shift=4,
             qlen_begin=1,qlen_end=2,backlog_begin=1000,backlog_end=2000,length=1000,
-            context=0,flags=0,packets=1,result=0,actor_id=actor,actor_generation=1,
+            context=0,flags=0,packets=0,result=0,actor_id=actor,actor_generation=1,
             socket_id=actor,socket_generation=1,tid=100+actor,task_start=1,cpu=0)
         d.update(updates)
         return dict(kind='QDISC',id=0,generation=0,detail=' '.join('%s=%s'%x for x in d.items()))
@@ -53,7 +53,7 @@ class PublicQueue(unittest.TestCase):
 
     def test_unknown_irq_and_forwarding_preserved(self):
         r=self.run_rows([self.event(actor=0,actor_generation=0,socket_generation=0,tid=0,
-                                  task_start=0,context=1,operation=2,acquired_ns=0)])
+                                  task_start=0,context=1,operation=2,packets=1,acquired_ns=0)])
         self.assertEqual(r['quality']['status'],'PASS')
         self.assertEqual(r['coverage']['unknown_executors'],1)
         self.assertEqual(r['coverage']['unknown_socket_accounting'],1)
@@ -67,6 +67,12 @@ class PublicQueue(unittest.TestCase):
     def test_private_queue_one_actor_no_sharing(self):
         r=self.run_rows([self.event(qlen_begin=0,qlen_end=0,backlog_begin=0,backlog_end=0)])
         self.assertEqual(r['coverage']['backlog_samples'],0); self.assertFalse(r['shared_resources'])
+
+    def test_nolock_or_early_drop_does_not_invent_acquisition(self):
+        r=self.run_rows([self.event(acquired_ns=0,result=1)])
+        self.assertEqual(r['quality']['status'],'PASS')
+        self.assertIsNone(r['samples'][0]['acquire_bracket_wall_ns'])
+        self.assertEqual(self.run_rows([self.event(packets=1)])['quality']['status'],'FAIL')
 
     def test_wrong_resource_epoch_and_window_rejected(self):
         for e in (self.event(lease=8),self.event(ifindex=6),self.event(qdisc=101),self.event(netns=78),

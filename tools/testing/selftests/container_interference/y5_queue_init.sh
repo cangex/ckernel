@@ -5,6 +5,8 @@ mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 mkdir -p /sys/fs/cgroup /sys/kernel/tracing /sys/kernel/debug /run
+mkdir -p /var
+test -e /var/run || ln -s /run /var/run
 mount -t cgroup2 none /sys/fs/cgroup
 mount -t tracefs none /sys/kernel/tracing
 mount -t debugfs none /sys/kernel/debug

@@ -33,9 +33,9 @@ def analyze(record,raw):
                 d['context'] not in (0,1) or not 0<=d['cpu']<512 or
                 min(d[k] for k in ('lease','qdisc','txq','dev','skb'))<=0 or
                 any(d[k]!=selection.get(k) for k in ('lease','qdisc','netns','ifindex','queue','handle')) or
-                d['packets']!=1 or not within_window(record,d['begin_ns'],d['end_ns']) or
+                d['packets']!=(1 if d['operation']==2 else 0) or not within_window(record,d['begin_ns'],d['end_ns']) or
                 d['end_ns']>=record['window']['end_ns'] or
-                (d['operation']==1 and not d['begin_ns']<=d['acquired_ns']<=d['end_ns']) or
+                (d['operation']==1 and d['acquired_ns'] and not d['begin_ns']<=d['acquired_ns']<=d['end_ns']) or
                 (d['operation']==2 and d['acquired_ns']!=0)):
             excluded['schema_or_selection']+=1; continue
         actor=(d['actor_id'],d['actor_generation']); billing=(d['socket_id'],d['socket_generation'])
