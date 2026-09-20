@@ -57,7 +57,7 @@
 
 /* Observe the real lock operation, not a separate diagnostic lock. */
 #define slub_node_event(s, n, phase) \
-	cis_slub_event((s)->name, (s), &(n)->list_lock, (phase))
+	cis_slub_event((s)->name, (s), (void *const *)(s)->node, (n), &(n)->list_lock, (phase))
 #define slub_node_lock_irqsave(s, n, flags) do { \
 	slub_node_event(s, n, CIS_WAIT); \
 	spin_lock_irqsave(&(n)->list_lock, flags); \

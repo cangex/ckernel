@@ -56,7 +56,8 @@ def analyze(record,raw):
                     f['stack_leaf_to_root'],['holder and complete lifetime unknown'],outcome=f['outcome'])
         elif collector=='counter':
             for f in specialist['shared_objects']:
-                add('shared_updates','E2',None,dict(kind='page_counter',address=f['address'],generation=f['object_generation'],field=f['field']),
+                add('shared_updates','E2',None,dict(kind='page_counter',address=f['address'],generation=f['object_generation'],field=f['field'],
+                    owner_cgroup=f.get('owner_cgroup'),resource_kind=f.get('resource_kind','unknown'),provenance=f.get('provenance','UNKNOWN')),
                     f['actors'],None,[],['no mutex-style holder; cache-line contention unverified'])
             for f in specialist['calls']:
                 add('counter_operation','E1',f['actor'],dict(kind='page_counter',address=f['leaf_address'],generation=f['leaf_generation']),

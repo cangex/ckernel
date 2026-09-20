@@ -108,6 +108,10 @@ COLLECTORS['block']['programs'] += ['wb_dirty','wb_begin','wb_end']
 COLLECTORS['block']['maps'].append('wb_pending')
 COLLECTORS['block']['source_filter'] += '; native folio dirty observations and 256 task-start keyed inode writeback contexts; closed synchronous contexts link request submission, not exclusive dirtying ownership or a causal blocker'
 
+LEGACY_BACKEND_SELECTION = {name:deepcopy(COLLECTORS[name]) for name in ('allocator','alloc_backend','slub')}
+for _name in LEGACY_BACKEND_SELECTION:
+    COLLECTORS[_name]['source_filter'] += '; Y2 kernel requires immutable administrative cache lease; optional up-to-eight SLUB lock nodes, allocation/release lifetimes retain all nodes; older kernels accept boot default only, never explicit session override'
+
 
 def contract(name, legacy_block=False, legacy_rwsem=False):
     if name not in COLLECTORS:
@@ -146,6 +150,9 @@ def validate_inventory(name, inventory):
 def validate_record_inventory(record):
     """Historical reads only; live admission always requires the current maps."""
     name=record['collector']; expected=contract(name); inventory=record.get('inventory')
+    if name in LEGACY_BACKEND_SELECTION and record.get('collector_contract_sha256') not in (None,digest(expected)):
+        candidate=contract(name); candidate.update(deepcopy(LEGACY_BACKEND_SELECTION[name]))
+        if record['collector_contract_sha256']==digest(candidate): expected=candidate
     if name=='counter' and record.get('collector_contract_sha256') not in (None,digest(expected)):
         candidate=contract(name); candidate.update(deepcopy(LEGACY_COUNTER))
         legacy_maps=COMMON_MAPS+['targets','stacks','pending']

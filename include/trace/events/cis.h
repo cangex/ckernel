@@ -6,6 +6,7 @@
 #include <linux/tracepoint.h>
 #include <linux/cis_counter.h>
 #include <linux/cis_alloc.h>
+#include <linux/cis_backend.h>
 #include <linux/cis_maple.h>
 #include <linux/cis_net.h>
 struct task_struct;
@@ -43,7 +44,7 @@ TRACE_EVENT(cis_net_tx,
 	TP_fast_assign(__entry->time_ns = sample->time_ns; __entry->phase = sample->phase;),
 	TP_printk("time_ns=%llu phase=%u", __entry->time_ns, __entry->phase)
 );
-TRACE_EVENT(cis_maple_alloc,
+TRACE_EVENT_FN(cis_maple_alloc,
 	TP_PROTO(const struct cis_maple_sample *sample),
 	TP_ARGS(sample),
 	TP_STRUCT__entry(
@@ -56,9 +57,10 @@ TRACE_EVENT(cis_maple_alloc,
 		__entry->phase = sample->phase;
 	),
 	TP_printk("tree=%p begin_ns=%llu phase=%u", __entry->tree,
-		__entry->begin_ns, __entry->phase)
+		__entry->begin_ns, __entry->phase),
+	cis_backend_register, cis_backend_unregister
 );
-TRACE_EVENT(cis_alloc_step,
+TRACE_EVENT_FN(cis_alloc_step,
 	TP_PROTO(const struct cis_alloc_sample *sample),
 	TP_ARGS(sample),
 	TP_STRUCT__entry(
@@ -71,9 +73,10 @@ TRACE_EVENT(cis_alloc_step,
 		__entry->ordinal = sample->ordinal;
 	),
 	TP_printk("cache=%p stage=%u ordinal=%u", __entry->cache,
-		__entry->stage, __entry->ordinal)
+		__entry->stage, __entry->ordinal),
+	cis_backend_register, cis_backend_unregister
 );
-TRACE_EVENT(cis_alloc_release,
+TRACE_EVENT_FN(cis_alloc_release,
 	TP_PROTO(const struct cis_alloc_release_sample *sample),
 	TP_ARGS(sample),
 	TP_STRUCT__entry(
@@ -86,7 +89,8 @@ TRACE_EVENT(cis_alloc_release,
 		__entry->context = sample->context;
 	),
 	TP_printk("cache=%p object=%p context=%u", __entry->cache,
-		__entry->object, __entry->context)
+		__entry->object, __entry->context),
+	cis_backend_register, cis_backend_unregister
 );
 TRACE_EVENT(cis_counter_step,
 	TP_PROTO(const struct cis_counter_sample *sample),

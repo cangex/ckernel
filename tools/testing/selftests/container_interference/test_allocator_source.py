@@ -8,7 +8,7 @@ class AllocatorSource(unittest.TestCase):
         path=Path(__file__).resolve().parents[4]/'kernel/locking/cis_observe.c'
         if not path.exists(): self.skipTest('kernel file unavailable in this sparse checkout')
         text=path.read_text().split('void __cis_alloc_start(',1)[1].split('\n#endif',1)[0]
-        self.assertLess(text.index('strcmp(name, alloc_cache)'),text.index('this_cpu_read(cis_in_trace)'))
+        self.assertLess(text.index('cis_backend_allows(name)'),text.index('this_cpu_read(cis_in_trace)'))
         irq=text.split('if (in_interrupt())',1)[1].split('\n\t}',1)[0]
         self.assertIn('cis_alloc_irq_filtered',irq)
         self.assertNotIn('cis_skipped',irq)

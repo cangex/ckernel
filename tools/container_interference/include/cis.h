@@ -57,6 +57,7 @@ struct cis_context {
 	int fast_alert, psi_epoll;
 	int identity_only, session_collector, output_error;
 	uint64_t selected_objects[8];
+	char backend_selection[160];
 	unsigned int selected_object_count;
 	uint64_t session_id, output_bytes, output_limit;
 	uint64_t terminal_received, terminal_emitted, terminal_rejected;

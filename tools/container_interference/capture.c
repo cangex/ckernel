@@ -23,6 +23,7 @@
 #include <unistd.h>
 #define CIS_CPU_CAP 512
 #define CIS_DIAGNOSTIC_LINKS 34
+#include "include/cis_backend_selection.h"
 struct capture {
 	struct cis_context *ctx;
 	struct bpf_object *object;
@@ -41,7 +42,46 @@ struct capture {
 	int possible_cpus;
 	int quiesced, stop_error;
 	int rwsem_filter_fd;
+	int backend_filter_fd;
 };
+
+static int prepare_backend_filter(struct capture *c)
+{
+	struct cis_context *ctx=c->ctx;
+	char wanted[160], actual[160], argument[164], cache[68], detail[240];
+	FILE *file;
+	size_t length;
+	ssize_t got;
+	if (ctx->session_collector!=8 && ctx->session_collector!=12 && ctx->session_collector!=13) return 0;
+	c->backend_filter_fd=open("/sys/kernel/debug/cis_backend_filter",O_RDWR|O_CLOEXEC);
+	if (c->backend_filter_fd<0) {
+		if (errno==ENOENT && !ctx->backend_selection[0]) {
+			cis_report(ctx,"backend_source_filter",NULL,"protocol=1 lease=0 legacy_boot_selection=1");
+			return 0;
+		}
+		return -errno;
+	}
+	if (ctx->backend_selection[0]) memcpy(wanted,ctx->backend_selection,sizeof(wanted));
+	else {
+		file=fopen("/sys/module/cis_observe/parameters/alloc_cache","r");
+		if (!file) return -errno;
+		if (!fgets(cache,sizeof(cache),file)) { fclose(file); return -EIO; }
+		fclose(file); cache[strcspn(cache,"\n")]=0;
+		snprintf(argument,sizeof(argument),"a:%s:*",cache);
+		if (cis_parse_backend(argument,wanted)) return -EINVAL;
+	}
+	length=strlen(wanted);
+	if (write(c->backend_filter_fd,wanted,length)!=(ssize_t)length) return -EIO;
+	got=read(c->backend_filter_fd,actual,sizeof(actual));
+	if (got!=(ssize_t)length || memcmp(actual,wanted,length)) return -EIO;
+	wanted[length-1]=0;
+	{
+		char *nodes=strchr(wanted,' '); *nodes++=0;
+		snprintf(detail,sizeof(detail),"protocol=1 lease=1 readback=1 cache=%s nodes=%s node_scope=slub_lock_only allocation_release_scope=whole_selected_cache",wanted,nodes);
+	}
+	cis_report(ctx,"backend_source_filter",NULL,detail);
+	return 0;
+}
 
 static int prepare_rwsem_filter(struct capture *c)
 {
@@ -564,8 +604,11 @@ int cis_capture_prepare(struct cis_context *ctx,const char *path)
 		cis_report(ctx,"capture_failure",NULL,"unsupported_page_size: kernel-memory budget not validated");
 		free(c); return -EOPNOTSUPP;
 	}
-	c->ctx=ctx; ctx->capture=c; c->rwsem_filter_fd=-1;
+	c->ctx=ctx; ctx->capture=c; c->rwsem_filter_fd=-1; c->backend_filter_fd=-1;
 	for(i=0;i<CIS_CPU_CAP;i++) c->perf_fds[i]=-1;
+	stage="backend_selection";
+	if (prepare_backend_filter(c)) goto fail;
+	stage="memlock_limit";
 	if(setrlimit(RLIMIT_MEMLOCK,&limit)) goto fail;
 	stage="object_open";
 	c->object=bpf_object__open_file(path,NULL);
@@ -1048,6 +1091,11 @@ int cis_capture_quiesce(struct cis_context *ctx)
 		if(close(c->rwsem_filter_fd)) c->stop_error=-errno;
 		c->rwsem_filter_fd=-1;
 		cis_report(ctx,"rwsem_source_filter_closed",NULL,"lease=0 close_after_detach=1");
+	}
+	if(c->backend_filter_fd>=0) {
+		if(close(c->backend_filter_fd)) c->stop_error=-errno;
+		c->backend_filter_fd=-1;
+		cis_report(ctx,"backend_source_filter_closed",NULL,"lease=0 close_after_detach=1");
 	}
 	c->quiesced=1;
 	return c->stop_error;

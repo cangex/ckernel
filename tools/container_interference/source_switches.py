@@ -5,7 +5,7 @@ import time
 
 
 def expected_fields(version, collector):
-    if version not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'):
+    if version not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'):
         raise ValueError('unsupported source-switch version')
     v = int(version)
     if v < {'counter':2, 'allocator':3, 'alloc_backend':3, 'net':5, 'block':6, 'rwsem':7, 'slub':8}.get(collector, 1):
@@ -26,6 +26,7 @@ def expected_fields(version, collector):
     if v >= 12: result.update({name:str(int(collector=='block')) for name in ('wb_dirty','wb_begin','wb_end')})
     if v >= 13: result['maple'] = str(int(collector=='allocator'))
     if v >= 14: result['net_tx'] = str(int(collector=='net'))
+    if v >= 15: result['backend_filter'] = str(int(collector in ('allocator','alloc_backend','slub')))
     return result
 
 

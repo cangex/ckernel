@@ -131,7 +131,7 @@ def validate(request):
     op = request.get('op')
     fields = {'register': {'path'}, 'unregister': {'target'}, 'status': {'session'},
               'report': {'session'}, 'cancel': {'session'}, 'stop': set(), 'recover': set(),
-              'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject', 'objects'},
+              'start': {'nonce', 'nonce_epoch', 'collector', 'targets', 'window_ms', 'inject', 'objects', 'backend'},
               'schedule_configure': {'plan'}, 'schedule_enable': set(),
               'schedule_pause': set(), 'schedule_status': {'offset'},
               'survey_epoch': set(), 'survey_report': {'target'},
@@ -150,6 +150,16 @@ def validate(request):
                 raise ValueError('object selection requires 1..8 distinct aligned object addresses')
         elif 'objects' in request:
             raise ValueError('explicit object selection is supported only for rwsem/counter')
+        if 'backend' in request:
+            backend=request['backend']
+            if (request['collector'] not in ('allocator','alloc_backend','slub') or
+                    not isinstance(backend,dict) or set(backend)!={'cache','nodes'} or
+                    not isinstance(backend['cache'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,63}',backend['cache']) or
+                    not isinstance(backend['nodes'],list) or len(backend['nodes'])>8 or
+                    any(type(v) is not int or not 0<=v<1024 for v in backend['nodes']) or
+                    len(set(backend['nodes']))!=len(backend['nodes']) or
+                    backend['nodes'] and request['collector']!='slub'):
+                raise ValueError('one exact cache; at most eight distinct SLUB lock nodes, allocator lifetime spans all nodes')
         targets = request.get('targets')
         if (not isinstance(targets, list) or not 1 <= len(targets) <= 2
                 or not all(isinstance(t, str) and len(t) <= 48 for t in targets)
@@ -484,6 +494,7 @@ class Controller:
                       performance_certification='NOT_ACCEPTED',
                       window_ms=request.get('window_ms', WINDOW_MS), targets=request['targets'],
                       selected_objects=request.get('objects',[]),
+                      backend_selection=request.get('backend'),
                       inventory=None, receipt=None, cancellation_requested=False,
                       nonce_epoch=request.get('nonce_epoch'), retention_managed=bool(self.schedule),
                       survey_epoch=self.survey_epoch, scheduled=planned,
@@ -563,6 +574,9 @@ class Controller:
                        request.get('inject') == 'after_prepare' else 'none']
             if request.get('objects'):
                 command += ['o:'+','.join('%016x'%v for v in request['objects'])]
+            if request.get('backend'):
+                backend=request['backend']
+                command += ['a:'+backend['cache']+':'+(','.join(str(v) for v in backend['nodes']) or '*')]
             command += ['%s:%d:%d:%d' % ('t' if root['session_target'] else 'i', root['fd'],
                                        root['id'], root['generation']) for root in roots]
             child_process = self.children.spawn(command, pass_fds=(child.fileno(), output, *[r['fd'] for r in roots]),

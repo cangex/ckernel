@@ -105,11 +105,14 @@ void cis_fd_observe_unregister(void) { }
 
 int cis_slub_observe_register(void)
 {
+	int ret = cis_backend_register();
+	if (ret)
+		return ret;
 	bitmap_zero(cis_waited[2], 1U << CIS_GATE_BITS);
 	return 0;
 }
 
-void cis_slub_observe_unregister(void) { }
+void cis_slub_observe_unregister(void) { cis_backend_unregister(); }
 
 static bool cis_trace_active(void)
 {
@@ -224,7 +227,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 	/* Control-plane point observations, not an atomic session acknowledgement. */
-	seq_printf(m, "version=14 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u\n",
+	seq_printf(m, "version=15 owner=%u fd=%u counter=%u allocator=%u allocator_release=%u net=%u net_release=%u block_start=%u block_insert=%u block_issue=%u block_requeue=%u block_complete=%u block_merge=%u block_remap=%u rwsem=%u slub=%u block_tag=%u rwsem_filter=%u block_link=%u wb_dirty=%u wb_begin=%u wb_end=%u maple=%u net_tx=%u backend_filter=%u\n",
 		   trace_cis_lock_state_enabled(), trace_cis_fdlock_state_enabled(),
 		   trace_cis_counter_step_enabled(), trace_cis_alloc_step_enabled(),
 		   trace_cis_alloc_release_enabled(), trace_cis_net_state_enabled(),
@@ -236,7 +239,7 @@ static int cis_sources_show(struct seq_file *m, void *unused)
 		   CIS_BLOCK_ON(block_tag_wait), cis_rwsem_filter_active(),
 		   CIS_BLOCK_ON(block_merge_link), CIS_BLOCK_ON(writeback_dirty_folio),
 		   CIS_BLOCK_ON(writeback_single_inode_start), CIS_BLOCK_ON(writeback_single_inode),
-		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled());
+		   trace_cis_maple_alloc_enabled(), trace_cis_net_tx_enabled(), cis_backend_active());
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(cis_sources);
@@ -465,7 +468,7 @@ void __cis_slub_event(const char *name, void *cache, void *object,
 	unsigned long irq_flags;
 	u64 begin = 0;
 
-	if (!name || strcmp(name, alloc_cache))
+	if (!cis_backend_allows(name))
 		return;
 	/* An observed interrupt boundary is not lost data. Invalidate the
 	 * object's open intervals without naming the interrupted task as owner.
@@ -555,7 +558,7 @@ u64 __cis_maple_alloc(struct maple_tree *tree, struct kmem_cache *cache,
 
 	preempt_disable();
 	this_cpu_inc(cis_maple_entries);
-	if (strcmp(alloc_cache, "maple_node"))
+	if (!cis_backend_allows("maple_node"))
 		goto out;
 	if (in_interrupt() || this_cpu_read(cis_in_trace)) {
 		this_cpu_inc(cis_skipped);
@@ -591,7 +594,7 @@ void __cis_alloc_release(struct kmem_cache *cache, const char *name,
 	int i;
 	preempt_disable();
 	this_cpu_inc(cis_alloc_free_entries);
-	if (!name || strcmp(name, alloc_cache))
+	if (!cis_backend_allows(name))
 		goto out;
 	if (in_nmi()) {
 		this_cpu_inc(cis_alloc_free_nmi);
@@ -681,7 +684,7 @@ void __cis_alloc_start(struct cis_alloc_ctx *ctx, struct kmem_cache *cache,
 	unsigned long n;
 	preempt_disable();
 	this_cpu_inc(cis_alloc_entries);
-	if (!name || strcmp(name, alloc_cache))
+	if (!cis_backend_allows(name))
 		goto out;
 	if (in_interrupt()) {
 		this_cpu_inc(cis_alloc_irq_filtered);

@@ -3,6 +3,7 @@
 #include "include/cis.h"
 #include "include/cis_recursion_snapshot.h"
 #include "include/cis_object_selection.h"
+#include "include/cis_backend_selection.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -64,6 +65,12 @@ int main(int argc,char **argv)
 		int n=cis_parse_objects(argv[8],ctx->selected_objects);
 		if(n<1) return 2;
 		ctx->selected_object_count=n; roots_begin=9;
+	}
+	if ((ctx->session_collector==8 || ctx->session_collector==12 || ctx->session_collector==13) &&
+	    !strncmp(argv[8],"a:",2)) {
+		if (cis_parse_backend(argv[8],ctx->backend_selection)) return 2;
+		if (ctx->session_collector!=12 && !strstr(ctx->backend_selection," *\n")) return 2;
+		roots_begin=9;
 	}
 	if(argc<=roots_begin || argc>roots_begin+CIS_MAX_ROOTS) return 2;
 	ctx->output_limit=16ULL<<20; ctx->identity_only=1; ctx->psi_epoll=-1;
