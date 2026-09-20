@@ -2,17 +2,18 @@
 """Independent bounded blk-mq API truth. Not ordinary-application coverage."""
 
 CASES = ('exhausted', 'private', 'available', 'nowait')
+PRESSURE_CASES = ('issue_shared', 'issue_private')
 
 
-def order():
-    return ['%s-%s-%d' % (case, mode, r) for case in CASES for r in range(3)
+def order(pressure=False):
+    return ['%s-%s-%d' % (case, mode, r) for case in (CASES + PRESSURE_CASES if pressure else CASES) for r in range(3)
             for mode in (('off', 'block') if r % 2 == 0 else ('block', 'off'))]
 
 
 def check(evidence, report=None, identities=None):
     errors = []
     case = evidence['case']
-    if case not in CASES:
+    if case not in CASES + PRESSURE_CASES:
         raise ValueError('tag fixture case')
     rows = evidence['truth']
     calls = [r for r in rows if r['actor']==1 and r['op']==0]
@@ -23,22 +24,28 @@ def check(evidence, report=None, identities=None):
     if (call['result']!=(-11 if case=='nowait' else 0) or any(r['result'] for r in holder)
             or any(r['depth']!=4 for r in rows)):
         errors.append('native_allocation_result')
-    if call['disk'] != (1 if case=='private' else 0) or call['nowait']!=int(case=='nowait'):
+    private = case in ('private', 'issue_private')
+    sleeping = case in ('exhausted', 'issue_shared')
+    issuing = case in PRESSURE_CASES
+    if call['disk'] != int(private) or call['nowait']!=int(case=='nowait'):
         errors.append('case_route')
     if (len({r['queue'] for r in holder})!=1 or not holder[0]['queue']
-            or (call['queue']==holder[0]['queue'])!=(case!='private')):
+            or (call['queue']==holder[0]['queue'])!= (not private)):
         errors.append('actual_queue_route')
     if evidence['held_before'] != [len(holder),0]:
         errors.append('independent_held_count')
     w=evidence['window']
     if any(not w['start_ns']<=r['before_ns']<=r['after_ns']<=w['end_ns'] for r in rows):
         errors.append('truth_outside_window')
+    issues=[r for r in rows if r['actor']==0 and r['op']==3]
+    if (len(issues)!=int(issuing) or any(r['result'] or r['queue']!=holder[0]['queue'] for r in issues)):
+        errors.append('native_issue_truth')
     matched=0
     if report is not None:
         if report['quality']['status']!='PASS' or report['scope_audit']['status']!='PASS':
             errors.append('capture_quality')
         tags=report['tag_waits']
-        expected=1 if case in ('exhausted','nowait') else 0
+        expected=1 if sleeping or case=='nowait' else 0
         if len(tags)!=expected:
             errors.append('tag_population')
         for tag in tags:
@@ -50,8 +57,8 @@ def check(evidence, report=None, identities=None):
             a,b=tag['interval_ns']
             if b is None or not call['before_ns']<=a<=b<=call['after_ns']:
                 errors.append('tag_boundary')
-            if case=='exhausted':
-                frees=[r for r in rows if r['actor']==0 and r['op']==1]
+            if sleeping:
+                frees=[r for r in rows if r['actor']==0 and r['op']==(3 if issuing else 1)]
                 if (tag['outcome']!='TAG_FOUND' or not tag['sleep_intervals'] or len(frees)!=1
                         or not a<frees[0]['before_ns']<=b
                         or sum(y-x for x,y in (s['interval_ns'] for s in tag['sleep_intervals']))<20_000_000):
@@ -59,8 +66,23 @@ def check(evidence, report=None, identities=None):
             elif tag['outcome']!='NOWAIT_REJECTED' or tag['sleep_intervals']:
                 errors.append('nowait_not_sleep')
             matched+=1
-        if report['requests']:
+        if report['requests'] and not issuing:
             errors.append('fixture_did_not_submit_io')
+        if issuing:
+            issues=[r for r in rows if r['actor']==0 and r['op']==3]
+            shots=report['pressure']['tag_snapshots']; links=report['pressure']['wait_pool_associations']
+            if len(issues)!=1 or issues[0]['result'] or len(report['requests'])!=1 or len(shots)!=1:
+                errors.append('fixture_issue_population')
+            else:
+                issue=issues[0]; shot=shots[0]
+                if (shot['queue']!=issue['queue'] or shot['tag']!=issue['tag'] or
+                        not issue['before_ns']<=shot['time_ns']<=issue['after_ns'] or
+                        shot['selected_container']!=[identities[0]['id'],identities[0]['generation']] or
+                        shot['kind']!='driver' or shot['blocking_container'] is not None):
+                    errors.append('fixture_issue_binding')
+            if len(links)!=int(sleeping): errors.append('pool_overlap_population')
+            if any(link['blocking_container'] is not None or link['causal']!='NOT_ESTABLISHED' for link in links):
+                errors.append('fixture_invented_blocker')
     return dict(status='FAIL' if errors else 'PASS',errors=errors,tag_matches=matched,
-                expected_tags=1 if case in ('exhausted','nowait') else 0,
+                expected_tags=1 if sleeping or case=='nowait' else 0,
                 scope='native blk-mq allocation API fixture; not device I/O or unique holder inference')

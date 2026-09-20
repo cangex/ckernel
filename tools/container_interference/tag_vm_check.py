@@ -9,6 +9,7 @@ from tag_fixture_check import order, check
 from prototype_admission import SOURCE_KEYS
 from session_check import extract
 from source_switches import validate
+from collector_manifest import contract
 
 
 def verify(serial, output):
@@ -21,12 +22,14 @@ def verify(serial, output):
         errors.append('guest_exit_or_unload')
     if any(x in text for x in ('BUG: KASAN:','Oops:','Kernel panic','WARNING: CPU:')):
         errors.append('kernel_warning')
-    if (plan.get('order')!=order() or plan.get('depth')!=4 or plan.get('rounds')!=3
+    pressure=plan.get('pressure',False)
+    if (type(pressure) is not bool or plan.get('order')!=order(pressure) or plan.get('depth')!=4 or plan.get('rounds')!=3
             or plan.get('release_delay_s')!=.05 or plan.get('fixture')!='blk_mq_alloc_request'):
         errors.append('frozen_plan')
     if any(declared['source'].get(k)!=permit['source'].get(k) for k in SOURCE_KEYS):
         errors.append('source_binding')
-    for label in order():
+    if [s['label'] for s in declared['states']]!=order(pressure): errors.append('state_order')
+    for label in order(pressure):
         ev=value(label+'-evidence.json'); report=None; identities=None
         if '-block-' in label:
             sid=str(ev['session_id'])
@@ -36,12 +39,13 @@ def verify(serial, output):
             capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode()
             report=analyze(record,capture)
             identities=[record['root_identities'][t] for t in ev['targets']]
-            if record['nonce']!=label.replace('-','') or record['window']!=ev['window'] or not record['objects_absent']:
+            if record['nonce']!=label.replace('-','').replace('_','') or record['window']!=ev['window'] or not record['objects_absent']:
                 errors.append('boundary_'+label)
             validate(ev['active_sources'],'block',record['receipt']['prepared_ns'],record['window']['end_ns'])
             validate(ev['idle_sources'],None,record['window']['end_ns'],2**64-1)
             audit=record['receipt'].get('program_audit',{})
-            if audit.get('required') is not True or audit.get('valid') is not True or audit.get('programs')!=8 or audit.get('recursion_misses')!=0:
+            program_count=len(contract('block')['programs']) if pressure else 8
+            if audit.get('required') is not True or audit.get('valid') is not True or audit.get('programs')!=program_count or audit.get('recursion_misses')!=0:
                 errors.append('program_audit_'+label)
             (output/(label+'-report.json')).write_text(json.dumps(report,indent=2))
         else:

@@ -31,8 +31,9 @@ def run():
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',bpf='/profile/cis.bpf.o')
     source=source_manifest(args,env['boot_id']); permit=prototype_admission.create(source,env,time.monotonic_ns())
     (out/'permit.json').write_text(json.dumps(permit,indent=2))
-    (out/'plan.json').write_text(json.dumps(dict(order=order(),rounds=3,depth=4,release_delay_s=.05,
-        window_ms=2000,fixture='blk_mq_alloc_request',source=source),indent=2))
+    pressure=os.environ.get('CIS_TAG_PRESSURE')=='1'
+    (out/'plan.json').write_text(json.dumps(dict(order=order(pressure),rounds=3,depth=4,release_delay_s=.05,
+        window_ms=2000,fixture='blk_mq_alloc_request',pressure=pressure,source=source),indent=2))
     endpoint='/run/cis-tag.sock'; log=(out/'controller.log').open('x')
     daemon=subprocess.Popen(['/usr/bin/python3','/profile/session.py','--socket',endpoint,'--directory',str(out/'records'),
         '--worker',args.worker,'--residue',args.residue,'--bpf',args.bpf,'--admission-policy','prototype',
@@ -85,10 +86,10 @@ def run():
             if daemon.poll() is not None or time.monotonic()>end: raise RuntimeError('daemon readiness')
             time.sleep(.02)
         targets=[request('register',path=str(p))['target'] for p in roots]
-        for label in order():
+        for label in order(pressure):
             case=label.split('-')[0]; collecting='-block-' in label; sid=None
             if collecting:
-                sid=request('start',collector='block',targets=targets,nonce=label.replace('-',''),window_ms=2000)['session_id']
+                sid=request('start',collector='block',targets=targets,nonce=label.replace('-','').replace('_',''),window_ms=2000)['session_id']
                 window=wait(sid,'window')['window']; active=observe('block')
             else:
                 now=time.monotonic_ns(); window=dict(start_ns=now,end_ns=now+2_000_000_000); active=observe(None)
@@ -113,10 +114,10 @@ def run():
                 command(running[0],0,slot=slot)
                 if result(0)['result']!=0: raise ValueError('could not fill tags')
             command(running[0],2); held=result(0)['held']
-            command(running[1],0,disk=int(case=='private'),nowait=int(case=='nowait'))
-            if case=='exhausted':
+            command(running[1],0,disk=int(case in ('private','issue_private')),nowait=int(case=='nowait'))
+            if case in ('exhausted','issue_shared','issue_private'):
                 time.sleep(.05)
-                command(running[0],1); result(0)
+                command(running[0],3 if case.startswith('issue_') else 1); result(0)
             result(1)
             for child in running: child.stdin.close()
             codes=[child.wait(timeout=5) for child in running]

@@ -20,14 +20,16 @@ static struct gendisk *disks[2];
 static atomic_t held[2];
 struct context { struct mutex lock; struct request *rq[DEPTH]; };
 
-static blk_status_t reject_io(struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_data *bd)
+static blk_status_t fixture_io(struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_data *bd)
 {
-	/* Only allocation/free is supported. Accidentally issuing I/O must fail. */
+	/* A zero-data test command exercises native issue/completion, not disk I/O. */
+	blk_status_t status = !bd->rq->bio && !blk_rq_bytes(bd->rq) &&
+		req_op(bd->rq) == REQ_OP_DRV_IN ? BLK_STS_OK : BLK_STS_IOERR;
 	blk_mq_start_request(bd->rq);
-	blk_mq_end_request(bd->rq, BLK_STS_IOERR);
+	blk_mq_end_request(bd->rq, status);
 	return BLK_STS_OK;
 }
-static const struct blk_mq_ops mq_ops = { .queue_rq = reject_io };
+static const struct blk_mq_ops mq_ops = { .queue_rq = fixture_io };
 
 static int fixture_open(struct inode *inode, struct file *file)
 {
@@ -72,7 +74,7 @@ static long fixture_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 		return -ENOTTY;
 	if (copy_from_user(&op, (void __user *)arg, sizeof(op)))
 		return -EFAULT;
-	if (op.op > 2 || op.disk > 1 || op.slot >= DEPTH || op.nowait > 1)
+	if (op.op > 3 || op.disk > 1 || op.slot >= DEPTH || op.nowait > 1)
 		return -EINVAL;
 	mutex_lock(&ctx->lock);
 	op.before_ns = ktime_get_ns();
@@ -86,7 +88,7 @@ static long fixture_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 		if (ctx->rq[op.slot]) {
 			op.result = -EBUSY;
 		} else {
-			rq = blk_mq_alloc_request(disks[op.disk]->queue, REQ_OP_READ,
+			rq = blk_mq_alloc_request(disks[op.disk]->queue, REQ_OP_DRV_IN,
 				op.nowait ? BLK_MQ_REQ_NOWAIT : 0);
 			if (IS_ERR(rq))
 				op.result = PTR_ERR(rq);
@@ -98,6 +100,15 @@ static long fixture_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 		}
 	} else if (op.op == 1) {
 		release_slot(ctx, op.slot);
+	} else if (op.op == 3) {
+		rq = ctx->rq[op.slot];
+		if (!rq || rq->q != disks[op.disk]->queue) {
+			op.result = -ENOENT;
+		} else {
+			op.tag = rq->tag;
+			op.result = blk_execute_rq(rq, false) == BLK_STS_OK ? 0 : -EIO;
+			release_slot(ctx, op.slot);
+		}
 	}
 	op.held[0] = atomic_read(&held[0]);
 	op.held[1] = atomic_read(&held[1]);

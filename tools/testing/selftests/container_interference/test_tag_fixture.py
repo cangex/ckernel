@@ -40,3 +40,25 @@ class TagFixtureTests(unittest.TestCase):
         for field,value in (('queue',998),('blocking_container',1),('sleep_intervals',[]),('container',[1,1])):
             bad=copy.deepcopy(report); bad['tag_waits'][0][field]=value
             self.assertEqual(check(self.example('exhausted'),bad,identities)['status'],'FAIL')
+
+    def test_pressure_same_pool_and_private_negative(self):
+        self.assertEqual(len(order(True)),36)
+        identities=[dict(id=1,generation=1),dict(id=2,generation=1)]
+        for private in (False,True):
+            ev=self.example('private' if private else 'exhausted')
+            ev['case']='issue_private' if private else 'issue_shared'
+            ev['truth']=[r for r in ev['truth'] if r['op']!=1]
+            ev['truth'].append(dict(actor=0,op=3,result=0,depth=4,before_ns=70_000_000,
+                after_ns=80_000_000,queue=999,tag=0))
+            shot=dict(queue=999,tag=0,time_ns=75_000_000,selected_container=[1,1],kind='driver',blocking_container=None)
+            report=dict(quality=dict(status='PASS'),scope_audit=dict(status='PASS'),requests=[{}],tag_waits=[],
+                pressure=dict(tag_snapshots=[shot],wait_pool_associations=[]))
+            if not private:
+                report['tag_waits']=[dict(tid=(100<<32)|100,task_start=1,queue=999,container=[2,1],
+                    identity_changes=[],blocking_container=None,request_allocation_success='NOT_ESTABLISHED',
+                    interval_ns=[40,90_000_000],outcome='TAG_FOUND',
+                    sleep_intervals=[dict(interval_ns=[50,85_000_000])])]
+                report['pressure']['wait_pool_associations']=[dict(blocking_container=None,causal='NOT_ESTABLISHED')]
+            self.assertEqual(check(ev,report,identities)['status'],'PASS')
+            report['pressure']['wait_pool_associations'].append(dict(blocking_container=1,causal='claimed'))
+            self.assertEqual(check(ev,report,identities)['status'],'FAIL')
