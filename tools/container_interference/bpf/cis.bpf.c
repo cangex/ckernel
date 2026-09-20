@@ -643,6 +643,12 @@ int work_cancel_end(struct pt_regs *ctx)
 
 #endif
 #if CIS_PROFILE == 0 || CIS_PROFILE == 2 || CIS_PROFILE == 6 || CIS_PROFILE == 12
+static __always_inline __u64 owner_prefix_limit(__u32 kind)
+{
+	/* FD gets a separate bounded prefix; lockref and SLUB retain 64. */
+	return kind==3 ? 128 : 64;
+}
+
 static __always_inline int live_watch(struct cis_watch *w,__u64 now)
 {
 	struct cis_target *t;
@@ -686,7 +692,7 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 	w=bpf_map_lookup_elem(&watched,&key);
 	if(w && !live_watch(w,now)) { bpf_map_delete_elem(&watched,&key); w=NULL; }
 	if(!w && phase!=2) return 0;
-	if(w && key.kind>=2 && w->events>64 && phase!=1 && phase!=8) return 0;
+	if(w && key.kind>=2 && w->events>owner_prefix_limit(key.kind) && phase!=1 && phase!=8) return 0;
 	if(!irq_barrier) identity(task,&actor);
 	if(phase==2 && allowed(&actor,CIS_DIAG_OWNER,now)) {
 		struct cis_target *t=bpf_map_lookup_elem(&targets,&actor.id);
@@ -715,10 +721,10 @@ int owner_state(struct bpf_raw_tracepoint_args *ctx)
 		if(key.kind>=2 && phase!=1 && phase!=8) {
 			__u64 seq;
 			/* A bounded prefix, not dropped records in an allegedly complete window. */
-			if(w->events>64) return 0;
+			if(w->events>owner_prefix_limit(key.kind)) return 0;
 			seq=__sync_fetch_and_add(&w->events,1);
-			if(seq==64) phase=11;
-			else if(seq>64) return 0;
+			if(seq==owner_prefix_limit(key.kind)) phase=11;
+			else if(seq>owner_prefix_limit(key.kind)) return 0;
 		}
 		e.base.id=w->id;e.base.generation=w->generation;e.base.sequence_ns=w->epoch;
 		e.base.time_ns=now;e.base.type=CIS_OWNER_EVENT;e.base.object=key.object;
@@ -782,7 +788,7 @@ static __always_inline void owner_schedule(void *ctx,struct task_struct *task,__
 	if(!ht || ht->task_start!=BPF_CORE_READ(task,start_boottime)) return;
 	w=bpf_map_lookup_elem(&watched,&ht->key);
 	h=bpf_map_lookup_elem(&holders,&ht->key);
-	if(!live_watch(w,now) || (ht->key.kind>=2 && w->events>64) || !h ||
+	if(!live_watch(w,now) || (ht->key.kind>=2 && w->events>owner_prefix_limit(ht->key.kind)) || !h ||
 	   h->epoch!=w->epoch || ht->epoch!=w->epoch || h->tid!=tid || h->task_start!=ht->task_start) return;
 	e.base.id=w->id;e.base.generation=w->generation;e.base.sequence_ns=w->epoch;
 	e.base.time_ns=now;e.base.type=CIS_OWNER_EVENT;e.base.object=ht->key.object;

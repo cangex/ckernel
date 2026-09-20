@@ -71,6 +71,22 @@ class CollectorContract(unittest.TestCase):
         self.assertIsNone(out['population_coverage'])
         with self.assertRaises(ValueError): collector_audit.audit(row, b'{"session_id":"2"}')
 
+    def test_fd_prefix_history_is_exact_and_read_only(self):
+        old=cm.contract('fd'); old.update(copy.deepcopy(cm.LEGACY_FD))
+        inventory=self.inventory('fd')
+        record=dict(collector='fd',inventory=inventory,collector_contract_sha256=digest(old))
+        self.assertIn('prefix-64',old['source_filter'])
+        self.assertIn('prefix-128',cm.contract('fd')['source_filter'])
+        self.assertEqual(cm.validate_record_inventory(record),digest(old))
+        self.assertNotEqual(cm.validate_inventory('fd',inventory),digest(old))
+        with self.assertRaises(ValueError):
+            cm.validate_record_inventory(dict(record,collector_contract_sha256='0'*64))
+        for name in ('fd','owner','slub'):
+            self.assertEqual(cm.contract(name)['limits']['entry_rate_per_s'],200000)
+            self.assertEqual(cm.contract(name)['limits']['output_bytes'],16<<20)
+        self.assertIn('prefix 64',cm.contract('owner')['source_filter'])
+        self.assertIn('prefix-64',cm.contract('slub')['source_filter'])
+
     def test_independent_fd_inventory_and_resources(self):
         self.assertNotEqual(cm.contract('owner')['profile'],cm.contract('fd')['profile'])
         with self.assertRaises(ValueError): cm.validate_inventory('owner',self.inventory('fd'))

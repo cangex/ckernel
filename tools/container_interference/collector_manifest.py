@@ -71,6 +71,8 @@ COLLECTORS = {
 
 
 LEGACY_BLOCK = deepcopy(COLLECTORS['block'])
+LEGACY_FD = deepcopy(COLLECTORS['fd'])
+COLLECTORS['fd']['source_filter'] = 'cis_fdlock_state only; target opens prefix-128 watch; mutex/lockref static key stays disabled; prefix omissions retained in full-call population, not complete window coverage'
 LEGACY_ALLOCATOR = deepcopy(COLLECTORS['allocator'])
 LEGACY_NET = deepcopy(COLLECTORS['net'])
 LEGACY_NET_USE_ONLY = deepcopy(LEGACY_NET)
@@ -136,6 +138,11 @@ def validate_inventory(name, inventory):
 def validate_record_inventory(record):
     """Historical reads only; live admission always requires the current maps."""
     name=record['collector']; expected=contract(name); inventory=record.get('inventory')
+    if name=='fd' and record.get('collector_contract_sha256') not in (None,digest(expected)):
+        candidate=contract(name); candidate.update(deepcopy(LEGACY_FD))
+        if record['collector_contract_sha256']!=digest(candidate):
+            raise ValueError('unproven historical FD contract')
+        expected=candidate
     if name=='net' and record.get('collector_contract_sha256')!=digest(expected) and record.get('collector_contract_sha256') is not None:
         for historical in (LEGACY_NET_TX,LEGACY_NET,LEGACY_NET_USE_ONLY):
             candidate=contract(name)
