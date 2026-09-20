@@ -1,7 +1,8 @@
 Y3 selected filesystem public resources
 =======================================
 
-Status: native adapter implemented; build and runtime acceptance pending.
+Status: PASS_SCOPED for the build and functional cases in
+y3-validation-20260920.rst. This is not a performance certificate.
 Independent private directories can still share a filesystem journal and block
 allocation groups. This is distinct from sharing a writable directory or file.
 
