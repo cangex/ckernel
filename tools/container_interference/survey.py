@@ -7,6 +7,7 @@ import re
 import time
 
 from periodic_plan import digest
+import resource_topology
 
 COUNTERS = ('cpu.stat', 'cpu.pressure', 'memory.pressure', 'io.pressure', 'memory.events')
 CONFIG = ('cpu.max', 'cpuset.cpus.effective', 'cpuset.mems.effective', 'memory.max', 'memory.high')
@@ -51,6 +52,7 @@ def snapshot(root, clock=time.monotonic_ns):
                     result['files'][name] = dict(start_ns=start, end_ns=end, counters=counters)
             except (OSError, ValueError, UnicodeError) as error:
                 result['errors'][name] = str(error)
+    result['topology'] = resource_topology.collect(root,clock)
     result['end_ns'] = clock()
     return result
 

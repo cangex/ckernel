@@ -24,6 +24,8 @@ def cohort_nonce(label):
 
 
 def cohort_collectors(schema, group=None):
+    if schema == 'cis-y1-joint-plan-v1' and group == 'topology':
+        return ('ip','alloc_backend')
     if schema == 'cis-y0-joint-plan-v1' and group == 'public':
         return ('ip','counter','alloc_backend','slub','sched','reclaim','block')
     if schema == 'cis-y0-joint-plan-v1' and group == 'backend-compare':
@@ -107,6 +109,13 @@ def check(serial,output):
             if record['collector']!=mode or record['nonce']!=cohort_nonce(label) or record['targets']!=evidence['targets']: errors.append('record_binding_'+label)
             if any(record.get(k)!=plan['source'][k] for k in SOURCE_KEYS): errors.append('record_source_'+label)
             capture=(files[prefix+'records/'+sid+'.jsonl'].rstrip()+'\n').encode(); report=analyze(record,capture)
+            if plan['schema']=='cis-y1-joint-plan-v1':
+                context=report['resource_context']
+                if (set(context['roots'])!=set(record['targets']) or
+                        any(v['status']!='STABLE_ENDPOINTS' for v in context['roots'].values()) or
+                        not context['shared_candidates'] or
+                        any(v['contention']!='NOT_INFERRED' for v in context['shared_candidates'])):
+                    errors.append('resource_context_'+label)
             if report['quality']['status']!='PASS' or report['scope_audit'].get('status','PASS')!='PASS': errors.append('capture_quality_'+label)
             if not record.get('objects_absent'): errors.append('cleanup_'+label)
             if not evidence['start_ns']<record['window']['start_ns']<record['window']['end_ns']<min(v['end_ns'] for v in measured): errors.append('window_coverage_'+label)

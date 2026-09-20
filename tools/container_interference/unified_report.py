@@ -10,6 +10,7 @@ from pathlib import Path
 
 from explain import explain
 from collector_audit import audit
+import resource_topology
 
 MAX_RELATIONS=128
 
@@ -142,11 +143,12 @@ def analyze(record,raw):
                     merge_transfers=merge_transfers.get((f['request'],f['episode_ns']),[]),
                     uncertainty=f['uncertainty'],terminal=f['terminal'])
     result=dict(schema='cis-explanation-v2',boot_id=record.get('boot_id'),session_id=record['session_id'],collector=collector,
+        resource_context=resource_topology.compare_roots(record.get('boundary_before',{}),record.get('boundary_after',{})),
         window=record.get('window'),quality=quality,scope_audit=scope,relations=relations,omitted_relations=omitted,
         raw_sha256=hashlib.sha256(raw).hexdigest(),source=base['source'],
         analysis_source_sha256=dict(specialist['analysis_source_sha256'] if specialist else base['analysis_source_sha256'],
             **{name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-               for name in ('unified_report.py','collector_audit.py','collector_manifest.py')}),
+               for name in ('unified_report.py','collector_audit.py','collector_manifest.py','resource_topology.py')}),
         specialist=specialist,base=base,total_interference_ns=None,performance_certification='NOT_ACCEPTED',
         timing=dict(periodic_wait_ns='NOT_INFERRED',specialist_queue_wait_ns=(record.get('scheduled') or {}).get('diagnosis',{}).get('queue_wait_ns'),
             explanation_lag_ns=base['explanation_lag_ns'],sample_age_at_specialist_admit_ns=(record.get('scheduled') or {}).get('diagnosis',{}).get('sample_age_ns')),

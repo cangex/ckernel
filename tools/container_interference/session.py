@@ -95,7 +95,8 @@ def source_manifest(args, boot):
             'support_sha256': digest(dict({name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
                 for name in ('schedule.py', 'periodic_plan.py', 'survey.py', 'process_budget.py',
                              'child_usage.py', 'prototype_admission.py', 'collector_manifest.py',
-                             'diagnosis_queue.py','diagnosis_plan.py','session_quality.py','resource_policy.py')},
+                             'diagnosis_queue.py','diagnosis_plan.py','session_quality.py','resource_policy.py',
+                             'resource_topology.py')},
                              collector_policy=policy)),
             'collector_bundle': bundle, 'collector_bundle_sha256': digest(bundle),
             'kernel_release': os.uname().release,

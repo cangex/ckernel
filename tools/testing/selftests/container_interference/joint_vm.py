@@ -35,7 +35,8 @@ def run(group='common'):
     roots=[]
     for i in range(4):
         p=root/('root%d'%i); p.mkdir(); (p/'memory.max').write_text(str(64<<20)); roots.append(p)
-    schema='cis-y0-joint-plan-v1' if group in ('public','backend-compare') else 'cis-x7-joint-plan-v3'
+    schema=('cis-y1-joint-plan-v1' if group=='topology' else
+            'cis-y0-joint-plan-v1' if group in ('public','backend-compare') else 'cis-x7-joint-plan-v3')
     collectors=cohort_collectors(schema,group)
     extensions=sorted(set(collectors)&EXTENSIONS)
     args=SimpleNamespace(worker='/profile/session-worker',residue='/profile/session-residue',
@@ -136,7 +137,8 @@ def run(group='common'):
             (out/(label+'-evidence.json')).write_text(json.dumps(result,indent=2)); results.append(result)
         (out/'result.json').write_text(json.dumps(dict(schema='cis-x7-joint-result-v1',source=source,
             status='PASS' if all(r['quality']['status'] in ('PASS','NOT_COLLECTED') for r in results) else 'FAIL',
-            states=results,performance_certification='NOT_ACCEPTED'),indent=2))
+            states=([dict(label=v['label'],session_id=v['session_id']) for v in results]
+                    if group=='topology' else results),performance_certification='NOT_ACCEPTED'),indent=2))
     finally:
         for p in children:
             if p.poll() is None: p.terminate()
@@ -151,5 +153,5 @@ def run(group='common'):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(); parser.add_argument('--group',choices=('common','slub','public','backend-compare'),default='common')
+    parser=argparse.ArgumentParser(); parser.add_argument('--group',choices=('common','slub','public','backend-compare','topology'),default='common')
     run(parser.parse_args().group)

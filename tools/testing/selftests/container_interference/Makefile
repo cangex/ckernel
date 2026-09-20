@@ -19,6 +19,7 @@ TEST_GEN_PROGS += net_tx_failure_workload
 TEST_GEN_PROGS += net_tx_admission_workload
 TEST_GEN_PROGS += net_storm_workload
 TEST_GEN_PROGS += net_release_workload
+TEST_GEN_PROGS += topology_workload
 .PHONY: all clean run_tests
 all: $(TEST_GEN_PROGS) $(TEST_GEN_PROGS_EXTENDED)
 $(TEST_GEN_PROGS): %: %.c common.c common.h ../../../container_interference/include/cis.h
