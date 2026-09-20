@@ -34,7 +34,7 @@ def overlap(a,b,intervals):
 def timeline(points,cpus):
     """Input already schema/identity/window checked; boundary partials explicit."""
     running={}; pending={}; irq=defaultdict(list); works={}
-    runs=[]; waits=[]; interrupts=[]; background=[]; native_wait=[]
+    runs=[]; waits=[]; interrupts=[]; background=[]; native_wait=[]; migrations=[]
     unknown=Counter(); defects=Counter(); seen=set()
     counters={(d['cpu'],d['time_ns']):(d['irq_ns'],d['irq_errors'],d['irq_valid']) for d in points if d['phase']!=2}
     def irq_delta(cpu,a,b):
@@ -50,6 +50,7 @@ def timeline(points,cpus):
         if duplicate in seen: defects['duplicate_point']+=1; continue
         seen.add(duplicate)
         if phase==2:
+            migrations.append(dict(task=list(key),identity=list(ident),time_ns=t,destination=d['destination']))
             if pending.pop(key,None): unknown['migrated_wait']+=1
             continue
         if cpu not in cpus: defects['unselected_cpu']+=1; continue
@@ -137,7 +138,7 @@ def timeline(points,cpus):
         w['complete_cpu_cost']=False
     if defects: associations=[]
     return dict(execution=runs,runnable_offcpu=waits,interrupts=interrupts,background=background,
-        native_sched_wait=native_wait,associations=associations,unknown=dict(unknown),defects=dict(defects))
+        native_sched_wait=native_wait,migrations=migrations,associations=associations,unknown=dict(unknown),defects=dict(defects))
 
 
 def analyze(record,raw):

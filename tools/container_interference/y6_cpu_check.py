@@ -44,7 +44,8 @@ def check(state,logs,record=None,raw=None):
         cross=[r for r in report['associations'] if r['waiter'] in ids and r['executor'] in ids and r['waiter']!=r['executor']]
         if name=='sharedCPU' and not cross: errors.append('shared CPU association not detected')
         if name in ('separateCPU','quota','background') and cross: errors.append('false cross CPU association')
-        if name=='migration' and (work[0]['migrations']<5 or report['unknown'].get('migrated_wait',0)<1):
+        if name=='migration' and (work[0]['migrations']<5 or
+                sum(v['identity']==ids[0] for v in report['migrations'])<5):
             errors.append('migration coverage')
         if not sum(v['entries'] for v in report['interrupt_totals']): errors.append('interrupt coverage')
         if name=='background':

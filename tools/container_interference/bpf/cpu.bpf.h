@@ -32,9 +32,10 @@ static __always_inline int cpu_output(void *ctx, struct cis_cpu_event *e)
 	__u32 zero=0;
 	struct cis_cpu_irq_state *irq=bpf_map_lookup_elem(&cpu_irq_totals,&zero);
 	if(irq) {
-		__u64 sequence=irq->sequence;
-		e->irq_ns=irq->total_ns; e->irq_entries=irq->entries; e->irq_errors=irq->errors;
-		e->irq_valid=!(sequence&1) && !irq->depth && sequence==irq->sequence;
+		volatile struct cis_cpu_irq_state *snapshot=irq;
+		__u64 sequence=snapshot->sequence;
+		e->irq_ns=snapshot->total_ns; e->irq_entries=snapshot->entries; e->irq_errors=snapshot->errors;
+		e->irq_valid=!(sequence&1) && !snapshot->depth && sequence==snapshot->sequence;
 	}
 	if(bpf_perf_event_output(ctx,&events,BPF_F_CURRENT_CPU,e,sizeof(*e))) COUNT(s,lost);
 	else COUNT(s,emitted);
