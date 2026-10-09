@@ -1,0 +1,429 @@
+[
+  {
+    "stage": "W1",
+    "workload": "core",
+    "rounds": 5,
+    "scale": 12,
+    "baseline_solo_s": 4.978335622,
+    "candidate_solo_s": 4.981217348,
+    "baseline_loaded_s": 5.395368092,
+    "candidate_loaded_s": 5.437640964,
+    "baseline_interference_pct": 8.376945663467762,
+    "candidate_interference_pct": 9.162893006129469,
+    "change_pp": 0.7859473426617072,
+    "absolute_loaded_change_pct": 0.7835030210947114,
+    "paired_intervals": {
+      "target_1": {
+        "geometric_percent": 0.05577470762730606,
+        "low_percent": -1.4436351908013336,
+        "high_percent": 1.5779962230211033,
+        "n": 5
+      },
+      "batch_1": {
+        "geometric_percent": 0.05577470762730606,
+        "low_percent": -1.4436351908013336,
+        "high_percent": 1.5779962230211033,
+        "n": 5
+      },
+      "worst_copy_1": {
+        "geometric_percent": 0.05577470762730606,
+        "low_percent": -1.4436351908013336,
+        "high_percent": 1.5779962230211033,
+        "n": 5
+      },
+      "peak_sum_1": {
+        "geometric_percent": 0.02403285566713725,
+        "low_percent": -0.1117522155172043,
+        "high_percent": 0.16000250898166407,
+        "n": 5
+      },
+      "cgroup_cpu_1": {
+        "geometric_percent": -0.10042473202657945,
+        "low_percent": -1.40693568444888,
+        "high_percent": 1.2233995160179791,
+        "n": 5
+      },
+      "target_12": {
+        "geometric_percent": 0.78119621875289,
+        "low_percent": 0.19760265565399832,
+        "high_percent": 1.3681888796132413,
+        "n": 5
+      },
+      "batch_12": {
+        "geometric_percent": 0.7848947453689546,
+        "low_percent": 0.1834533968076398,
+        "high_percent": 1.389946786948871,
+        "n": 5
+      },
+      "worst_copy_12": {
+        "geometric_percent": 2.0814647519780887,
+        "low_percent": 0.6760025063602129,
+        "high_percent": 3.506547603049906,
+        "n": 5
+      },
+      "peak_sum_12": {
+        "geometric_percent": -0.0029487736199121616,
+        "low_percent": -0.4458226600477656,
+        "high_percent": 0.4418952690034965,
+        "n": 5
+      },
+      "cgroup_cpu_12": {
+        "geometric_percent": 0.18475222080517528,
+        "low_percent": -0.22853443913763805,
+        "high_percent": 0.5997508518243531,
+        "n": 5
+      }
+    },
+    "correctness": "PASS",
+    "status": "NET_BENEFIT_NOT_ESTABLISHED",
+    "limits": [
+      "single shared KVM guest, not bare-metal NUMA",
+      "cgroup CPU includes startup before barrier, excludes grading",
+      "peak sum is not whole-VM memory; host backend attribution incomplete",
+      "elapsed-time changes do not prove inode lock contribution"
+    ],
+    "failed_harm_bounds": []
+  },
+  {
+    "stage": "W1",
+    "workload": "go",
+    "rounds": 12,
+    "scale": 12,
+    "baseline_solo_s": 2.4764024933333335,
+    "candidate_solo_s": 2.571075073333333,
+    "baseline_loaded_s": 15.7150092675,
+    "candidate_loaded_s": 15.732524970833333,
+    "baseline_interference_pct": 534.5902699503015,
+    "candidate_interference_pct": 511.904534955353,
+    "change_pp": -22.68573499494852,
+    "absolute_loaded_change_pct": 0.1114584346415759,
+    "paired_intervals": {
+      "target_1": {
+        "geometric_percent": 3.7408685142782576,
+        "low_percent": 0.4362927355053568,
+        "high_percent": 7.1541721321641605,
+        "n": 12
+      },
+      "batch_1": {
+        "geometric_percent": 3.7408685142782576,
+        "low_percent": 0.4362927355053568,
+        "high_percent": 7.1541721321641605,
+        "n": 12
+      },
+      "worst_copy_1": {
+        "geometric_percent": 3.7408685142782576,
+        "low_percent": 0.4362927355053568,
+        "high_percent": 7.1541721321641605,
+        "n": 12
+      },
+      "peak_sum_1": {
+        "geometric_percent": 0.0371412530330442,
+        "low_percent": -0.05573951065437854,
+        "high_percent": 0.1301083331954793,
+        "n": 12
+      },
+      "cgroup_cpu_1": {
+        "geometric_percent": 2.970220752846403,
+        "low_percent": 0.4728685691716272,
+        "high_percent": 5.529647086668602,
+        "n": 12
+      },
+      "target_12": {
+        "geometric_percent": 0.10933343627139305,
+        "low_percent": -0.5999208068844926,
+        "high_percent": 0.8236484558926307,
+        "n": 12
+      },
+      "batch_12": {
+        "geometric_percent": 0.09178907885866466,
+        "low_percent": -0.8831338011620806,
+        "high_percent": 1.0763013926300815,
+        "n": 12
+      },
+      "worst_copy_12": {
+        "geometric_percent": 1.901101355130053,
+        "low_percent": 0.8059304328317523,
+        "high_percent": 3.0081703804853652,
+        "n": 12
+      },
+      "peak_sum_12": {
+        "geometric_percent": 0.0025648881911226953,
+        "low_percent": -0.029296509963667387,
+        "high_percent": 0.03443644080773948,
+        "n": 12
+      },
+      "cgroup_cpu_12": {
+        "geometric_percent": 0.0068194756291616275,
+        "low_percent": -0.810838931446328,
+        "high_percent": 0.8312181884342175,
+        "n": 12
+      }
+    },
+    "correctness": "PASS",
+    "status": "NET_BENEFIT_NOT_ESTABLISHED",
+    "limits": [
+      "single shared KVM guest, not bare-metal NUMA",
+      "cgroup CPU includes startup before barrier, excludes grading",
+      "peak sum is not whole-VM memory; host backend attribution incomplete",
+      "elapsed-time changes do not prove inode lock contribution"
+    ],
+    "failed_harm_bounds": []
+  },
+  {
+    "stage": "W2",
+    "workload": "go",
+    "rounds": 5,
+    "scale": 12,
+    "baseline_solo_s": 2.560554882,
+    "candidate_solo_s": 2.49641674,
+    "baseline_loaded_s": 15.919420524,
+    "candidate_loaded_s": 15.690630352,
+    "baseline_interference_pct": 521.7176064418369,
+    "candidate_interference_pct": 528.5260830289097,
+    "change_pp": 6.808476587072846,
+    "absolute_loaded_change_pct": -1.437176508121496,
+    "paired_intervals": {
+      "target_1": {
+        "geometric_percent": -2.4642124902235225,
+        "low_percent": -13.771793335331683,
+        "high_percent": 10.326193865403436,
+        "n": 5
+      },
+      "batch_1": {
+        "geometric_percent": -2.4642124902235225,
+        "low_percent": -13.771793335331683,
+        "high_percent": 10.326193865403436,
+        "n": 5
+      },
+      "worst_copy_1": {
+        "geometric_percent": -2.4642124902235225,
+        "low_percent": -13.771793335331683,
+        "high_percent": 10.326193865403436,
+        "n": 5
+      },
+      "peak_sum_1": {
+        "geometric_percent": 0.07491754691180225,
+        "low_percent": -0.12059857546152974,
+        "high_percent": 0.2708163963896492,
+        "n": 5
+      },
+      "cgroup_cpu_1": {
+        "geometric_percent": -1.3581738346841457,
+        "low_percent": -6.8019704575941216,
+        "high_percent": 4.403600773566408,
+        "n": 5
+      },
+      "target_12": {
+        "geometric_percent": -1.4413711337390995,
+        "low_percent": -3.1470599700697677,
+        "high_percent": 0.29435679490496586,
+        "n": 5
+      },
+      "batch_12": {
+        "geometric_percent": -1.2864875776633569,
+        "low_percent": -2.106144124159884,
+        "high_percent": -0.4599681198206188,
+        "n": 5
+      },
+      "worst_copy_12": {
+        "geometric_percent": 0.24311434303088364,
+        "low_percent": -0.8961170017572024,
+        "high_percent": 1.3954415223885466,
+        "n": 5
+      },
+      "peak_sum_12": {
+        "geometric_percent": 0.02818357608905156,
+        "low_percent": -0.021466740816267118,
+        "high_percent": 0.0778585498270766,
+        "n": 5
+      },
+      "cgroup_cpu_12": {
+        "geometric_percent": 0.5131967043667931,
+        "low_percent": -1.3676014913305456,
+        "high_percent": 2.4298594020576374,
+        "n": 5
+      }
+    },
+    "correctness": "PASS",
+    "status": "NET_BENEFIT_NOT_ESTABLISHED",
+    "limits": [
+      "single shared KVM guest, not bare-metal NUMA",
+      "cgroup CPU includes startup before barrier, excludes grading",
+      "peak sum is not whole-VM memory; host backend attribution incomplete",
+      "elapsed-time changes do not prove inode lock contribution"
+    ],
+    "failed_harm_bounds": []
+  },
+  {
+    "stage": "W3",
+    "workload": "core",
+    "rounds": 5,
+    "scale": 12,
+    "baseline_solo_s": 4.957166688,
+    "candidate_solo_s": 4.949084272,
+    "baseline_loaded_s": 5.451217324,
+    "candidate_loaded_s": 5.388619246,
+    "baseline_interference_pct": 9.966391430733346,
+    "candidate_interference_pct": 8.881137395188809,
+    "change_pp": -1.085254035544537,
+    "absolute_loaded_change_pct": -1.1483320931711893,
+    "paired_intervals": {
+      "target_1": {
+        "geometric_percent": -0.16402856102567773,
+        "low_percent": -1.2409277991274397,
+        "high_percent": 0.9246135169304861,
+        "n": 5
+      },
+      "batch_1": {
+        "geometric_percent": -0.16402856102567773,
+        "low_percent": -1.2409277991274397,
+        "high_percent": 0.9246135169304861,
+        "n": 5
+      },
+      "worst_copy_1": {
+        "geometric_percent": -0.16402856102567773,
+        "low_percent": -1.2409277991274397,
+        "high_percent": 0.9246135169304861,
+        "n": 5
+      },
+      "peak_sum_1": {
+        "geometric_percent": 0.048905802297611926,
+        "low_percent": -0.09740255518807829,
+        "high_percent": 0.1954284298425164,
+        "n": 5
+      },
+      "cgroup_cpu_1": {
+        "geometric_percent": 0.07044971245687014,
+        "low_percent": -0.47146184473200903,
+        "high_percent": 0.6153118619206679,
+        "n": 5
+      },
+      "target_12": {
+        "geometric_percent": -1.141040773901921,
+        "low_percent": -3.148822708870227,
+        "high_percent": 0.908363662838021,
+        "n": 5
+      },
+      "batch_12": {
+        "geometric_percent": -1.122964084980662,
+        "low_percent": -3.1179692520280815,
+        "high_percent": 0.9131224424162279,
+        "n": 5
+      },
+      "worst_copy_12": {
+        "geometric_percent": -0.3904642119419815,
+        "low_percent": -2.3291712781526934,
+        "high_percent": 1.5867250207227415,
+        "n": 5
+      },
+      "peak_sum_12": {
+        "geometric_percent": 0.07482233346039134,
+        "low_percent": -0.2270758645636088,
+        "high_percent": 0.377634031041109,
+        "n": 5
+      },
+      "cgroup_cpu_12": {
+        "geometric_percent": -0.11326960110278725,
+        "low_percent": -0.6982340519746153,
+        "high_percent": 0.4751407442656489,
+        "n": 5
+      }
+    },
+    "correctness": "PASS",
+    "status": "NET_BENEFIT_NOT_ESTABLISHED",
+    "limits": [
+      "single shared KVM guest, not bare-metal NUMA",
+      "cgroup CPU includes startup before barrier, excludes grading",
+      "peak sum is not whole-VM memory; host backend attribution incomplete",
+      "elapsed-time changes do not prove inode lock contribution"
+    ],
+    "failed_harm_bounds": []
+  },
+  {
+    "stage": "W3",
+    "workload": "go",
+    "rounds": 12,
+    "scale": 12,
+    "baseline_solo_s": 2.5005992291666668,
+    "candidate_solo_s": 2.6176131075,
+    "baseline_loaded_s": 15.7631506325,
+    "candidate_loaded_s": 16.0327360375,
+    "baseline_interference_pct": 530.3749296824794,
+    "candidate_interference_pct": 512.4944894095661,
+    "change_pp": -17.880440272913347,
+    "absolute_loaded_change_pct": 1.710225393927134,
+    "paired_intervals": {
+      "target_1": {
+        "geometric_percent": 4.661194563087236,
+        "low_percent": 1.3518653519853254,
+        "high_percent": 8.078579603151132,
+        "n": 12
+      },
+      "batch_1": {
+        "geometric_percent": 4.661194563087236,
+        "low_percent": 1.3518653519853254,
+        "high_percent": 8.078579603151132,
+        "n": 12
+      },
+      "worst_copy_1": {
+        "geometric_percent": 4.661194563087236,
+        "low_percent": 1.3518653519853254,
+        "high_percent": 8.078579603151132,
+        "n": 12
+      },
+      "peak_sum_1": {
+        "geometric_percent": 0.09101313391788354,
+        "low_percent": 0.008576872682440902,
+        "high_percent": 0.1735173466968736,
+        "n": 12
+      },
+      "cgroup_cpu_1": {
+        "geometric_percent": 3.614298387011483,
+        "low_percent": 1.056134219398394,
+        "high_percent": 6.237220661185939,
+        "n": 12
+      },
+      "target_12": {
+        "geometric_percent": 1.7085185666592433,
+        "low_percent": 0.6076571217862581,
+        "high_percent": 2.8214257738079653,
+        "n": 12
+      },
+      "batch_12": {
+        "geometric_percent": 1.4629623668712088,
+        "low_percent": 0.48453889864402994,
+        "high_percent": 2.4509127980886176,
+        "n": 12
+      },
+      "worst_copy_12": {
+        "geometric_percent": 3.6461932612714145,
+        "low_percent": 2.4580400148526174,
+        "high_percent": 4.848124910407763,
+        "n": 12
+      },
+      "peak_sum_12": {
+        "geometric_percent": 0.009516842854273212,
+        "low_percent": -0.020932969606475574,
+        "high_percent": 0.03997592916710358,
+        "n": 12
+      },
+      "cgroup_cpu_12": {
+        "geometric_percent": -0.24225567190245906,
+        "low_percent": -1.1088838564642771,
+        "high_percent": 0.6319671727215106,
+        "n": 12
+      }
+    },
+    "correctness": "PASS",
+    "status": "COST_TRANSFER_OR_REGRESSION",
+    "limits": [
+      "single shared KVM guest, not bare-metal NUMA",
+      "cgroup CPU includes startup before barrier, excludes grading",
+      "peak sum is not whole-VM memory; host backend attribution incomplete",
+      "elapsed-time changes do not prove inode lock contribution"
+    ],
+    "failed_harm_bounds": [
+      "worst_copy_12"
+    ]
+  }
+]
