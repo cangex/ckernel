@@ -600,6 +600,23 @@ out_unlock:
 	kfree_rcu(victim, rcu_member);
 }
 
+static void sidtab_sid2str_touch(struct sidtab *s, struct sidtab_entry *entry)
+{
+	struct sidtab_str_cache *cache;
+	unsigned long flags;
+
+	/* A copied hit does not need to wait for optional LRU maintenance. */
+	if (!spin_trylock_irqsave(&s->cache_lock, flags))
+		return;
+
+	/* The entry may have been evicted since the RCU-protected copy. */
+	cache = rcu_dereference_protected(entry->cache,
+					  lockdep_is_held(&s->cache_lock));
+	if (cache)
+		list_move(&cache->lru_member, &s->cache_lru_list);
+	spin_unlock_irqrestore(&s->cache_lock, flags);
+}
+
 int sidtab_sid2str_get(struct sidtab *s, struct sidtab_entry *entry,
 		       char **out, u32 *out_len)
 {
@@ -626,7 +643,7 @@ int sidtab_sid2str_get(struct sidtab *s, struct sidtab_entry *entry,
 	rcu_read_unlock();
 
 	if (!rc && out)
-		sidtab_sid2str_put(s, entry, *out, *out_len);
+		sidtab_sid2str_touch(s, entry);
 	return rc;
 }
 
