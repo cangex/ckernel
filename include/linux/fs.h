@@ -726,8 +726,6 @@ struct inode {
 	unsigned long		dirtied_time_when;
 
 	struct hlist_node	i_hash;
-	/* Protected by i_lock; assigned before publishing in the inode hash. */
-	unsigned int		i_hash_lock_idx;
 	struct list_head	i_io_list;	/* backing dev IO list */
 #ifdef CONFIG_CGROUP_WRITEBACK
 	struct bdi_writeback	*i_wb;		/* the associated cgroup wb */

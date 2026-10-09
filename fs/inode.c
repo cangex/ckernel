@@ -27,16 +27,15 @@
  * Inode locking rules:
  *
  * inode->i_lock protects:
- *   inode->i_state, inode->i_hash, inode->i_hash_lock_idx,
- *   __iget(), inode->i_io_list
+ *   inode->i_state, inode->i_hash, __iget(), inode->i_io_list
  * Inode LRU list locks protect:
  *   inode->i_sb->s_inode_lru, inode->i_lru
  * inode->i_sb->s_inode_list_lock protects:
  *   inode->i_sb->s_inodes, inode->i_sb_list
  * bdi->wb.list_lock protects:
  *   bdi->wb.b_{dirty,io,more_io,dirty_time}, inode->i_io_list
- * The corresponding inode hash stripe lock protects:
- *   an inode_hashtable bucket and its inode->i_hash links
+ * inode_hash_lock protects:
+ *   inode_hashtable, inode->i_hash
  *
  * Lock ordering:
  *
@@ -47,40 +46,18 @@
  * bdi->wb.list_lock
  *   inode->i_lock
  *
- * inode hash stripe lock
+ * inode_hash_lock
  *   inode->i_sb->s_inode_list_lock
  *   inode->i_lock
  *
- * Never acquire a hash stripe while holding inode->i_lock, or hold two
- * hash stripes at once.  RCU-only readers retain their existing rules.
+ * iunique_lock
+ *   inode_hash_lock
  */
 
 static unsigned int i_hash_mask __read_mostly;
 static unsigned int i_hash_shift __read_mostly;
 static struct hlist_head *inode_hashtable __read_mostly;
-#define INODE_HASH_LOCK_COUNT 256
-
-static struct inode_hash_stripe {
-	spinlock_t lock;
-} ____cacheline_aligned_in_smp inode_hash_locks[INODE_HASH_LOCK_COUNT];
-
-static unsigned int inode_hash_lock_index(const struct hlist_head *head)
-{
-	return (head - inode_hashtable) & (INODE_HASH_LOCK_COUNT - 1);
-}
-
-static spinlock_t *inode_hash_lock_for(const struct hlist_head *head)
-{
-	return &inode_hash_locks[inode_hash_lock_index(head)].lock;
-}
-
-static void inode_hash_add(struct inode *inode, struct hlist_head *head)
-{
-	lockdep_assert_held(inode_hash_lock_for(head));
-	lockdep_assert_held(&inode->i_lock);
-	inode->i_hash_lock_idx = inode_hash_lock_index(head);
-	hlist_add_head_rcu(&inode->i_hash, head);
-}
+static __cacheline_aligned_in_smp DEFINE_SPINLOCK(inode_hash_lock);
 
 /*
  * Empty aops. Can be used for the cases where the user does not
@@ -190,7 +167,6 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_op = &empty_iops;
 	inode->i_fop = &no_open_fops;
 	inode->i_ino = 0;
-	inode->i_hash_lock_idx = 0;
 	inode->__i_nlink = 1;
 	inode->i_opflags = 0;
 	if (sb->s_xattr)
@@ -585,13 +561,12 @@ static unsigned long hash(struct super_block *sb, unsigned long hashval)
 void __insert_inode_hash(struct inode *inode, unsigned long hashval)
 {
 	struct hlist_head *b = inode_hashtable + hash(inode->i_sb, hashval);
-	spinlock_t *hash_lock = inode_hash_lock_for(b);
 
-	spin_lock(hash_lock);
+	spin_lock(&inode_hash_lock);
 	spin_lock(&inode->i_lock);
-	inode_hash_add(inode, b);
+	hlist_add_head_rcu(&inode->i_hash, b);
 	spin_unlock(&inode->i_lock);
-	spin_unlock(hash_lock);
+	spin_unlock(&inode_hash_lock);
 }
 EXPORT_SYMBOL(__insert_inode_hash);
 
@@ -603,34 +578,11 @@ EXPORT_SYMBOL(__insert_inode_hash);
  */
 void __remove_inode_hash(struct inode *inode)
 {
-	spinlock_t *hash_lock;
-	unsigned int index;
-
-retry:
-	/* Custom insertion hashes cannot be recovered from i_ino. */
+	spin_lock(&inode_hash_lock);
 	spin_lock(&inode->i_lock);
-	if (inode_unhashed(inode)) {
-		spin_unlock(&inode->i_lock);
-		return;
-	}
-	index = inode->i_hash_lock_idx;
-	spin_unlock(&inode->i_lock);
-
-	hash_lock = &inode_hash_locks[index].lock;
-	spin_lock(hash_lock);
-	spin_lock(&inode->i_lock);
-	if (inode_unhashed(inode))
-		goto unlock;
-	/* Removal/reinsertion may have selected another stripe meanwhile. */
-	if (index != inode->i_hash_lock_idx) {
-		spin_unlock(&inode->i_lock);
-		spin_unlock(hash_lock);
-		goto retry;
-	}
 	hlist_del_init_rcu(&inode->i_hash);
-unlock:
 	spin_unlock(&inode->i_lock);
-	spin_unlock(hash_lock);
+	spin_unlock(&inode_hash_lock);
 }
 EXPORT_SYMBOL(__remove_inode_hash);
 
@@ -977,8 +929,7 @@ long prune_icache_sb(struct super_block *sb, struct shrink_control *sc)
 	return freed;
 }
 
-static void __wait_on_freeing_inode(struct inode *inode,
-				   spinlock_t *hash_lock);
+static void __wait_on_freeing_inode(struct inode *inode);
 /*
  * Called with the inode lock held.
  */
@@ -997,7 +948,7 @@ repeat:
 			continue;
 		spin_lock(&inode->i_lock);
 		if (inode->i_state & (I_FREEING|I_WILL_FREE)) {
-			__wait_on_freeing_inode(inode, inode_hash_lock_for(head));
+			__wait_on_freeing_inode(inode);
 			goto repeat;
 		}
 		if (unlikely(inode->i_state & I_CREATING)) {
@@ -1028,7 +979,7 @@ repeat:
 			continue;
 		spin_lock(&inode->i_lock);
 		if (inode->i_state & (I_FREEING|I_WILL_FREE)) {
-			__wait_on_freeing_inode(inode, inode_hash_lock_for(head));
+			__wait_on_freeing_inode(inode);
 			goto repeat;
 		}
 		if (unlikely(inode->i_state & I_CREATING)) {
@@ -1278,26 +1229,25 @@ EXPORT_SYMBOL(unlock_two_nondirectories);
  * return it locked, hashed, and with the I_NEW flag set. The file system gets
  * to fill it in before unlocking it via unlock_new_inode().
  *
- * Note both @test and @set are called with the hash stripe lock held, so
- * can't sleep. Callbacks for different stripes may run concurrently.
+ * Note both @test and @set are called with the inode_hash_lock held, so can't
+ * sleep.
  */
 struct inode *inode_insert5(struct inode *inode, unsigned long hashval,
 			    int (*test)(struct inode *, void *),
 			    int (*set)(struct inode *, void *), void *data)
 {
 	struct hlist_head *head = inode_hashtable + hash(inode->i_sb, hashval);
-	spinlock_t *hash_lock = inode_hash_lock_for(head);
 	struct inode *old;
 
 again:
-	spin_lock(hash_lock);
+	spin_lock(&inode_hash_lock);
 	old = find_inode(inode->i_sb, head, test, data);
 	if (unlikely(old)) {
 		/*
 		 * Uhhuh, somebody else created the same inode under us.
 		 * Use the old inode instead of the preallocated one.
 		 */
-		spin_unlock(hash_lock);
+		spin_unlock(&inode_hash_lock);
 		if (IS_ERR(old))
 			return NULL;
 		wait_on_inode(old);
@@ -1319,7 +1269,7 @@ again:
 	 */
 	spin_lock(&inode->i_lock);
 	inode->i_state |= I_NEW;
-	inode_hash_add(inode, head);
+	hlist_add_head_rcu(&inode->i_hash, head);
 	spin_unlock(&inode->i_lock);
 
 	/*
@@ -1329,7 +1279,7 @@ again:
 	if (list_empty(&inode->i_sb_list))
 		inode_sb_list_add(inode);
 unlock:
-	spin_unlock(hash_lock);
+	spin_unlock(&inode_hash_lock);
 
 	return inode;
 }
@@ -1352,8 +1302,8 @@ EXPORT_SYMBOL(inode_insert5);
  * hashed, and with the I_NEW flag set. The file system gets to fill it in
  * before unlocking it via unlock_new_inode().
  *
- * Note both @test and @set are called with the hash stripe lock held, so
- * can't sleep. Callbacks for different stripes may run concurrently.
+ * Note both @test and @set are called with the inode_hash_lock held, so can't
+ * sleep.
  */
 struct inode *iget5_locked(struct super_block *sb, unsigned long hashval,
 		int (*test)(struct inode *, void *),
@@ -1391,12 +1341,11 @@ EXPORT_SYMBOL(iget5_locked);
 struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 {
 	struct hlist_head *head = inode_hashtable + hash(sb, ino);
-	spinlock_t *hash_lock = inode_hash_lock_for(head);
 	struct inode *inode;
 again:
-	spin_lock(hash_lock);
+	spin_lock(&inode_hash_lock);
 	inode = find_inode_fast(sb, head, ino);
-	spin_unlock(hash_lock);
+	spin_unlock(&inode_hash_lock);
 	if (inode) {
 		if (IS_ERR(inode))
 			return NULL;
@@ -1412,17 +1361,17 @@ again:
 	if (inode) {
 		struct inode *old;
 
-		spin_lock(hash_lock);
+		spin_lock(&inode_hash_lock);
 		/* We released the lock, so.. */
 		old = find_inode_fast(sb, head, ino);
 		if (!old) {
 			inode->i_ino = ino;
 			spin_lock(&inode->i_lock);
 			inode->i_state = I_NEW;
-			inode_hash_add(inode, head);
+			hlist_add_head_rcu(&inode->i_hash, head);
 			spin_unlock(&inode->i_lock);
 			inode_sb_list_add(inode);
-			spin_unlock(hash_lock);
+			spin_unlock(&inode_hash_lock);
 
 			/* Return the locked inode with I_NEW set, the
 			 * caller is responsible for filling in the contents
@@ -1435,7 +1384,7 @@ again:
 		 * us. Use the old inode instead of the one we just
 		 * allocated.
 		 */
-		spin_unlock(hash_lock);
+		spin_unlock(&inode_hash_lock);
 		destroy_inode(inode);
 		if (IS_ERR(old))
 			return NULL;
@@ -1541,18 +1490,17 @@ EXPORT_SYMBOL(igrab);
  * Note: I_NEW is not waited upon so you have to be very careful what you do
  * with the returned inode.  You probably should be using ilookup5() instead.
  *
- * Note2: @test is called with the hash stripe lock held, so can't sleep.
+ * Note2: @test is called with the inode_hash_lock held, so can't sleep.
  */
 struct inode *ilookup5_nowait(struct super_block *sb, unsigned long hashval,
 		int (*test)(struct inode *, void *), void *data)
 {
 	struct hlist_head *head = inode_hashtable + hash(sb, hashval);
-	spinlock_t *hash_lock = inode_hash_lock_for(head);
 	struct inode *inode;
 
-	spin_lock(hash_lock);
+	spin_lock(&inode_hash_lock);
 	inode = find_inode(sb, head, test, data);
-	spin_unlock(hash_lock);
+	spin_unlock(&inode_hash_lock);
 
 	return IS_ERR(inode) ? NULL : inode;
 }
@@ -1573,7 +1521,7 @@ EXPORT_SYMBOL(ilookup5_nowait);
  * This is a generalized version of ilookup() for file systems where the
  * inode number is not sufficient for unique identification of an inode.
  *
- * Note: @test is called with the hash stripe lock held, so can't sleep.
+ * Note: @test is called with the inode_hash_lock held, so can't sleep.
  */
 struct inode *ilookup5(struct super_block *sb, unsigned long hashval,
 		int (*test)(struct inode *, void *), void *data)
@@ -1603,12 +1551,11 @@ EXPORT_SYMBOL(ilookup5);
 struct inode *ilookup(struct super_block *sb, unsigned long ino)
 {
 	struct hlist_head *head = inode_hashtable + hash(sb, ino);
-	spinlock_t *hash_lock = inode_hash_lock_for(head);
 	struct inode *inode;
 again:
-	spin_lock(hash_lock);
+	spin_lock(&inode_hash_lock);
 	inode = find_inode_fast(sb, head, ino);
-	spin_unlock(hash_lock);
+	spin_unlock(&inode_hash_lock);
 
 	if (inode) {
 		if (IS_ERR(inode))
@@ -1637,7 +1584,7 @@ EXPORT_SYMBOL(ilookup);
  * taking the i_lock spin_lock and checking i_state for an inode being
  * freed or being initialized, and incrementing the reference count
  * before returning 1.  It also must not sleep, since it is called with
- * the hash stripe spinlock held.
+ * the inode_hash_lock spinlock held.
  *
  * This is a even more generalized version of ilookup5() when the
  * function must never block --- find_inode() can block in
@@ -1653,11 +1600,10 @@ struct inode *find_inode_nowait(struct super_block *sb,
 				void *data)
 {
 	struct hlist_head *head = inode_hashtable + hash(sb, hashval);
-	spinlock_t *hash_lock = inode_hash_lock_for(head);
 	struct inode *inode, *ret_inode = NULL;
 	int mval;
 
-	spin_lock(hash_lock);
+	spin_lock(&inode_hash_lock);
 	hlist_for_each_entry(inode, head, i_hash) {
 		if (inode->i_sb != sb)
 			continue;
@@ -1669,7 +1615,7 @@ struct inode *find_inode_nowait(struct super_block *sb,
 		goto out;
 	}
 out:
-	spin_unlock(hash_lock);
+	spin_unlock(&inode_hash_lock);
 	return ret_inode;
 }
 EXPORT_SYMBOL(find_inode_nowait);
@@ -1757,11 +1703,10 @@ int insert_inode_locked(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 	ino_t ino = inode->i_ino;
 	struct hlist_head *head = inode_hashtable + hash(sb, ino);
-	spinlock_t *hash_lock = inode_hash_lock_for(head);
 
 	while (1) {
 		struct inode *old = NULL;
-		spin_lock(hash_lock);
+		spin_lock(&inode_hash_lock);
 		hlist_for_each_entry(old, head, i_hash) {
 			if (old->i_ino != ino)
 				continue;
@@ -1777,19 +1722,19 @@ int insert_inode_locked(struct inode *inode)
 		if (likely(!old)) {
 			spin_lock(&inode->i_lock);
 			inode->i_state |= I_NEW | I_CREATING;
-			inode_hash_add(inode, head);
+			hlist_add_head_rcu(&inode->i_hash, head);
 			spin_unlock(&inode->i_lock);
-			spin_unlock(hash_lock);
+			spin_unlock(&inode_hash_lock);
 			return 0;
 		}
 		if (unlikely(old->i_state & I_CREATING)) {
 			spin_unlock(&old->i_lock);
-			spin_unlock(hash_lock);
+			spin_unlock(&inode_hash_lock);
 			return -EBUSY;
 		}
 		__iget(old);
 		spin_unlock(&old->i_lock);
-		spin_unlock(hash_lock);
+		spin_unlock(&inode_hash_lock);
 		wait_on_inode(old);
 		if (unlikely(!inode_unhashed(old))) {
 			iput(old);
@@ -2362,18 +2307,17 @@ EXPORT_SYMBOL(inode_needs_sync);
  * wake_up_bit(&inode->i_state, __I_NEW) after removing from the hash list
  * will DTRT.
  */
-static void __wait_on_freeing_inode(struct inode *inode,
-				   spinlock_t *hash_lock)
+static void __wait_on_freeing_inode(struct inode *inode)
 {
 	wait_queue_head_t *wq;
 	DEFINE_WAIT_BIT(wait, &inode->i_state, __I_NEW);
 	wq = bit_waitqueue(&inode->i_state, __I_NEW);
 	prepare_to_wait(wq, &wait.wq_entry, TASK_UNINTERRUPTIBLE);
 	spin_unlock(&inode->i_lock);
-	spin_unlock(hash_lock);
+	spin_unlock(&inode_hash_lock);
 	schedule();
 	finish_wait(wq, &wait.wq_entry);
-	spin_lock(hash_lock);
+	spin_lock(&inode_hash_lock);
 }
 
 static __initdata unsigned long ihash_entries;
@@ -2391,11 +2335,6 @@ __setup("ihash_entries=", set_ihash_entries);
  */
 void __init inode_init_early(void)
 {
-	unsigned int i;
-
-	for (i = 0; i < INODE_HASH_LOCK_COUNT; i++)
-		spin_lock_init(&inode_hash_locks[i].lock);
-
 	/* If hashes are distributed across NUMA nodes, defer
 	 * hash allocation until vmalloc space is available.
 	 */
