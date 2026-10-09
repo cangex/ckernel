@@ -182,9 +182,9 @@ EXPORT_SYMBOL(end_buffer_write_sync);
  * we get exclusion from try_to_free_buffers with the blockdev mapping's
  * private_lock.
  *
- * Hack idea: for the blockdev mapping, private_lock contention
- * may be quite high.  This code could TryLock the page, and if that
- * succeeds, there is no need to take private_lock.
+ * A nonblocking folio lock also excludes buffer removal.  Prefer it to
+ * serializing unrelated folios through the blockdev mapping lock, but
+ * retain the existing mapping-lock path when the folio is already locked.
  */
 static struct buffer_head *
 __find_get_block_slow(struct block_device *bdev, sector_t block)
@@ -196,6 +196,7 @@ __find_get_block_slow(struct block_device *bdev, sector_t block)
 	struct buffer_head *bh;
 	struct buffer_head *head;
 	struct folio *folio;
+	bool folio_locked;
 	int all_mapped = 1;
 	static DEFINE_RATELIMIT_STATE(last_warned, HZ, 1);
 
@@ -204,7 +205,9 @@ __find_get_block_slow(struct block_device *bdev, sector_t block)
 	if (IS_ERR(folio))
 		goto out;
 
-	spin_lock(&bd_mapping->private_lock);
+	folio_locked = folio_trylock(folio);
+	if (!folio_locked)
+		spin_lock(&bd_mapping->private_lock);
 	head = folio_buffers(folio);
 	if (!head)
 		goto out_unlock;
@@ -236,7 +239,10 @@ __find_get_block_slow(struct block_device *bdev, sector_t block)
 		       1 << bd_inode->i_blkbits);
 	}
 out_unlock:
-	spin_unlock(&bd_mapping->private_lock);
+	if (folio_locked)
+		folio_unlock(folio);
+	else
+		spin_unlock(&bd_mapping->private_lock);
 	folio_put(folio);
 out:
 	return ret;
