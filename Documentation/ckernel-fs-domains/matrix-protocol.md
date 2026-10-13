@@ -90,3 +90,16 @@ its entire duration as production reclaim cost or subtract it from business.
 Failures, rejected preparations and cleared data remain indexed. Current
 evidence: systemd STDOUT denial before Python; inode rounding refusal before
 business. Neither is a successful performance sample.
+
+## Formal-r1 completion caveat
+
+The frozen 64-state matrix subsequently completed 800 official copy checks.
+Four ending snapshots preceded the replay end by 10.031, 0.890, 0.586 and
+4.324 ms. All sampler CPU measurements were below 50 ms, but the ending-offset
+gate therefore FAILS. The fixed guard is not a completion synchronization
+protocol; passing a four-state pilot did not guarantee future coverage.
+Retain the unmodified replay-duration results separately from cost validity.
+Do not approve full-system net benefit or reuse this guard as evidence of
+correct completion synchronization. No failed state was discarded and no
+extra formal rounds were added. Whole-host/background and total memory remain
+incompletely attributed regardless of this timing defect.
