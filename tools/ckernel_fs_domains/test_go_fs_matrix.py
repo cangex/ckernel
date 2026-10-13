@@ -60,9 +60,11 @@ class MatrixTest(unittest.TestCase):
             p = Path(directory)
             (p / 'memory.current').write_text('42')
             action = p / 'actions.json'
-            action.write_text(json.dumps([dict(exit_code=0, end_ns=123)] * 6))
+            final = dict(kind='execute_bash', id=13, source_command='go version', executed_command='go version',
+                         exit_code=0, expected_exit_code=0, end_ns=123, output='go version go1.17 linux/arm64')
+            action.write_text(json.dumps([dict(exit_code=0, end_ns=122)] * 5 + [final], indent=2))
             w = Window({0: p}, [], {0: action})
-            with patch('go_fs_matrix.snapshot', return_value={'test': True}), patch('go_fs_matrix.ActionWatch'):
+            with patch('go_fs_matrix.snapshot', return_value={'cgroups': {'0': {'memory.current': '42'}}}), patch('go_fs_matrix.ActionWatch'):
                 w.start(time.monotonic_ns())
                 w.thread.join(1)
                 self.assertFalse(w.thread.is_alive())
@@ -77,7 +79,7 @@ class MatrixTest(unittest.TestCase):
             action = p / 'actions.json'
             action.write_text(json.dumps([dict(exit_code=0, end_ns=123)] * 5))
             w = Window({0: p}, [], {0: action})
-            with patch('go_fs_matrix.snapshot', return_value={'test': True}), patch('go_fs_matrix.ActionWatch') as watch:
+            with patch('go_fs_matrix.snapshot', return_value={'cgroups': {'0': {'memory.current': '42'}}}), patch('go_fs_matrix.ActionWatch') as watch:
                 watch.return_value.poll.return_value = set()
                 w.start(time.monotonic_ns())
                 self.assertTrue(w.ready.wait(1))

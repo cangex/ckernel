@@ -14,7 +14,7 @@ def digest(p):
 def main():
     os.umask(0o077)
     pilot_path = matrix.ROOT / 'matrix-pilot-r2/summary.json'
-    instrument_path = matrix.ROOT / 'instrument-r3/summary.json'
+    instrument_path = matrix.ROOT / 'instrument-r6/summary.json'
     pilot = json.loads(pilot_path.read_text())
     instrument = json.loads(instrument_path.read_text())
     assert pilot['status'] == 'PASS' and pilot['states'] == 24 and pilot['copies'] == 300

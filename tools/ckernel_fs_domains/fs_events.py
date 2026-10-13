@@ -1,5 +1,6 @@
 """Bounded inotify observation of existing replay artifacts, not business hooks."""
 import ctypes
+import json
 import os
 import select
 import struct
@@ -9,6 +10,27 @@ DELETE_SELF = 0x400
 MOVE_SELF = 0x800
 OVERFLOW = 0x4000
 IGNORED = 0x8000
+
+def final_go_action(path):
+    # The frozen replay uses indent=2 and flat records. Read only its small
+    # final record, not the repeated 150KB wget progress text of earlier actions.
+    with path.open('rb') as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - 8192))
+        tail = f.read()
+    marker = tail.rfind(b'\n  {\n')
+    if marker < 0 or not tail.rstrip().endswith(b']'):
+        return None
+    try:
+        record = json.loads(tail[marker + 3:tail.rfind(b']')])
+    except json.JSONDecodeError:
+        return None
+    if (record.get('kind') == 'execute_bash' and record.get('id') == 13 and
+        record.get('source_command') == record.get('executed_command') == 'go version' and
+        record.get('exit_code') == record.get('expected_exit_code') == 0 and
+        'go version go1.17 linux/arm64' in record.get('output', '')):
+        return record
+    return None
 
 def decode_events(data, watches):
     result = set()

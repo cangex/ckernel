@@ -12,7 +12,7 @@ def main():
     os.sched_setaffinity(0, {112, 113, 114, 115})
     lock = (matrix.ROOT / 'matrix.lock').open('a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    root = matrix.ROOT / 'instrument-r3'
+    root = matrix.ROOT / 'instrument-r6'
     root.mkdir()
     m, inputs = matrix.admission.load()
     plan = [dict(name=f'instrument-d{d}-n{n}', domains=d, n=n, block=0, rotation=0)

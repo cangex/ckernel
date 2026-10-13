@@ -52,9 +52,15 @@ Official scoring is performed only after every copy has finished measured
 business. The formal collector watches the existing sixth action in each
 container's `/replay-results/actions.json`, through its observed PID root, and
 stops without waiting for the later `done.json`. The replay and all commands
-remain byte-identical. Snapshots record their own monotonic intervals; cgroup CPU and
-host/disk/kernel-thread counters are not treated as exactly instantaneous.
-Memory/space sampling is 200 ms and therefore does not establish exact peaks.
+remain byte-identical. An inotify close-write watch reads at most 8192 bytes
+from each changed action file, checks the final command and output, then uses
+a fixed 5-ms guard because the frozen replay publishes its end timestamp just
+after closing that file. The signed offset is validated afterwards, not clamped.
+Snapshots record their own monotonic intervals; cgroup CPU and host/disk
+counters are not treated as exactly instantaneous. Memory/current-space
+observations are endpoints only. The sum of kernel per-copy memory peaks is
+reported separately; it is not an exact simultaneous aggregate peak, and
+neither measure includes all host filesystem/kernel memory.
 The pilot's full kernel-task scan caused up to 0.733 seconds of end-snapshot
 delay and 184--266 ms of sampler CPU. It is removed from the proposed formal
 OFF protocol rather than filtering its samples. Formal host CPU totals and
@@ -65,14 +71,21 @@ failed. Source inspection located `end = monotonic_ns()` before shell/server
 shutdown and archive hashing, while the entry copies evidence and writes
 `done.json` only afterwards. Thus the old cost window included 0.256--0.462 s
 of post-business work. No replay-duration sample is rewritten as a result.
-The second timing admission uses the preexisting action file and must pass the
-original 50-ms sampler-CPU / 150-ms ending-offset limits before formal execution.
-Pilot task CPU remains historical, with the timing limitation.
+The action-file trials exposed full-JSON parsing, repeated directory scans,
+and memory polling overhead. Those were removed rather than relaxing the
+original 50-ms sampler-CPU / nonnegative 150-ms ending-offset limits. The fifth
+trial was rejected for a -0.316-ms offset; the sixth uses the fixed guard.
+Trial failures and official correctness results are retained. This quality
+gate is not a proof of zero observer effect. Pilot task CPU remains historical,
+with its timing limitation; pilot durations themselves are unchanged.
 
 The same bounded summary collection is present in every performance arm. No
 perf/BPF detailed collector is loaded in these OFF runs. Its thread CPU and
 timing boundaries are recorded. Creation/mount, business, official scoring,
 drain/unmount/fsck/deletion are separate phases; setup and teardown are not free.
+Teardown includes experiment-only filesystem checking and verification, and
+follows official scoring. Report command categories separately; do not label
+its entire duration as production reclaim cost or subtract it from business.
 
 Failures, rejected preparations and cleared data remain indexed. Current
 evidence: systemd STDOUT denial before Python; inode rounding refusal before

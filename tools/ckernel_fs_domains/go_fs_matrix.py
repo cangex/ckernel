@@ -14,7 +14,7 @@ import time
 import go_fs_admission as admission
 from fs_domain_lifecycle import Manager, run, save
 from fs_domain_plan import COUNTS, GIB, layout, placement, required_free
-from fs_events import ActionWatch
+from fs_events import ActionWatch, final_go_action
 
 ROOT = Path('/root/ckernel-fs-domains-20261013')
 LABEL = 'fs-domain-matrix-20261013'
@@ -70,8 +70,9 @@ def snapshot(cgroups, volumes):
                                    ('cpu.stat', 'memory.current', 'memory.peak', 'memory.events', 'io.stat')
                                    if (cg / f).exists()} for s, cg in cgroups.items()},
                   journals={})
-    for v in volumes:
-        for p in Path('/proc/fs/jbd2').glob(Path(v['loop']).name + '-*/info'):
+    journals = {Path(v['loop']).name for v in volumes}
+    for p in Path('/proc/fs/jbd2').glob('*/info'):
+        if p.parent.name.rsplit('-', 1)[0] in journals:
             result['journals'][str(p)] = p.read_text()
     result['end_ns'] = time.monotonic_ns()
     return result
@@ -101,32 +102,36 @@ class Window:
                 raise RuntimeError('cancelled before business boundary')
             self.before = snapshot(self.cgroups, self.volumes)
             self.ready.set()
-            complete, next_sample, changed = {}, 0, set(self.actions)
+            def endpoint(snap):
+                return dict(ns=time.monotonic_ns(),
+                    memory_bytes=sum(int(v['memory.current']) for v in snap['cgroups'].values()),
+                    used_bytes=sum((s.f_blocks - s.f_bfree) * s.f_frsize
+                                   for s in (os.statvfs(v['mount']) for v in self.volumes)))
+            self.samples.append(endpoint(self.before))
+            complete, changed = {}, set(self.actions)
             while True:
                 for slot in changed:
                     path = self.actions[slot]
                     if slot in complete:
                         continue
                     try:
-                        records = json.loads(path.read_text())
-                        if len(records) == 6 and records[-1].get('exit_code') == 0:
-                            complete[slot] = records[-1]['end_ns']
+                        record = final_go_action(path)
+                        if record is not None:
+                            complete[slot] = record['end_ns']
                     except (FileNotFoundError, json.JSONDecodeError):
                         pass
-                now = time.monotonic_ns()
-                if now >= next_sample:
-                    self.samples.append(dict(ns=now,
-                        memory_bytes=sum(int((p / 'memory.current').read_text()) for p in self.cgroups.values()),
-                        used_bytes=sum((os.statvfs(v['mount']).f_blocks - os.statvfs(v['mount']).f_bfree) * 4096
-                                       for v in self.volumes)))
-                    next_sample = now + 200_000_000
                 if len(complete) == len(self.actions):
                     self.completed_actions = complete
+                    # The frozen logger closes actions.json immediately before
+                    # publishing its end timestamp. Keep a fixed 5ms guard and
+                    # validate the observed offset against that timestamp later.
+                    time.sleep(.005)
                     break
                 if self.stop.is_set():
                     raise RuntimeError('orchestrator stopped before all final actions observed')
-                changed = self.watch.poll(max(0., min(.2, (next_sample - time.monotonic_ns()) / 1e9)))
+                changed = self.watch.poll(.2)
             self.after = snapshot(self.cgroups, self.volumes)
+            self.samples.append(endpoint(self.after))
         except BaseException as e:
             self.error = repr(e)
         finally:
@@ -154,7 +159,7 @@ class Window:
             watch_setup_cpu_ns=self.watch_setup_cpu_ns,
             limitations=['Host-wide counters include unrelated services.',
                         'OFF does not scan kernel tasks; host CPU totals do not identify background ownership.',
-                        '200ms memory/space samples are lower bounds on the instantaneous peak.',
+                        'Memory/current-space samples are endpoints only. Per-copy kernel memory.peak is retained separately; their sum is not an exact simultaneous peak.',
                         'Snapshots span their recorded intervals, not exactly replay start/end.'])
 
 class BarrierClock:
@@ -265,6 +270,7 @@ def execute(m, root, spec):
             stable_kernel_task_cpu_s=costs['stable_kernel_task_cpu_s'],
             sampler_cpu_ns=costs['sampler_cpu_ns'],
             sampled_peak_memory_bytes=max(v['memory_bytes'] for v in window.samples),
+            memory_observation='endpoint_current_and_per_copy_kernel_peak',
             summed_copy_peak_memory_bytes=sum(int(v['memory.peak']) for v in window.after['cgroups'].values()),
             sampled_peak_used_bytes=max(v['used_bytes'] for v in window.samples),
             batch_s=(max(v['end_ns'] for v in row['instances']) - min(v['start_ns'] for v in row['instances'])) / 1e9,
