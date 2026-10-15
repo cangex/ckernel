@@ -9,7 +9,10 @@ class RecoveryTests(unittest.TestCase):
     def fixture(self):
         obj=dict(id='branch',active=True,mounted=True,state='ATTACHED',dev='253:3',name='owned')
         store=Mock();store.data=dict(branches={'branch':obj},pending=None,boot='same');store.boot.return_value='same'
-        backend=Mock(spec=Backend);backend.verify_mapping.return_value=dict(open=0)
+        backend=Mock(spec=Backend)
+        # Python 3.9 rejects dynamic assert_* attributes even with a spec.
+        backend.assert_no_references=Mock()
+        backend.verify_mapping.return_value=dict(open=0)
         backend.fs_header.return_value={'Filesystem state':'clean'}
         backend.operation.side_effect=lambda action,item,effect,observe:(effect(),observe())
         return obj,store,backend
