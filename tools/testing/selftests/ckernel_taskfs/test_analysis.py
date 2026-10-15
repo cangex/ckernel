@@ -13,8 +13,8 @@ class AnalysisTests(unittest.TestCase):
             cost_window=dict(before_end_ns=3,completion_ack_ns=7,end_snapshot_begin_ns=8,end_snapshot_end_ns=9))
         rows=[]
         for arm in 'SGFB':
-            for _ in range(3):
-                item=copy.deepcopy(row);item['condition']=arm;rows.append(item)
+            for index in range(3):
+                item=copy.deepcopy(row);item['condition']=arm;item['business']['name']=f'{arm}-{index}';rows.append(item)
         fields={'Block count':'196608','Block size':'4096','Inode count':'32832','Total journal blocks':'4096'}
         return dict(summary=dict(status='PASS'),states=rows,
             objects=[dict(id='a',thin_id=1,state='DELETED',spec=dict(bytes=768*1024**2,inodes=32832,journal_mib=16))],

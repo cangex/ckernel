@@ -21,7 +21,7 @@ def analyze(bundle):
         if not window['before_end_ns']<=start<=end<=window['completion_ack_ns']<=window['end_snapshot_begin_ns']<=window['end_snapshot_end_ns']<=result['grading_begin_ns']:
             raise ValueError('cost/grading boundary mismatch')
         for instance in instances:
-            rows.append(dict(condition=result['condition'],n=result['n'],slot=instance['slot'],
+            rows.append(dict(state=result['business']['name'],condition=result['condition'],n=result['n'],slot=instance['slot'],
                 business_s=instance['elapsed_s'],prepare_s=(result['setup_end_ns']-result['request_ns'])/1e9,
                 request_to_business_end_s=(instance['end_ns']-result['request_ns'])/1e9,
                 observed_turnover_s=(result['turnover_end_ns']-result['request_ns'])/1e9,
@@ -55,7 +55,7 @@ def main():
     with out.with_suffix('.json').open('x') as stream:json.dump(result,stream,indent=2)
     with out.with_suffix('.csv').open('x',newline='') as stream:
         if result['rows']:
-            w=csv.DictWriter(stream,fieldnames=list(result['rows'][0]));w.writeheader();w.writerows(result['rows'])
+            w=csv.DictWriter(stream,fieldnames=list(result['rows'][0]),lineterminator='\n');w.writeheader();w.writerows(result['rows'])
     print(json.dumps({k:v for k,v in result.items() if k!='rows'}))
 
 

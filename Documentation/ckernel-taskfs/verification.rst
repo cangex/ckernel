@@ -11,7 +11,9 @@ regular-file pools. The installed kernel is the observation-modified
 Executed evidence
 -----------------
 
-* 38 local unit/model tests pass. They are not power-loss/concurrency proofs.
+* 38 local and Linux unit/model tests pass. They are not power-loss/concurrency
+  proofs. A Python 3.9 Mock assert-prefix fixture issue was corrected explicitly;
+  the first Linux failure log is retained.
 * Native normal integration r2 passes: two snapshots and one freshly formatted
   branch have different ext4 devices/journal interfaces; same-path writes,
   hardlinks, rename/unlink, xattrs, fsync sentinel, FD refusal, immutable
