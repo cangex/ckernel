@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Taskfs control manifest v1",
+  "type": "object",
+  "required": ["format", "owner", "stamp", "root_identity", "boot", "state", "next_id", "pool", "templates", "branches", "operations", "pending"],
+  "properties": {
+    "format": {"const": "ckernel-taskfs-v1"},
+    "owner": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "next_id": {"type": "integer", "minimum": 1, "maximum": 16777216},
+    "templates": {"type": "object"},
+    "branches": {"type": "object"},
+    "operations": {"type": "array"},
+    "pending": {"type": ["string", "null"]}
+  }
+}
