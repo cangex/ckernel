@@ -74,6 +74,19 @@ commit, Image/module hashes, and separate out-of-tree build directory. The
 historical ARM64 configuration needs MPAM, resctrl and the files controller;
 this branch does not claim generic distribution config compatibility.
 
+The full ARM64 configuration used for this delivery is retained in
+arm64-validation.config. For a matching Linux build, use a fresh output directory::
+
+  mkdir /path/to/new-output
+  cp Documentation/ckernel-delivery/arm64-validation.config /path/to/new-output/.config
+  make O=/path/to/new-output olddefconfig
+  make O=/path/to/new-output -j4 Image modules
+
+The tested release is 6.6.0-ckernel-delivery-20261016+; upstream setlocalversion
+supplies the trailing plus for this untagged SCM state. Keep Image and modules
+from the same build. Recorded hashes identify tested artifacts, not a promise
+of bit-identical output across compiler, timestamps or build-host changes.
+
 Run unprivileged source/unit checks::
 
   python3 -m unittest discover -s tools/ckernel_fs_domains -p 'test_*.py' -v
