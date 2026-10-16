@@ -6,12 +6,30 @@ This is a source-delivery candidate. No host kernel deployment is authorized
 by this record. The source is based on old CKernel, not the observer kernel
 used in recent workload measurements.
 
-- Local filesystem tests: 21 passed (logic/mocks, not ext4 fault injection).
+- Filesystem tests: 24 passed locally and on ARM64 Linux (logic/mocks).
 - Source contract checks: 5 passed (not kernel runtime correctness).
 - Full ARM64 build and isolated guest checks: pending at this commit.
 - Restricted AppArmor policy reload/credential/SCM_RIGHTS regression: pending.
 - Maple hotplug, allocation failure and exhaustive RCU/GFP tests: pending.
 - New delivery kernel + filesystem groups combined workload performance: NOT_RUN.
+
+## Owned filesystem integration
+
+The delivered lifecycle tools passed a bounded native ARM64/container test with
+SELinux Enforcing: two separate 128 MiB filesystems, each with four workers and
+128 files, hard links/rename/read checks, explicit fsync, bounded ENOSPC,
+stopped-container reference refusal, clean unmount/fsck/remount persistence,
+bad entrypoint, exit 17 preservation, and injected pre-mount failure recovery.
+The final check found no test containers or loop devices. The host boot and
+security state were unchanged. This is not crash/power-loss qualification or
+new workload performance evidence.
+
+The first run failed closed during cleanup: a process mountinfo read returned
+EINVAL. Its failure and original manifest were retained. The narrow repair
+accepts this error only when the process exposes no mount namespace; a live
+namespace or permission error still refuses cleanup. Recovery of the original
+owned volumes and one fresh integration run then passed. No forced/lazy unmount
+or foreign-resource cleanup was used.
 
 ## Historical findings retained
 
