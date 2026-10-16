@@ -21,6 +21,25 @@
 
 #include "ckernel_driver.h"
 
+/* Keep historical parameters recognizable, but fail closed on unsafe modes. */
+static int ckernel_set_quarantined(const char *val,
+				  const struct kernel_param *kp)
+{
+	int requested, ret;
+
+	ret = kstrtoint(val, 0, &requested);
+	if (ret)
+		return ret;
+	if (requested)
+		return -EOPNOTSUPP;
+	return param_set_int(val, kp);
+}
+
+static const struct kernel_param_ops ckernel_quarantined_ops = {
+	.set = ckernel_set_quarantined,
+	.get = param_get_int,
+};
+
 extern int ckernel_device_init(void);
 extern void ckernel_device_exit(void);
 
@@ -43,17 +62,18 @@ static bool ckernel_monitor_resctrl_ready;
  * Enable/disable AppArmor fast-path via module parameter.
  */
 static int ckernel_apparmor = 0;
-module_param(ckernel_apparmor, int, 0644);
+module_param_cb(ckernel_apparmor, &ckernel_quarantined_ops,
+		&ckernel_apparmor, 0444);
 
 static int ckernel_task_security_cache;
 module_param(ckernel_task_security_cache, int, 0644);
 MODULE_PARM_DESC(ckernel_task_security_cache,
-		 "Cache audited AppArmor signal permissions per CKernel instance");
+		 "Experimental self-signal eligibility cache; requires feature bit 8");
 
 static int ckernel_mm_meta_domain;
 module_param(ckernel_mm_meta_domain, int, 0444);
 MODULE_PARM_DESC(ckernel_mm_meta_domain,
-		 "Use a bounded per-CPU Maple metadata stock per CKernel cookie");
+		 "Experimental bounded Maple stock; requires feature bit 9");
 
 /*
  * Enable per-container file descriptor accounting.
@@ -63,28 +83,31 @@ MODULE_PARM_DESC(ckernel_mm_meta_domain,
  *   - fallback to cgroup if not handled
  */
 static int ckernel_acct = 0;
-module_param(ckernel_acct, int, 0644);
+module_param_cb(ckernel_acct, &ckernel_quarantined_ops, &ckernel_acct, 0444);
 
 /*
  * Keep immutable container-image read objects private to each CKernel
  * instance. Unsafe or unsupported files always use the native VFS path.
  */
-static int ckernel_vfs_cache = 1;
-module_param(ckernel_vfs_cache, int, 0644);
+static int ckernel_vfs_cache;
+module_param_cb(ckernel_vfs_cache, &ckernel_quarantined_ops,
+		&ckernel_vfs_cache, 0444);
 MODULE_PARM_DESC(ckernel_vfs_cache,
 		 "Enable the instance-local read-only VFS object cache");
 
-static int ckernel_vfs_ref_cache = 1;
-module_param(ckernel_vfs_ref_cache, int, 0644);
+static int ckernel_vfs_ref_cache;
+module_param_cb(ckernel_vfs_ref_cache, &ckernel_quarantined_ops,
+		&ckernel_vfs_ref_cache, 0444);
 MODULE_PARM_DESC(ckernel_vfs_ref_cache,
 		 "Enable the instance-local stable VFS path reference cache");
 
 static int ckernel_immutable_path_lease;
-module_param(ckernel_immutable_path_lease, int, 0444);
+module_param_cb(ckernel_immutable_path_lease, &ckernel_quarantined_ops,
+		&ckernel_immutable_path_lease, 0444);
 MODULE_PARM_DESC(ckernel_immutable_path_lease,
 		 "Lease fully checked paths on instance-private read-only tmpfs mounts");
 
-static int ckernel_memcg_stock = 1;
+static int ckernel_memcg_stock;
 module_param(ckernel_memcg_stock, int, 0644);
 MODULE_PARM_DESC(ckernel_memcg_stock,
 		 "Use a bounded larger per-CPU memcg charge stock for CKernel tasks");
@@ -104,13 +127,15 @@ module_param(ckernel_shmem_hot_cache, int, 0644);
 MODULE_PARM_DESC(ckernel_shmem_hot_cache,
 		 "Cache hot tmpfs folio lookups per CKernel instance and CPU");
 
-static int ckernel_socket_fast = 1;
-module_param(ckernel_socket_fast, int, 0644);
+static int ckernel_socket_fast;
+module_param_cb(ckernel_socket_fast, &ckernel_quarantined_ops,
+		&ckernel_socket_fast, 0444);
 MODULE_PARM_DESC(ckernel_socket_fast,
 		 "Enable ckernel common LSM socket fast paths for safe sockets");
 
 static int ckernel_file_socket_stock;
-module_param(ckernel_file_socket_stock, int, 0444);
+module_param_cb(ckernel_file_socket_stock, &ckernel_quarantined_ops,
+		&ckernel_file_socket_stock, 0444);
 MODULE_PARM_DESC(ckernel_file_socket_stock,
 		 "Use per-CPU file lease refs and lifetime-bound socket capabilities");
 
@@ -157,6 +182,10 @@ static u64 ckernel_available_feature_mask(void)
 		mask |= CKERNEL_FEATURE_SHMEM_HOT;
 	if (ckernel_monitor)
 		mask |= CKERNEL_FEATURE_MONITOR;
+	if (ckernel_task_security_cache && IS_ENABLED(CONFIG_SECURITY_APPARMOR))
+		mask |= CKERNEL_FEATURE_TASK_SECURITY;
+	if (ckernel_mm_meta_domain)
+		mask |= CKERNEL_FEATURE_MAPLE;
 	return mask;
 }
 
@@ -330,7 +359,7 @@ static bool ckernel_alloc(int online_flag, u64 feature_mask,
 		ck->fast_check = false;
 	}
 	ck->task_security_cache_enabled = ckernel_task_security_cache != 0 &&
-		ck->fast_check;
+		(feature_mask & CKERNEL_FEATURE_TASK_SECURITY);
 	ck->task_security_cache_domain = NULL;
 	ck->ck_task_security_cache_destroy = NULL;
 	ck->task_security_cache_hits = NULL;
@@ -342,7 +371,8 @@ static bool ckernel_alloc(int online_flag, u64 feature_mask,
 	atomic_long_set(&ck->task_security_cache_misses, 0);
 	atomic_long_set(&ck->task_security_cache_learns, 0);
 	atomic_long_set(&ck->task_security_cache_fallbacks, 0);
-	ck->mm_meta_domain_enabled = ckernel_mm_meta_domain != 0;
+	ck->mm_meta_domain_enabled = ckernel_mm_meta_domain != 0 &&
+		(feature_mask & CKERNEL_FEATURE_MAPLE);
 	ck->mm_meta_stats = NULL;
 	if (ck->mm_meta_domain_enabled) {
 		ck->mm_meta_stats = alloc_percpu(struct ck_mm_meta_stats);
@@ -459,8 +489,7 @@ static long ckernel_ioctl(struct file *f,
 			if (init_args.feature_mask & ~CKERNEL_FEATURE_STANDARD_ALL)
 				return -EINVAL;
 			if (init_args.feature_mask & ~available_features)
-				pr_info("ckernel: cap requested features %#llx to available %#llx\n",
-					init_args.feature_mask, available_features);
+				return -EOPNOTSUPP;
 			if (init_args.home_nid < -1 || init_args.home_l3c < -1)
 				return -EINVAL;
 			r = ckernel_alloc(init_args.online,
@@ -488,10 +517,14 @@ static struct miscdevice ckernel_dev = {
 
 static int __init ckernel_init(void)
 {
+	int ret;
+
+	ret = misc_register(&ckernel_dev);
+	if (ret)
+		return ret;
 	if (ckernel_mm_meta_domain)
 		ck_maple_meta_domain_enable();
 
-	misc_register(&ckernel_dev);
 	ckernel_proc_init();
 	ckernel_debugfs_init();
 

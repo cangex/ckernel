@@ -1055,7 +1055,8 @@ static bool ck_task_security_self_signal_fast(struct ckernel *ck,
 		atomic_long_inc(&ck->task_security_cache_learns);
 	}
 
-	if (READ_ONCE(domain->self_signal_label) != label) {
+	if (READ_ONCE(domain->self_signal_label) != label ||
+	    label_is_stale(label)) {
 		atomic_long_inc(&ck->task_security_cache_fallbacks);
 		return false;
 	}
