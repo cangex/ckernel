@@ -20,20 +20,16 @@ Sources
 Components and activation
 -------------------------
 
-========================= ====================== ===============================
-Component                 Delivery status        Activation
-========================= ====================== ===============================
-Core task context         Retained               /dev/ckernel initialization
-AppArmor self-signal cache Experimental, off      parameter + feature bit 8
-Maple per-CPU stock        Experimental, off      parameter + feature bit 9
-AppArmor path allow       Quarantined            nonzero parameter rejected
-FD accounting replacement Quarantined            nonzero parameter rejected
-VFS shadow/reference cache Quarantined           nonzero parameters rejected
-Socket LSM/token shortcuts Quarantined           nonzero parameters rejected
-memcg/shmem/FaaScale       Legacy experimental    off by default; not certified
-resctrl monitor           Legacy experimental    off by default; not certified
-Independent ext4 groups   User-space tool        fs_groupctl.py, explicit root
-========================= ====================== ===============================
+* Core task context: retained; initialized through /dev/ckernel.
+* AppArmor self-signal cache: experimental, off; parameter plus feature bit 8.
+* Maple per-CPU stock: experimental, off; parameter plus feature bit 9.
+* AppArmor path allow: quarantined; nonzero parameter rejected.
+* FD accounting replacement: quarantined; nonzero parameter rejected.
+* VFS shadow/reference cache: quarantined; nonzero parameters rejected.
+* Socket LSM/token shortcuts: quarantined; nonzero parameters rejected.
+* memcg/shmem/FaaScale: legacy experimental; off by default, not certified.
+* resctrl monitor: legacy experimental; off by default, not certified.
+* Independent ext4 groups: user-space fs_groupctl.py with an explicit root.
 
 The quarantine prevents normal driver configuration from reaching known unsafe
 paths; it does NOT repair their algorithms. Historical implementations remain
@@ -63,6 +59,8 @@ request for unavailable features now fails with EOPNOTSUPP instead of silently
 discarding bits. Old callers requesting all old features must handle failure.
 The legacy initialization ioctl still requests available features; explicit
 extended masks are recommended.
+Module parameters configure subsequent instance creation; changing a parameter
+is not a live revocation or reconfiguration protocol for existing instances.
 
 All known unsafe parameters accept zero only. This is enforced on module load,
 not merely a default. Their sysfs entries are read-only. No module or kernel is
@@ -89,6 +87,10 @@ module with both experimental parameters enabled::
 
 0x100 selects the self-signal cache; 0x200 selects Maple; 0 selects neither.
 This launcher is not a container runtime or a host-deployment authorization.
+It is a generated helper, not an automatically executed kselftest. The Python
+checks above are explicit and unprivileged. run_guest.py boots guest_init.c as
+PID 1 with two vCPUs, 2 GiB RAM, no network and no host disk attachment. Supply
+an approved build directory, new output directory and explicit reserved CPUs.
 
 See filesystem-groups.rst for storage lifecycle and VALIDATION.md for actual
 checks, unresolved risks and performance boundaries.
