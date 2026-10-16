@@ -1,16 +1,16 @@
 """Small lifecycle validation, not Go correctness/performance admission."""
+# SPDX-License-Identifier: GPL-2.0
+import argparse
 import errno
-import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import time
+import re
+import uuid
 from fs_domain_lifecycle import Manager,run,save
 
-ROOT=Path('/root/ckernel-fs-domains-20261013/lifecycle-r1')
-LABEL='fs-domain-lifecycle-20261013-r1'
-IMAGE='sha256:49b805ac6462459907d40c83940060b72145bf0fbbd5472837ba1b59085cea46'
 CODE='''import os,errno,json,concurrent.futures
 from pathlib import Path
 p=Path('/work')
@@ -38,9 +38,18 @@ print(json.dumps(dict(status='PASS',enospc=True,workers=4,files=128)))
 '''
 
 def main():
-    os.umask(0o077);os.sched_setaffinity(0,{112,113,114,115});ROOT.mkdir()
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root',type=Path,required=True)
+    parser.add_argument('--image',required=True,help='Existing ARM64 image ID with python3; no pull')
+    parser.add_argument('--cpus',required=True)
+    parser.add_argument('--memory-node',type=int,required=True)
+    args=parser.parse_args()
+    if not re.fullmatch(r'sha256:[0-9a-f]{64}',args.image):parser.error('immutable image ID required')
+    if not re.fullmatch(r'[0-9]+(?:[-,][0-9]+)*',args.cpus) or args.memory_node<0:parser.error('CPU/node syntax')
+    ROOT=args.root.absolute();IMAGE=args.image;LABEL='ckfs-smoke-'+uuid.uuid4().hex[:12]
+    if ROOT!=ROOT.resolve():parser.error('symlink root path')
+    os.umask(0o077);ROOT.mkdir(mode=0o700)
     if run(['getenforce']).strip()!='Enforcing':raise RuntimeError('security')
-    if run(['docker','ps','-q','--filter','label=wb.native']).strip():raise RuntimeError('active experiment')
     identity=json.loads(run(['docker','image','inspect',IMAGE]))[0]
     if identity['Architecture']!='arm64':raise RuntimeError('image platform')
     boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip()
@@ -49,8 +58,8 @@ def main():
     specs=[dict(index=i,bytes=128*1024**2,inodes=2048,journal_mib=16) for i in range(2)]
     def create(name,path,code,entry='python3'):
         cid=run(['docker','create','--name',name,'--label','wb.native='+LABEL,'--runtime=runc',
-            '--network=none','--cap-drop=ALL','--security-opt=no-new-privileges','--cpuset-cpus=112-115',
-            '--cpuset-mems=1','--memory=256m','--memory-swap=256m','--pids-limit=64',
+            '--network=none','--cap-drop=ALL','--security-opt=no-new-privileges','--cpuset-cpus='+args.cpus,
+            '--cpuset-mems='+str(args.memory_node),'--memory=256m','--memory-swap=256m','--pids-limit=64',
             '-v',str(path)+':/work:Z','--entrypoint',entry,IMAGE,'-c',code]).strip()
         ids.append(cid);return cid
     def remove(cid):
@@ -62,7 +71,7 @@ def main():
         m=Manager(ROOT/'volumes',True);m.create_volumes(specs)
         dirs=[m.private_directory(i,i) for i in range(2)]
         if dirs[0].stat().st_dev==dirs[1].stat().st_dev:raise RuntimeError('same filesystem')
-        workers=[create('ckfs-smoke-'+str(i),d,CODE) for i,d in enumerate(dirs)]
+        workers=[create(LABEL+'-'+str(i),d,CODE) for i,d in enumerate(dirs)]
         for cid in workers:run(['docker','start',cid])
         for cid in workers:
             rc=run(['docker','wait',cid]).strip();logs=run(['docker','logs',cid])
@@ -79,11 +88,11 @@ def main():
         for d in dirs:
             if (d/'durable').read_bytes()!=b'ckernel-fs-domain-persistence':raise RuntimeError('remount persistence')
         result['cases'].append(dict(name='clean-unmount-fsck-remount',status='PASS'))
-        cid=create('ckfs-smoke-bad-start',dirs[0],'','/ckfs-no-such-program')
+        cid=create(LABEL+'-bad-start',dirs[0],'','/ckfs-no-such-program')
         p=subprocess.run(['docker','start',cid],capture_output=True,text=True)
         if not p.returncode:raise RuntimeError('bad entrypoint accepted')
         result['cases'].append(dict(name='start-failure',rc=p.returncode,stderr=p.stderr[-700:]));remove(cid)
-        cid=create('ckfs-smoke-bad-exit',dirs[1],"import sys;sys.exit(17)")
+        cid=create(LABEL+'-bad-exit',dirs[1],"import sys;sys.exit(17)")
         run(['docker','start',cid]);rc=run(['docker','wait',cid]).strip()
         if rc!='17':raise RuntimeError('exit fixture')
         result['cases'].append(dict(name='abnormal-exit',expected_rc=17,status='PASS'));remove(cid)
