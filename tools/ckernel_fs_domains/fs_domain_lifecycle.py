@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0
 """Owned regular-file ext4 lifecycle. Never accepts a device to format."""
 import argparse
+import errno
 import fcntl
 import json
 import os
@@ -43,6 +44,20 @@ def loop_identity(device,image):
     info=json.loads(run(['losetup','--json','--list','--output','NAME,BACK-FILE',device]))['loopdevices']
     if len(info)!=1 or info[0]['name']!=device or Path(info[0]['back-file']).resolve()!=image:
         raise RuntimeError('foreign loop backing')
+
+def process_mountinfo(entry):
+    try:
+        return (entry/'mountinfo').read_text().splitlines()
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT,errno.ESRCH):return []
+        if exc.errno==errno.EINVAL:
+            # Exiting tasks may have dropped nsproxy before procfs disappears.
+            # Only accept EINVAL if there is no longer an exposed mount namespace.
+            try:os.readlink(entry/'ns/mnt')
+            except OSError as ns_error:
+                if ns_error.errno in (errno.ENOENT,errno.ESRCH):return []
+                raise
+        raise
 
 class Manager:
     def __init__(self,root,create=False):
@@ -167,8 +182,7 @@ class Manager:
         s=os.stat(device);identity=f'{os.major(s.st_rdev)}:{os.minor(s.st_rdev)}'
         for entry in Path('/proc').iterdir():
             if not entry.name.isdigit():continue
-            try:lines=(entry/'mountinfo').read_text().splitlines()
-            except (FileNotFoundError,ProcessLookupError):continue
+            lines=process_mountinfo(entry)
             for line in lines:
                 if line.split()[2]==identity:
                     raise RuntimeError('remaining namespace mount '+entry.name)

@@ -9,6 +9,7 @@ import subprocess
 import time
 import re
 import uuid
+import sys
 from fs_domain_lifecycle import Manager,run,save
 
 CODE='''import os,errno,json,concurrent.futures
@@ -114,14 +115,21 @@ def main():
         result['status']='PASS'
     except BaseException as e:result['error']=repr(e);raise
     finally:
-        for cid in list(ids):remove(cid)
+        active_error=sys.exc_info()[0] is not None
+        cleanup_errors=[]
+        for cid in list(ids):
+            try:remove(cid)
+            except BaseException as e:cleanup_errors.append(repr(e))
         if m:
             try:m.teardown(True)
+            except BaseException as e:cleanup_errors.append(repr(e))
             finally:m.close()
+        if cleanup_errors:result.update(status='FAIL',cleanup_errors=cleanup_errors)
         result.update(elapsed_ns=time.monotonic_ns()-begin,
             environment_unchanged=boot==Path('/proc/sys/kernel/random/boot_id').read_text().strip() and run(['getenforce']).strip()=='Enforcing',
             remaining_containers=run(['docker','ps','-aq','--filter','label=wb.native='+LABEL]).split(),
             loop_devices=json.loads(run(['losetup','--json','--list'])))
         save(ROOT/'result.json',result);print(json.dumps(result))
+        if cleanup_errors and not active_error:raise RuntimeError('cleanup failed; retained in result.json')
 
 if __name__=='__main__':main()

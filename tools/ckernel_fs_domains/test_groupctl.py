@@ -1,15 +1,32 @@
 # SPDX-License-Identifier: GPL-2.0
 import json
+import errno
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from fs_domain_lifecycle import Manager
+from fs_domain_lifecycle import Manager, process_mountinfo
 from fs_groupctl import create, specs
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_exiting_process_without_namespace(self):
+        with patch.object(Path, 'read_text', side_effect=OSError(errno.EINVAL, 'exiting')):
+            with patch('os.readlink', side_effect=FileNotFoundError(errno.ENOENT, 'no nsproxy')):
+                self.assertEqual(process_mountinfo(Path('/proc/test')), [])
+
+    def test_live_namespace_einval_not_ignored(self):
+        with patch.object(Path, 'read_text', side_effect=OSError(errno.EINVAL, 'unknown')):
+            with patch('os.readlink', return_value='mnt:[123]'):
+                with self.assertRaises(OSError):
+                    process_mountinfo(Path('/proc/test'))
+
+    def test_permission_failure_not_ignored(self):
+        with patch.object(Path, 'read_text', side_effect=PermissionError(errno.EACCES, 'denied')):
+            with self.assertRaises(PermissionError):
+                process_mountinfo(Path('/proc/test'))
+
     def test_go_geometry(self):
         volumes = specs(4, 9, 393984, 192)
         self.assertEqual(sum(v['bytes'] for v in volumes), 36 * 1024**3)
